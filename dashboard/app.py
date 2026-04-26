@@ -629,8 +629,8 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .feature-line-item {
   display: grid;
-  grid-template-columns: minmax(7rem, 0.72fr) minmax(0, 2.15fr) minmax(11rem, 1.2fr);
-  column-gap: 1rem;
+  grid-template-columns: minmax(9.6rem, 0.95fr) minmax(0, 2.05fr) minmax(10.5rem, 1.05fr);
+  column-gap: 1.45rem;
   row-gap: 0.28rem;
   align-items: start;
   padding: 0.5rem 0.72rem;
@@ -644,6 +644,7 @@ div[data-testid="stNumberInput"] input:focus {
   font-weight: 780;
   line-height: 1.28;
   min-width: 0;
+  white-space: nowrap;
 }
 .feature-line-body {
   color: var(--muted);
@@ -963,6 +964,9 @@ div[data-testid="stAlert"] {
   }
   .feature-line-value {
     text-align: left;
+  }
+  .feature-line-title {
+    white-space: normal;
   }
   .history-top {
     flex-direction: column;
