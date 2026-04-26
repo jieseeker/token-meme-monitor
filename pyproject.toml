@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "token-meme-monitor"
+version = "0.1.0"
+description = "BSC meme token monitoring stack with discovery, scoring, alerting, and dashboarding."
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.32,<3",
+  "web3>=7,<8",
+  "streamlit>=1.44,<2",
+  "pandas>=2.2,<3",
+]
+
+[project.scripts]
+token-meme-monitor = "token_meme_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["token_meme_monitor*"]
+
