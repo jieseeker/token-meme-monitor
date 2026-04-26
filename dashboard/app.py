@@ -53,6 +53,7 @@ FILTER_MODES = {
 SIGNAL_THRESHOLD_OPTIONS = [0, 45, 55, 65, 75, 85]
 HOLDER_THRESHOLD_OPTIONS = [0, 500, 1000, 2000, 5000, 10000, 20000]
 LIQUIDITY_THRESHOLD_OPTIONS = [0, 5000, 15000, 30000, 50000, 100000, 250000]
+ONLY_MARKET_DATA_HELP = "开启后只显示已经拿到实时行情快照的代币，隐藏暂时缺少价格、成交额或流动性数据的候选项；关闭后展示全部已发现候选。"
 
 STATE_LABELS = {
     "new": "新发现",
@@ -628,8 +629,9 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .feature-line-item {
   display: grid;
-  grid-template-columns: minmax(6.5rem, 0.64fr) minmax(12rem, 1.35fr) minmax(0, 2fr);
-  gap: 0.72rem;
+  grid-template-columns: minmax(7rem, 0.72fr) minmax(0, 2.15fr) minmax(11rem, 1.2fr);
+  column-gap: 1rem;
+  row-gap: 0.28rem;
   align-items: start;
   padding: 0.5rem 0.72rem;
   border: 1px solid var(--line);
@@ -641,18 +643,22 @@ div[data-testid="stNumberInput"] input:focus {
   color: var(--text);
   font-weight: 780;
   line-height: 1.28;
+  min-width: 0;
 }
 .feature-line-body {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.38;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .feature-line-value {
   color: var(--accent-strong);
   font-weight: 800;
   line-height: 1.28;
-  text-align: left;
+  text-align: right;
   font-variant-numeric: tabular-nums;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .history-list {
@@ -1219,8 +1225,8 @@ def render_feature_lines(items: list[dict[str, str]]) -> None:
         rows.append(
             "<div class='feature-line-item'>"
             f"<div class='feature-line-title'>{title}</div>"
-            f"<div class='feature-line-value'>{value}</div>"
             f"<div class='feature-line-body'>{body}</div>"
+            f"<div class='feature-line-value'>{value}</div>"
             "</div>"
         )
     st.markdown("<div class='feature-line-list'>" + "".join(rows) + "</div>", unsafe_allow_html=True)
@@ -1600,15 +1606,6 @@ def render_history(signals_df: pd.DataFrame) -> None:
             separator=" / ",
         )
         risks = format_risk_titles(row.get("risk_flags"))
-        body = join_segments(
-            [
-                f"概率：{probability}" if probability else None,
-                f"实际：{outcome}" if outcome else None,
-                f"命中：{format_reason_titles(row.get('reasons'))}",
-                f"预测：{format_prediction_reason_titles(row.get('prediction_reasons'))}",
-                f"风险：{risks}" if risks != "暂无" else None,
-            ]
-        )
         score = row.get("score")
         opportunity = row.get("prediction_opportunity_score")
         meta = join_segments(
@@ -1729,7 +1726,7 @@ def main() -> None:
         with title_col:
             st.markdown("<div class='top-title-row'><div class='toolbar-title'>Binance Alpha / BSC 监控面板</div></div>", unsafe_allow_html=True)
         with toggle_col:
-            only_market = st.toggle("只看行情数据", value=True)
+            only_market = st.toggle("只看行情数据", value=True, help=ONLY_MARKET_DATA_HELP)
     with refresh_col:
         st.markdown(f"<div class='top-refresh'><div class='refresh-badge'>刷新 {config.dashboard_auto_refresh_seconds}s</div></div>", unsafe_allow_html=True)
 
