@@ -142,3 +142,6 @@ class PredictionResult:
     opportunity_score: int
     stage: str
     reasons: tuple[str, ...]
+    short_momentum_score: int = 0
+    continuation_score: int = 0
+    breakout_score: int = 0

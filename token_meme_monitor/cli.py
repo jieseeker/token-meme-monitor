@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import time
 from dataclasses import replace
 from datetime import timedelta
 from pprint import pprint
@@ -26,6 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("init-db", help="Create database schema")
     subparsers.add_parser("print-config", help="Print resolved runtime config")
+    health_report = subparsers.add_parser("health-report", help="Print backend health and data quality counters")
+    health_report.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    compact_history = subparsers.add_parser("compact-history", help="Compact cold snapshot and signal history")
+    compact_history.add_argument("--older-than-days", type=int, default=14, help="Compact rows older than this many days")
+    compact_history.add_argument("--before", default=None, help="Explicit UTC cutoff timestamp, e.g. 2026-04-02T00:00:00+00:00")
+    compact_history.add_argument("--dry-run", action="store_true", help="Only print estimated rows and bytes")
+    compact_history.add_argument("--execute", action="store_true", help="Mutate the database; without this flag the command is a dry-run")
+    compact_history.add_argument("--batch-size", type=int, default=5000, help="Rows to archive per batch")
+    compact_history.add_argument("--vacuum", action="store_true", help="Run VACUUM after execute to reclaim SQLite file space")
     healthcheck = subparsers.add_parser("healthcheck", help="Check whether the configured RPC supports discovery")
     healthcheck.add_argument(
         "--log-span",
@@ -66,8 +77,144 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compute stored prediction outcomes from cached or external hourly OHLCV",
     )
     refresh_prediction_outcomes.add_argument("--limit", type=int, default=1000, help="Max prediction outcomes to compute")
+    refresh_prediction_outcomes.add_argument(
+        "--refresh-missing-quality",
+        action="store_true",
+        help="Also recompute mature outcomes written before outcome-quality fields existed",
+    )
     rebuild_predictions = subparsers.add_parser("rebuild-predictions", help="Recompute stored signal predictions")
     rebuild_predictions.add_argument("--limit", type=int, default=None, help="Optional max rows to recompute")
+    backtest_predictions = subparsers.add_parser(
+        "backtest-predictions",
+        help="Run an expanding walk-forward backtest for stored signal predictions",
+    )
+    backtest_predictions.add_argument(
+        "--json-out",
+        default="data/backtests/prediction_backtest.json",
+        help="Path to JSON report output",
+    )
+    backtest_predictions.add_argument(
+        "--md-out",
+        default="data/backtests/prediction_backtest.md",
+        help="Path to Markdown report output",
+    )
+    backtest_predictions.add_argument("--limit", type=int, default=None, help="Optional max dataset rows to load")
+    backtest_predictions.add_argument("--train-ratio", type=float, default=0.70, help="Initial chronological train split")
+    backtest_predictions.add_argument(
+        "--max-price-divergence-pct",
+        type=float,
+        default=None,
+        help="Optional absolute price-source divergence filter, e.g. 0.10 for 10%%",
+    )
+    scheduled_backtest = subparsers.add_parser(
+        "scheduled-backtest-report",
+        help="Refresh mature outcomes and write a scheduled prediction backtest report",
+    )
+    scheduled_backtest.add_argument(
+        "--json-out",
+        default="data/backtests/scheduled/latest.json",
+        help="Path to latest JSON report output",
+    )
+    scheduled_backtest.add_argument(
+        "--md-out",
+        default="data/backtests/scheduled/latest.md",
+        help="Path to latest Markdown report output",
+    )
+    scheduled_backtest.add_argument(
+        "--archive-dir",
+        default="data/backtests/scheduled",
+        help="Directory for timestamped report copies",
+    )
+    scheduled_backtest.add_argument("--no-archive", action="store_true", help="Only write latest outputs")
+    scheduled_backtest.add_argument("--limit", type=int, default=None, help="Optional max dataset rows to load")
+    scheduled_backtest.add_argument("--train-ratio", type=float, default=0.70, help="Initial chronological train split")
+    scheduled_backtest.add_argument(
+        "--max-price-divergence-pct",
+        type=float,
+        default=0.10,
+        help="Absolute price-source divergence filter, e.g. 0.10 for 10%%",
+    )
+    scheduled_backtest.add_argument("--top-gainers-limit", type=int, default=20, help="Number of top gainers to list")
+    scheduled_backtest.add_argument(
+        "--strong-gainer-return-threshold",
+        type=float,
+        default=0.20,
+        help="Return threshold for miss analysis, e.g. 0.20 for +20%%",
+    )
+    scheduled_backtest.add_argument(
+        "--refresh-outcome-limit",
+        type=int,
+        default=1000,
+        help="Max mature prediction outcomes to refresh before reporting",
+    )
+    scheduled_backtest.add_argument(
+        "--refresh-missing-quality",
+        action="store_true",
+        help="Also recompute mature outcomes written before outcome-quality fields existed",
+    )
+    scheduled_backtest.add_argument(
+        "--skip-refresh-outcomes",
+        action="store_true",
+        help="Skip external outcome refresh and only analyze local stored rows",
+    )
+    scheduled_worker = subparsers.add_parser(
+        "run-scheduled-backtest-worker",
+        help="Run the scheduled backtest report worker loop inside this project",
+    )
+    scheduled_worker.add_argument("--once", action="store_true", help="Run one scheduled report cycle and exit")
+    scheduled_worker.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=4 * 60 * 60,
+        help="Seconds between scheduled report cycles",
+    )
+    scheduled_worker.add_argument(
+        "--json-out",
+        default="data/backtests/scheduled/latest.json",
+        help="Path to latest JSON report output",
+    )
+    scheduled_worker.add_argument(
+        "--md-out",
+        default="data/backtests/scheduled/latest.md",
+        help="Path to latest Markdown report output",
+    )
+    scheduled_worker.add_argument(
+        "--archive-dir",
+        default="data/backtests/scheduled",
+        help="Directory for timestamped report copies",
+    )
+    scheduled_worker.add_argument("--no-archive", action="store_true", help="Only write latest outputs")
+    scheduled_worker.add_argument("--limit", type=int, default=None, help="Optional max dataset rows to load")
+    scheduled_worker.add_argument("--train-ratio", type=float, default=0.70, help="Initial chronological train split")
+    scheduled_worker.add_argument(
+        "--max-price-divergence-pct",
+        type=float,
+        default=0.10,
+        help="Absolute price-source divergence filter, e.g. 0.10 for 10%%",
+    )
+    scheduled_worker.add_argument("--top-gainers-limit", type=int, default=20, help="Number of top gainers to list")
+    scheduled_worker.add_argument(
+        "--strong-gainer-return-threshold",
+        type=float,
+        default=0.20,
+        help="Return threshold for miss analysis, e.g. 0.20 for +20%%",
+    )
+    scheduled_worker.add_argument(
+        "--refresh-outcome-limit",
+        type=int,
+        default=1000,
+        help="Max mature prediction outcomes to refresh before reporting",
+    )
+    scheduled_worker.add_argument(
+        "--refresh-missing-quality",
+        action="store_true",
+        help="Also recompute mature outcomes written before outcome-quality fields existed",
+    )
+    scheduled_worker.add_argument(
+        "--skip-refresh-outcomes",
+        action="store_true",
+        help="Skip external outcome refresh and only analyze local stored rows",
+    )
     return parser
 
 
@@ -79,6 +226,64 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "print-config":
         pprint(config)
+        return 0
+
+    if args.command == "health-report":
+        from token_meme_monitor.health import build_health_report, render_health_report
+
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            report = build_health_report(repo, database_path=config.database_path)
+        finally:
+            repo.close()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_health_report(report))
+        return 0
+
+    if args.command == "compact-history":
+        cutoff = parse_datetime(args.before) if args.before else utcnow() - timedelta(days=args.older_than_days)
+        if cutoff is None:
+            parser.error("--before must be an ISO datetime")
+        if args.batch_size <= 0:
+            parser.error("--batch-size must be positive")
+        dry_run = args.dry_run or not args.execute
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            if dry_run:
+                summary = repo.estimate_history_compaction(cutoff)
+                mode = "dry-run"
+            else:
+                summary = repo.compact_history(cutoff, batch_size=args.batch_size)
+                mode = "execute"
+                if args.vacuum:
+                    repo._conn.execute("VACUUM")
+                    summary["vacuum"] = True
+        finally:
+            repo.close()
+        if dry_run:
+            print(
+                "history compaction "
+                f"mode={mode} before={summary['before']} "
+                f"snapshots={summary['snapshot_rows']} "
+                f"signals={summary['signal_rows']} "
+                f"snapshot_raw_json_mb={summary['snapshot_raw_json_bytes'] / 1024 / 1024:.2f} "
+                f"signal_feature_json_mb={summary['signal_feature_json_bytes'] / 1024 / 1024:.2f} "
+                f"rollup_hours={summary['snapshot_hourly_rollup_rows']}"
+            )
+        else:
+            print(
+                "history compaction "
+                f"mode={mode} before={summary['before']} "
+                f"snapshots_compacted={summary['snapshot_rows_compacted']} "
+                f"signals_compacted={summary['signal_rows_compacted']} "
+                f"signals_recompacted={summary.get('signal_rows_recompacted', 0)} "
+                f"rollup_hours={summary['snapshot_hourly_rollup_rows']} "
+                f"vacuum={bool(summary.get('vacuum'))}"
+            )
         return 0
 
     if args.command == "healthcheck":
@@ -323,7 +528,11 @@ def main(argv: list[str] | None = None) -> int:
         updated = 0
         skipped = 0
         try:
-            rows = repo.list_predictions_needing_outcomes(now, limit=args.limit)
+            rows = repo.list_predictions_needing_outcomes(
+                now,
+                limit=args.limit,
+                include_missing_quality=args.refresh_missing_quality,
+            )
             for row in rows:
                 observed_at = parse_datetime(row.get("observed_at"))
                 if observed_at is None:
@@ -392,6 +601,94 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "backtest-predictions":
+        from token_meme_monitor.prediction_backtest import build_prediction_backtest_report, write_prediction_backtest_outputs
+
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            rows = repo.list_prediction_dataset_rows(limit=args.limit)
+        finally:
+            repo.close()
+        report = build_prediction_backtest_report(
+            rows,
+            train_ratio=args.train_ratio,
+            max_price_divergence_pct=args.max_price_divergence_pct,
+        )
+        write_prediction_backtest_outputs(report, json_path=args.json_out, markdown_path=args.md_out)
+        print(
+            f"prediction backtest completed at {utcnow().isoformat(timespec='seconds')} "
+            f"(rows={report['total_rows']}, usable_events={report['usable_events']}, "
+            f"train_events={report['train_events']}, test_events={report['test_events']}, "
+            f"json='{args.json_out}', markdown='{args.md_out}')"
+        )
+        return 0
+
+    if args.command == "scheduled-backtest-report":
+        from token_meme_monitor.scheduled_backtest import run_scheduled_backtest_cycle
+
+        result = run_scheduled_backtest_cycle(
+            database_path=config.database_path,
+            chain_id=config.chain_id,
+            json_out=args.json_out,
+            md_out=args.md_out,
+            archive_dir=args.archive_dir,
+            archive=not args.no_archive,
+            limit=args.limit,
+            train_ratio=args.train_ratio,
+            max_price_divergence_pct=args.max_price_divergence_pct,
+            top_gainers_limit=args.top_gainers_limit,
+            strong_gainer_return_threshold=args.strong_gainer_return_threshold,
+            refresh_outcome_limit=args.refresh_outcome_limit,
+            refresh_missing_quality=args.refresh_missing_quality,
+            skip_refresh_outcomes=args.skip_refresh_outcomes,
+        )
+        report = result["report"]
+        print(
+            f"scheduled backtest report completed at {result['ran_at']} "
+            f"(rows={report['summary']['total_rows']}, usable_events={report['summary']['usable_events']}, "
+            f"top_gainers={report['summary']['top_gainer_count']}, missed={report['summary']['missed_strong_gainer_count']}, "
+            f"chase={report['summary']['chase_signal_count']}, refreshed={result['refreshed']}, skipped={result['skipped']}, "
+            f"json='{result['json_out']}', markdown='{result['md_out']}', "
+            f"archive_json='{result['archive_json']}', archive_markdown='{result['archive_md']}')"
+        )
+        return 0
+
+    if args.command == "run-scheduled-backtest-worker":
+        from token_meme_monitor.scheduled_backtest import run_scheduled_backtest_cycle
+
+        if args.interval_seconds <= 0:
+            parser.error("--interval-seconds must be positive")
+        while True:
+            result = run_scheduled_backtest_cycle(
+                database_path=config.database_path,
+                chain_id=config.chain_id,
+                json_out=args.json_out,
+                md_out=args.md_out,
+                archive_dir=args.archive_dir,
+                archive=not args.no_archive,
+                limit=args.limit,
+                train_ratio=args.train_ratio,
+                max_price_divergence_pct=args.max_price_divergence_pct,
+                top_gainers_limit=args.top_gainers_limit,
+                strong_gainer_return_threshold=args.strong_gainer_return_threshold,
+                refresh_outcome_limit=args.refresh_outcome_limit,
+                refresh_missing_quality=args.refresh_missing_quality,
+                skip_refresh_outcomes=args.skip_refresh_outcomes,
+            )
+            report = result["report"]
+            print(
+                f"scheduled backtest worker cycle completed at {result['ran_at']} "
+                f"(rows={report['summary']['total_rows']}, usable_events={report['summary']['usable_events']}, "
+                f"top_gainers={report['summary']['top_gainer_count']}, missed={report['summary']['missed_strong_gainer_count']}, "
+                f"chase={report['summary']['chase_signal_count']}, refreshed={result['refreshed']}, skipped={result['skipped']}, "
+                f"next_interval_seconds={args.interval_seconds})",
+                flush=True,
+            )
+            if args.once:
+                return 0
+            time.sleep(args.interval_seconds)
+
     if args.command == "run-worker":
         from token_meme_monitor.orchestrator import MonitorWorker
 
@@ -427,6 +724,9 @@ def _prediction_dataset_fieldnames(rows: list[dict]) -> list[str]:
         "prob_24h_up100",
         "risk_6h_dd30",
         "opportunity_score",
+        "short_momentum_score",
+        "continuation_score",
+        "breakout_score",
         "stage",
         "max_return_2h",
         "max_return_6h",
@@ -439,6 +739,12 @@ def _prediction_dataset_fieldnames(rows: list[dict]) -> list[str]:
         "sample_count_2h",
         "sample_count_6h",
         "sample_count_24h",
+        "outcome_source",
+        "base_price_source",
+        "base_price_usd",
+        "gecko_base_close_usd",
+        "price_divergence_pct",
+        "quality_flags_json",
         "reasons",
         "risk_flags",
         "prediction_reasons",

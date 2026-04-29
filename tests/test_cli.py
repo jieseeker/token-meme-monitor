@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from token_meme_monitor.cli import main
 from token_meme_monitor.database import MonitorRepository
-from token_meme_monitor.models import PairSnapshot, SignalDecision
+from token_meme_monitor.models import PairSnapshot, PredictionResult, SignalDecision
 from token_meme_monitor.predictions import PREDICTOR_VERSION
 
 
@@ -151,6 +151,317 @@ class CliTests(unittest.TestCase):
             self.assertEqual(prediction_row["predictor_version"], PREDICTOR_VERSION)
             token_metadata = repo.get_token_metadata(token_address)
             self.assertEqual(token_metadata["holder_count"], 12000)
+            repo.close()
+
+    def test_health_report_outputs_backend_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "monitor.db"
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            observed_at = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+            repo.upsert_token(
+                "0xtoken",
+                "MEME",
+                "Meme",
+                observed_at,
+                {"is_binance_alpha": True, "pair_seed_failed_at": observed_at.isoformat()},
+            )
+            repo.upsert_seed_pair(
+                pair_address="0xpair",
+                chain_id="bsc",
+                token_address="0xtoken",
+                token_symbol="MEME",
+                token_name="Meme",
+                quote_token_address="0xquote",
+                quote_symbol="WBNB",
+                token0_address="0xtoken",
+                token1_address="0xquote",
+                pair_created_at=observed_at - timedelta(hours=1),
+                discovered_at=observed_at,
+                metadata={},
+            )
+            repo.close()
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"MONITOR_DATABASE_PATH": str(database_path)}, clear=True):
+                with redirect_stdout(output):
+                    exit_code = main(["--env-file", "", "health-report", "--json"])
+
+            self.assertEqual(exit_code, 0)
+            text = output.getvalue()
+            self.assertIn('"stale_active_pairs"', text)
+            self.assertIn('"alpha_seed"', text)
+            self.assertIn('"seed_failed": 1', text)
+
+    def test_scheduled_backtest_report_writes_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "monitor.db"
+            json_path = Path(tmpdir) / "scheduled.json"
+            md_path = Path(tmpdir) / "scheduled.md"
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            observed_at = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+            repo.upsert_token(
+                "0xtoken",
+                "MEME",
+                "Meme",
+                observed_at,
+                {"is_binance_alpha": True, "alpha_score": 100},
+            )
+            signal_id = repo.insert_signal(
+                "0xpair",
+                "0xtoken",
+                SignalDecision(
+                    observed_at=observed_at,
+                    strategy_version="v1",
+                    score=66,
+                    pair_state="focused",
+                    should_alert=False,
+                    reasons=("h1_volume_support",),
+                    risk_flags=(),
+                    features={
+                        "price_usd": 1.0,
+                        "volume_to_liquidity_h1": 1.2,
+                        "h1_return_live": 0.18,
+                        "h24_return_live": 0.4,
+                    },
+                ),
+            )
+            repo.upsert_signal_prediction(
+                signal_id,
+                pair_address="0xpair",
+                token_address="0xtoken",
+                observed_at=observed_at,
+                prediction=PredictionResult(
+                    predictor_version="p-test",
+                    prob_2h_up20=0.08,
+                    prob_6h_up50=0.04,
+                    prob_24h_up100=0.05,
+                    risk_6h_dd30=0.02,
+                    opportunity_score=55,
+                    short_momentum_score=55,
+                    continuation_score=40,
+                    breakout_score=30,
+                    stage="acceleration",
+                    reasons=("prediction_price_accelerating",),
+                ),
+            )
+            repo.upsert_prediction_outcome(
+                signal_id,
+                {
+                    "outcome_source": "test",
+                    "base_price_source": "test",
+                    "base_price_usd": 1.0,
+                    "gecko_base_close_usd": 1.0,
+                    "price_divergence_pct": 0.0,
+                    "quality_flags": [],
+                    "max_return_2h": 0.25,
+                    "max_return_6h": 0.25,
+                    "max_return_24h": 0.25,
+                    "min_return_6h": -0.01,
+                    "hit_2h_up20": 1,
+                    "hit_6h_up50": 0,
+                    "hit_24h_up100": 0,
+                    "hit_6h_dd30": 0,
+                    "sample_count_2h": 2,
+                    "sample_count_6h": 6,
+                    "sample_count_24h": 24,
+                },
+                evaluated_at=observed_at + timedelta(hours=24),
+            )
+            repo.close()
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"MONITOR_DATABASE_PATH": str(database_path)}, clear=True):
+                with redirect_stdout(output):
+                    exit_code = main(
+                        [
+                            "--env-file",
+                            "",
+                            "scheduled-backtest-report",
+                            "--json-out",
+                            str(json_path),
+                            "--md-out",
+                            str(md_path),
+                            "--skip-refresh-outcomes",
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(json_path.exists())
+            self.assertTrue(md_path.exists())
+            self.assertIn("scheduled backtest report completed", output.getvalue())
+            self.assertIn("Scheduled Backtest Report", md_path.read_text(encoding="utf-8"))
+
+    def test_scheduled_backtest_worker_once_writes_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "monitor.db"
+            json_path = Path(tmpdir) / "worker.json"
+            md_path = Path(tmpdir) / "worker.md"
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            observed_at = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+            repo.upsert_token("0xtoken", "MEME", "Meme", observed_at, {"is_binance_alpha": True})
+            signal_id = repo.insert_signal(
+                "0xpair",
+                "0xtoken",
+                SignalDecision(
+                    observed_at=observed_at,
+                    strategy_version="v1",
+                    score=66,
+                    pair_state="focused",
+                    should_alert=False,
+                    reasons=("h1_volume_support",),
+                    risk_flags=(),
+                    features={"price_usd": 1.0, "h1_return_live": 0.18},
+                ),
+            )
+            repo.upsert_signal_prediction(
+                signal_id,
+                pair_address="0xpair",
+                token_address="0xtoken",
+                observed_at=observed_at,
+                prediction=PredictionResult(
+                    predictor_version="p-test",
+                    prob_2h_up20=0.08,
+                    prob_6h_up50=0.04,
+                    prob_24h_up100=0.05,
+                    risk_6h_dd30=0.02,
+                    opportunity_score=55,
+                    short_momentum_score=55,
+                    continuation_score=40,
+                    breakout_score=30,
+                    stage="acceleration",
+                    reasons=("prediction_price_accelerating",),
+                ),
+            )
+            repo.upsert_prediction_outcome(
+                signal_id,
+                {
+                    "outcome_source": "test",
+                    "base_price_source": "test",
+                    "base_price_usd": 1.0,
+                    "gecko_base_close_usd": 1.0,
+                    "price_divergence_pct": 0.0,
+                    "quality_flags": [],
+                    "max_return_2h": 0.25,
+                    "max_return_6h": 0.25,
+                    "max_return_24h": 0.25,
+                    "min_return_6h": -0.01,
+                    "hit_2h_up20": 1,
+                    "hit_6h_up50": 0,
+                    "hit_24h_up100": 0,
+                    "hit_6h_dd30": 0,
+                    "sample_count_2h": 2,
+                    "sample_count_6h": 6,
+                    "sample_count_24h": 24,
+                },
+                evaluated_at=observed_at + timedelta(hours=24),
+            )
+            repo.close()
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"MONITOR_DATABASE_PATH": str(database_path)}, clear=True):
+                with redirect_stdout(output):
+                    exit_code = main(
+                        [
+                            "--env-file",
+                            "",
+                            "run-scheduled-backtest-worker",
+                            "--once",
+                            "--json-out",
+                            str(json_path),
+                            "--md-out",
+                            str(md_path),
+                            "--skip-refresh-outcomes",
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(json_path.exists())
+            self.assertTrue(md_path.exists())
+            self.assertIn("scheduled backtest worker cycle completed", output.getvalue())
+
+    def test_compact_history_dry_run_outputs_estimate_without_mutating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "monitor.db"
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            observed_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            repo.insert_snapshot(
+                PairSnapshot(
+                    pair_address="0xpair",
+                    token_address="0xtoken",
+                    token_symbol="MEME",
+                    token_name="Meme",
+                    quote_token_address="0xquote",
+                    quote_symbol="WBNB",
+                    observed_at=observed_at,
+                    pair_created_at=observed_at - timedelta(days=1),
+                    dex_id="pancakeswap",
+                    pair_url="https://example.com/pair",
+                    price_usd=1.0,
+                    price_native=0.01,
+                    liquidity_usd=10_000,
+                    fdv=100_000,
+                    market_cap=90_000,
+                    volume_m5=100,
+                    volume_h1=1_000,
+                    volume_h24=10_000,
+                    buys_m5=3,
+                    sells_m5=1,
+                    buys_h1=20,
+                    sells_h1=5,
+                    price_change_m5=1,
+                    price_change_h1=5,
+                    price_change_h24=10,
+                    website_count=1,
+                    social_count=1,
+                    boosts_active=0,
+                    raw_payload={"large": "x" * 1000},
+                ),
+                age_minutes=60,
+                risk_flags=[],
+            )
+            repo.insert_signal(
+                "0xpair",
+                "0xtoken",
+                SignalDecision(
+                    observed_at=observed_at,
+                    strategy_version="v1",
+                    score=55,
+                    pair_state="watching",
+                    should_alert=False,
+                    reasons=("h1_volume_support",),
+                    risk_flags=(),
+                    features={"price_usd": 1.0, "experimental_metric": 123},
+                ),
+            )
+            repo.close()
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"MONITOR_DATABASE_PATH": str(database_path)}, clear=True):
+                with redirect_stdout(output):
+                    exit_code = main(
+                        [
+                            "--env-file",
+                            "",
+                            "compact-history",
+                            "--before",
+                            "2026-04-02T00:00:00+00:00",
+                            "--dry-run",
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            text = output.getvalue()
+            self.assertIn("mode=dry-run", text)
+            self.assertIn("snapshots=1", text)
+            self.assertIn("signals=1", text)
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            raw_json = repo._conn.execute("SELECT raw_json FROM snapshots WHERE pair_address = ?", ("0xpair",)).fetchone()["raw_json"]
+            self.assertIn("large", raw_json)
             repo.close()
 
 

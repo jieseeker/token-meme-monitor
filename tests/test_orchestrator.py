@@ -233,6 +233,55 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIsNotNone(parse_datetime(row["next_refresh_at"]))
             worker.close()
 
+    def test_unindexed_dexscreener_pair_uses_longer_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            worker = MonitorWorker(
+                AppConfig(
+                    bsc_rpc_url="http://127.0.0.1:8545",
+                    factory_address="0x0000000000000000000000000000000000000001",
+                    database_path=str(Path(tmpdir) / "monitor.db"),
+                    signal=SignalConfig(base_poll_interval_seconds=60),
+                )
+            )
+            now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+            worker._dexscreener = FakeDexScreenerClient(snapshot=None)
+            worker._repo.upsert_seed_pair(
+                pair_address="0xpair",
+                chain_id="bsc",
+                token_address="0xtoken",
+                token_symbol="MEME",
+                token_name="Meme",
+                quote_token_address="0xquote",
+                quote_symbol="WBNB",
+                token0_address="0xtoken",
+                token1_address="0xquote",
+                pair_created_at=now - timedelta(hours=1),
+                discovered_at=now,
+                metadata={},
+            )
+
+            worker._refresh_pair(
+                {
+                    "pair_address": "0xpair",
+                    "token_address": "0xtoken",
+                    "quote_token_address": "0xquote",
+                    "quote_symbol": "WBNB",
+                    "pair_created_at": (now - timedelta(hours=1)).isoformat(),
+                }
+            )
+
+            row = worker._repo._conn.execute(
+                "SELECT next_refresh_at, metadata_json FROM pairs WHERE pair_address = ?",
+                ("0xpair",),
+            ).fetchone()
+            metadata = json_loads(row["metadata_json"], {})
+            retry_at = parse_datetime(row["next_refresh_at"])
+            self.assertEqual(metadata["snapshot_not_available_count"], 1)
+            self.assertEqual(metadata["last_retry_reason"], "snapshot_not_available")
+            self.assertIsNotNone(retry_at)
+            self.assertGreaterEqual((retry_at - datetime.now(timezone.utc)).total_seconds(), 290)
+            worker.close()
+
     def test_alpha_pair_seed_uses_ttl_after_initial_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             worker = MonitorWorker(

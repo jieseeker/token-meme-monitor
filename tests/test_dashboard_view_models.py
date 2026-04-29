@@ -10,6 +10,7 @@ import pandas as pd
 from dashboard.view_models import (
     build_database_revision_key,
     build_conclusion,
+    build_prediction_confidence,
     build_latest_signal_context,
     build_overview_frame,
     filter_overview_frame,
@@ -259,6 +260,46 @@ class DashboardViewModelTests(unittest.TestCase):
         self.assertEqual(overview_df["pair_address"].tolist(), ["0xlive"])
         self.assertEqual(filtered["pair_address"].tolist(), ["0xlive"])
 
+    def test_prediction_confidence_marks_sparse_empirical_sample(self) -> None:
+        confidence = build_prediction_confidence(
+            {
+                "prediction_reasons": '["prediction_empirical_sparse", "prediction_short_momentum_opportunity"]',
+                "prediction_short_momentum_score": 46,
+            }
+        )
+
+        self.assertEqual(confidence.title, "历史样本不足")
+        self.assertEqual(confidence.tone, "neutral")
+        self.assertIn("规则概率", confidence.body)
+        self.assertIn("样本不足", confidence.chips)
+        self.assertIn("校准样本不足", confidence.evidence)
+
+    def test_prediction_confidence_warns_when_high_score_is_not_calibrated(self) -> None:
+        confidence = build_prediction_confidence(
+            {
+                "prediction_reasons": '["prediction_high_opportunity"]',
+                "prediction_short_momentum_score": 58,
+            }
+        )
+
+        self.assertEqual(confidence.title, "高分段仍需复核")
+        self.assertEqual(confidence.tone, "warn")
+        self.assertIn("样本", confidence.body)
+        self.assertIn("未命中足量历史桶", confidence.evidence)
+
+    def test_prediction_confidence_marks_empirical_calibration(self) -> None:
+        confidence = build_prediction_confidence(
+            {
+                "prediction_reasons": '["prediction_empirical_calibrated", "prediction_empirical_lowered"]',
+                "prediction_short_momentum_score": 52,
+            }
+        )
+
+        self.assertEqual(confidence.title, "已叠加历史校准")
+        self.assertEqual(confidence.tone, "accent")
+        self.assertIn("历史命中率", confidence.body)
+        self.assertIn("历史校准下调", confidence.evidence)
+
     def test_resolve_selected_pair_prefers_query_param_over_session_state(self) -> None:
         selected_pair = resolve_selected_pair(
             ["0xold", "0xquery"],
@@ -316,6 +357,168 @@ class DashboardViewModelTests(unittest.TestCase):
         )
 
         self.assertEqual(filtered["pair_address"].tolist(), ["0xpair"])
+
+    def test_filter_overview_frame_uses_short_momentum_score_for_signal_gate(self) -> None:
+        observed_at = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+        raw_overview_df = pd.DataFrame(
+            [
+                {
+                    "pair_address": "0xpair",
+                    "token_address": "0xtoken",
+                    "token_symbol": "FAST",
+                    "token_name": "Fast Token",
+                    "token_metadata_json": '{"is_binance_alpha": true, "holder_count": 1200, "alpha_score": 80, "alpha_liquidity": 20000}',
+                    "quote_symbol": "WBNB",
+                    "state": "watching",
+                    "snapshot_observed_at": observed_at.isoformat(),
+                    "price_usd": 1.2,
+                    "liquidity_usd": 18000,
+                    "market_cap": 250000,
+                    "fdv": 300000,
+                    "volume_h1": 20000,
+                    "volume_m5": 5000,
+                    "last_score": 20,
+                    "prediction_opportunity_score": 30,
+                    "prediction_short_momentum_score": 68,
+                    "prediction_continuation_score": 34,
+                    "prediction_breakout_score": 12,
+                }
+            ]
+        )
+
+        overview_df = build_overview_frame(raw_overview_df)
+        _, filtered = filter_overview_frame(
+            overview_df,
+            min_signal=65,
+            min_holders=1000,
+            min_liquidity=15000,
+            only_with_market_data=True,
+            now=pd.Timestamp(observed_at + timedelta(minutes=10)),
+        )
+
+        self.assertEqual(filtered["pair_address"].tolist(), ["0xpair"])
+        self.assertEqual(int(filtered.iloc[0]["prediction_short_momentum_score"]), 68)
+
+    def test_filter_overview_frame_prioritizes_high_risk_momentum_over_plain_opportunity(self) -> None:
+        observed_at = datetime(2026, 4, 27, 6, 30, tzinfo=timezone.utc)
+        base_row = {
+            "token_metadata_json": '{"is_binance_alpha": true, "holder_count": 1200, "alpha_score": 111, "alpha_liquidity": 20000}',
+            "quote_symbol": "USDT",
+            "state": "watching",
+            "snapshot_observed_at": observed_at.isoformat(),
+            "price_usd": 1.2,
+            "liquidity_usd": 25000,
+            "market_cap": 250000,
+            "fdv": 300000,
+            "volume_h1": 20000,
+            "volume_m5": 5000,
+            "last_pair_state": "watching",
+            "last_should_alert": 0,
+        }
+        raw_overview_df = pd.DataFrame(
+            [
+                {
+                    **base_row,
+                    "pair_address": "0xplain",
+                    "token_address": "0xplain_token",
+                    "token_symbol": "PLAIN",
+                    "token_name": "Plain Opportunity",
+                    "last_score": 20,
+                    "prediction_opportunity_score": 85,
+                    "last_risk_flags": "[]",
+                    "last_reasons": "[]",
+                    "prediction_reasons": "[]",
+                    "last_feature_json": '{"volume_h1": 10000, "volume_to_liquidity_h1": 0.4, "price_change_h1": 2, "price_change_m5": 0.5}',
+                },
+                {
+                    **base_row,
+                    "pair_address": "0xprl_like",
+                    "token_address": "0xprl_token",
+                    "token_symbol": "PRL",
+                    "token_name": "Perle Like",
+                    "last_score": 60,
+                    "prediction_opportunity_score": 63,
+                    "last_risk_flags": '["fdv_liquidity_stretched","missing_project_metadata"]',
+                    "last_reasons": '["h1_volume_support","volume_to_liquidity_breakout","alpha_hot_score","binance_futures_listed"]',
+                    "prediction_reasons": '["prediction_price_accelerating"]',
+                    "last_feature_json": '{"volume_h1": 150605.84, "volume_to_liquidity_h1": 5.5, "price_change_h1": 18.81, "price_change_m5": 0.39}',
+                },
+            ]
+        )
+
+        overview_df = build_overview_frame(raw_overview_df)
+        _, filtered = filter_overview_frame(
+            overview_df,
+            min_signal=0,
+            min_holders=1000,
+            min_liquidity=15000,
+            only_with_market_data=True,
+            now=pd.Timestamp(observed_at + timedelta(minutes=2)),
+        )
+
+        self.assertEqual(filtered["pair_address"].tolist(), ["0xprl_like", "0xplain"])
+        self.assertEqual(filtered.iloc[0]["display_tier_label"], "高风险动量")
+
+    def test_filter_overview_frame_downgrades_overextended_opportunity(self) -> None:
+        observed_at = datetime(2026, 4, 29, 8, 0, tzinfo=timezone.utc)
+        base_row = {
+            "token_metadata_json": '{"is_binance_alpha": true, "holder_count": 2200, "alpha_score": 96, "alpha_liquidity": 30000}',
+            "quote_symbol": "USDT",
+            "state": "watching",
+            "snapshot_observed_at": observed_at.isoformat(),
+            "price_usd": 1.2,
+            "liquidity_usd": 42000,
+            "market_cap": 750000,
+            "fdv": 900000,
+            "volume_h1": 160000,
+            "volume_m5": 12000,
+            "last_pair_state": "watching",
+            "last_should_alert": 0,
+            "last_risk_flags": "[]",
+            "last_reasons": '["h1_volume_support","volume_to_liquidity_breakout"]',
+        }
+        raw_overview_df = pd.DataFrame(
+            [
+                {
+                    **base_row,
+                    "pair_address": "0xlaunch",
+                    "token_address": "0xlaunch_token",
+                    "token_symbol": "EARLY",
+                    "token_name": "Early Launch",
+                    "last_score": 58,
+                    "prediction_opportunity_score": 62,
+                    "prediction_short_momentum_score": 62,
+                    "prediction_reasons": '["prediction_price_accelerating"]',
+                    "last_feature_json": '{"volume_h1": 120000, "volume_to_liquidity_h1": 3.1, "price_change_h1": 18, "price_change_m5": 2, "h1_return_live": 0.18, "h4_return_live": 0.42, "h24_return_live": 0.8}',
+                },
+                {
+                    **base_row,
+                    "pair_address": "0xlate",
+                    "token_address": "0xlate_token",
+                    "token_symbol": "LATE",
+                    "token_name": "Late Chase",
+                    "last_score": 64,
+                    "prediction_opportunity_score": 88,
+                    "prediction_short_momentum_score": 88,
+                    "prediction_reasons": '["prediction_h1_overextended","prediction_h4_overextended"]',
+                    "last_feature_json": '{"volume_h1": 180000, "volume_to_liquidity_h1": 4.8, "price_change_h1": 92, "price_change_m5": 5, "h1_return_live": 0.92, "h4_return_live": 1.9, "h24_return_live": 2.4}',
+                },
+            ]
+        )
+
+        overview_df = build_overview_frame(raw_overview_df)
+        _, filtered = filter_overview_frame(
+            overview_df,
+            min_signal=0,
+            min_holders=1000,
+            min_liquidity=15000,
+            only_with_market_data=True,
+            now=pd.Timestamp(observed_at + timedelta(minutes=2)),
+        )
+
+        self.assertEqual(filtered["pair_address"].tolist(), ["0xlaunch", "0xlate"])
+        self.assertEqual(filtered.iloc[0]["display_tier_label"], "启动异动")
+        self.assertEqual(filtered.iloc[1]["display_tier_label"], "已涨过多")
 
     def test_latest_signal_context_prefers_feature_values(self) -> None:
         overview_row = {

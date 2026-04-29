@@ -24,10 +24,12 @@ from token_meme_monitor.models import AlphaToken
 from token_meme_monitor.prediction_outcomes import compute_prediction_outcome_with_hourly_ohlcv
 from token_meme_monitor.predictions import PredictionCalibration, build_prediction_calibration, build_prediction_result
 from token_meme_monitor.signals import SignalEngine
-from token_meme_monitor.utils import parse_datetime, utcnow
+from token_meme_monitor.utils import json_loads, parse_datetime, utcnow
 
 LOGGER = logging.getLogger(__name__)
 BINANCE_FUTURES_CACHE_KEY = "binance_futures_registry"
+DEXSCREENER_UNINDEXED_INITIAL_BACKOFF_SECONDS = 300
+DEXSCREENER_UNINDEXED_MAX_BACKOFF_SECONDS = 3600
 
 
 class MonitorWorker:
@@ -458,11 +460,7 @@ class MonitorWorker:
 
         if snapshot is None:
             LOGGER.info("pair %s not yet indexed by DexScreener", pair["pair_address"])
-            self._repo.schedule_pair_retry(
-                pair["pair_address"],
-                utcnow() + timedelta(seconds=self._config.signal.base_poll_interval_seconds),
-                reason="snapshot_not_available",
-            )
+            self._schedule_unindexed_pair_retry(pair["pair_address"])
             return
 
         alpha_token = self._alpha_token_map.get(snapshot.token_address)
@@ -554,6 +552,28 @@ class MonitorWorker:
             active=active,
         )
         self._maybe_alert(pair, snapshot, decision, signal_id)
+
+    def _schedule_unindexed_pair_retry(self, pair_address: str) -> None:
+        pair_row = self._repo.get_pair_detail(pair_address)
+        metadata = json_loads(pair_row.get("metadata_json") if pair_row else None, {})
+        previous_count = int(metadata.get("snapshot_not_available_count") or 0)
+        retry_count = previous_count + 1
+        backoff_seconds = max(
+            self._config.signal.base_poll_interval_seconds,
+            min(
+                DEXSCREENER_UNINDEXED_MAX_BACKOFF_SECONDS,
+                DEXSCREENER_UNINDEXED_INITIAL_BACKOFF_SECONDS * (2 ** min(retry_count - 1, 4)),
+            ),
+        )
+        self._repo.schedule_pair_retry(
+            pair_address,
+            utcnow() + timedelta(seconds=backoff_seconds),
+            reason="snapshot_not_available",
+            metadata_updates={
+                "snapshot_not_available_count": retry_count,
+                "snapshot_not_available_backoff_seconds": backoff_seconds,
+            },
+        )
 
     def refresh_prediction_outcomes(self, *, now=None, limit: int = 100) -> int:
         now = now or utcnow()

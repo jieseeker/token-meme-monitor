@@ -10,6 +10,219 @@ from token_meme_monitor.models import PairSnapshot, PredictionResult, SignalDeci
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_history_compaction_archives_payloads_and_restores_prediction_features(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = MonitorRepository(str(Path(tmpdir) / "monitor.db"))
+            repo.initialize()
+            base = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            cutoff = datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc)
+            for offset, price in enumerate((1.0, 1.5, 1.2)):
+                repo.insert_snapshot(
+                    PairSnapshot(
+                        pair_address="0xpair",
+                        token_address="0xtoken",
+                        token_symbol="MEME",
+                        token_name="Meme",
+                        quote_token_address="0xquote",
+                        quote_symbol="WBNB",
+                        observed_at=base + timedelta(minutes=offset * 10),
+                        pair_created_at=base - timedelta(days=1),
+                        dex_id="pancakeswap",
+                        pair_url="https://example.com/pair",
+                        price_usd=price,
+                        price_native=price / 100,
+                        liquidity_usd=10_000 + offset,
+                        fdv=100_000,
+                        market_cap=90_000,
+                        volume_m5=100 + offset,
+                        volume_h1=1_000 + offset,
+                        volume_h24=10_000 + offset,
+                        buys_m5=3 + offset,
+                        sells_m5=1,
+                        buys_h1=20,
+                        sells_h1=5,
+                        price_change_m5=1,
+                        price_change_h1=5,
+                        price_change_h24=10,
+                        website_count=1,
+                        social_count=1,
+                        boosts_active=0,
+                        raw_payload={"large": "x" * 1000, "price": price},
+                    ),
+                    age_minutes=60,
+                    risk_flags=[],
+                )
+            signal_id = repo.insert_signal(
+                "0xpair",
+                "0xtoken",
+                SignalDecision(
+                    observed_at=base,
+                    strategy_version="v1",
+                    score=55,
+                    pair_state="watching",
+                    should_alert=False,
+                    reasons=("h1_volume_support",),
+                    risk_flags=(),
+                    features={
+                        "price_usd": 1.0,
+                        "volume_h1": 1000,
+                        "buy_sell_ratio_h1": 4.0,
+                        "h1_return_live": 0.08,
+                        "experimental_metric": 123,
+                    },
+                ),
+            )
+            repo.upsert_signal_prediction(
+                signal_id,
+                pair_address="0xpair",
+                token_address="0xtoken",
+                observed_at=base,
+                prediction=PredictionResult(
+                    predictor_version="p-test",
+                    prob_2h_up20=0.1,
+                    prob_6h_up50=0.05,
+                    prob_24h_up100=0.02,
+                    risk_6h_dd30=0.03,
+                    opportunity_score=40,
+                    short_momentum_score=40,
+                    continuation_score=20,
+                    breakout_score=10,
+                    stage="early",
+                    reasons=("prediction_base",),
+                ),
+            )
+
+            summary = repo.compact_history(cutoff, batch_size=10)
+            followup_estimate = repo.estimate_history_compaction(cutoff)
+
+            self.assertEqual(summary["snapshot_rows_compacted"], 3)
+            self.assertEqual(summary["signal_rows_compacted"], 1)
+            self.assertEqual(followup_estimate["snapshot_rows"], 0)
+            self.assertEqual(followup_estimate["signal_rows"], 0)
+            self.assertEqual(followup_estimate["snapshot_hourly_rollup_rows"], 0)
+            snapshot_row = repo._conn.execute("SELECT raw_json FROM snapshots WHERE pair_address = ? LIMIT 1", ("0xpair",)).fetchone()
+            self.assertEqual(snapshot_row["raw_json"], "{}")
+            self.assertEqual(
+                repo._conn.execute("SELECT COUNT(*) AS n FROM snapshot_raw_archives").fetchone()["n"],
+                3,
+            )
+            rollup = repo._conn.execute(
+                "SELECT sample_count, open_price_usd, high_price_usd, low_price_usd, close_price_usd FROM snapshot_hourly_rollups"
+            ).fetchone()
+            self.assertEqual(rollup["sample_count"], 3)
+            self.assertAlmostEqual(rollup["open_price_usd"], 1.0)
+            self.assertAlmostEqual(rollup["high_price_usd"], 1.5)
+            self.assertAlmostEqual(rollup["low_price_usd"], 1.0)
+            self.assertAlmostEqual(rollup["close_price_usd"], 1.2)
+            stored_signal = repo.get_signal_row(signal_id)
+            self.assertNotIn("experimental_metric", stored_signal["feature_json"])
+            self.assertNotIn("buy_sell_ratio_h1", stored_signal["feature_json"])
+            self.assertIn("price_usd", stored_signal["feature_json"])
+            self.assertIn("_history_compacted", stored_signal["feature_json"])
+            dataset_rows = repo.list_prediction_dataset_rows()
+            restored_features = dataset_rows[0]["feature_json"]
+            self.assertIn('"experimental_metric":123', restored_features)
+            self.assertIn('"buy_sell_ratio_h1":4.0', restored_features)
+            repo._conn.execute(
+                "UPDATE signals SET feature_json = ? WHERE id = ?",
+                ('{"_history_compacted":true,"buy_sell_ratio_h1":4.0,"price_usd":1.0}', signal_id),
+            )
+            repo._conn.commit()
+            recompact_summary = repo.compact_history(cutoff, batch_size=10)
+            self.assertEqual(recompact_summary["signal_rows_compacted"], 0)
+            self.assertEqual(recompact_summary["signal_rows_recompacted"], 1)
+            recompacted_signal = repo.get_signal_row(signal_id)
+            self.assertNotIn("buy_sell_ratio_h1", recompacted_signal["feature_json"])
+            self.assertIn("price_usd", recompacted_signal["feature_json"])
+            repo.close()
+
+    def test_history_compaction_estimate_does_not_mutate_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = MonitorRepository(str(Path(tmpdir) / "monitor.db"))
+            repo.initialize()
+            observed_at = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)
+            cutoff = datetime(2026, 4, 2, 0, 0, tzinfo=timezone.utc)
+            repo.insert_snapshot(
+                PairSnapshot(
+                    pair_address="0xpair",
+                    token_address="0xtoken",
+                    token_symbol="MEME",
+                    token_name="Meme",
+                    quote_token_address="0xquote",
+                    quote_symbol="WBNB",
+                    observed_at=observed_at,
+                    pair_created_at=observed_at - timedelta(days=1),
+                    dex_id="pancakeswap",
+                    pair_url="https://example.com/pair",
+                    price_usd=1.0,
+                    price_native=0.01,
+                    liquidity_usd=10_000,
+                    fdv=100_000,
+                    market_cap=90_000,
+                    volume_m5=100,
+                    volume_h1=1_000,
+                    volume_h24=10_000,
+                    buys_m5=3,
+                    sells_m5=1,
+                    buys_h1=20,
+                    sells_h1=5,
+                    price_change_m5=1,
+                    price_change_h1=5,
+                    price_change_h24=10,
+                    website_count=1,
+                    social_count=1,
+                    boosts_active=0,
+                    raw_payload={"large": "x" * 1000},
+                ),
+                age_minutes=60,
+                risk_flags=[],
+            )
+            repo.insert_signal(
+                "0xpair",
+                "0xtoken",
+                SignalDecision(
+                    observed_at=observed_at,
+                    strategy_version="v1",
+                    score=55,
+                    pair_state="watching",
+                    should_alert=False,
+                    reasons=("h1_volume_support",),
+                    risk_flags=(),
+                    features={"price_usd": 1.0, "experimental_metric": 123},
+                ),
+            )
+
+            summary = repo.estimate_history_compaction(cutoff)
+
+            self.assertEqual(summary["snapshot_rows"], 1)
+            self.assertEqual(summary["signal_rows"], 1)
+            self.assertGreater(summary["snapshot_raw_json_bytes"], 100)
+            snapshot_row = repo._conn.execute("SELECT raw_json FROM snapshots WHERE pair_address = ?", ("0xpair",)).fetchone()
+            self.assertIn("large", snapshot_row["raw_json"])
+            self.assertEqual(
+                repo._conn.execute("SELECT COUNT(*) AS n FROM snapshot_raw_archives").fetchone()["n"],
+                0,
+            )
+            repo.close()
+
+    def test_history_compaction_schema_has_global_observed_at_indexes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = MonitorRepository(str(Path(tmpdir) / "monitor.db"))
+            repo.initialize()
+
+            snapshot_indexes = {
+                row["name"]
+                for row in repo._conn.execute("PRAGMA index_list(snapshots)").fetchall()
+            }
+            signal_indexes = {
+                row["name"]
+                for row in repo._conn.execute("PRAGMA index_list(signals)").fetchall()
+            }
+
+            self.assertIn("idx_snapshots_observed_at", snapshot_indexes)
+            self.assertIn("idx_signals_observed_at", signal_indexes)
+            repo.close()
+
     def test_seed_pair_update_preserves_archived_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = MonitorRepository(str(Path(tmpdir) / "monitor.db"))
@@ -251,6 +464,9 @@ class DatabaseTests(unittest.TestCase):
                     prob_24h_up100=0.09,
                     risk_6h_dd30=0.12,
                     opportunity_score=68,
+                    short_momentum_score=68,
+                    continuation_score=47,
+                    breakout_score=22,
                     stage="acceleration",
                     reasons=("prediction_alpha_hot",),
                 ),
@@ -276,6 +492,9 @@ class DatabaseTests(unittest.TestCase):
             rows = repo.list_recent_signals("0xpair")
 
             self.assertEqual(rows[0]["prediction_opportunity_score"], 68)
+            self.assertEqual(rows[0]["prediction_short_momentum_score"], 68)
+            self.assertEqual(rows[0]["prediction_continuation_score"], 47)
+            self.assertEqual(rows[0]["prediction_breakout_score"], 22)
             self.assertEqual(rows[0]["prediction_stage"], "acceleration")
             self.assertEqual(rows[0]["outcome_hit_24h_up100"], 1)
             repo.close()

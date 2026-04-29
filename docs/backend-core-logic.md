@@ -57,7 +57,9 @@
 - [signals.py](/Users/zjj/vs_code/token-meme-monitor/token_meme_monitor/signals.py)
   - 规则打分、状态判断、告警资格判断
 - [predictions.py](/Users/zjj/vs_code/token-meme-monitor/token_meme_monitor/predictions.py)
-  - p3 概率预测、机会分、历史 outcome 命中率校准
+  - p4 概率预测、分 horizon 机会分、历史 outcome 命中率校准
+- [health.py](/Users/zjj/vs_code/token-meme-monitor/token_meme_monitor/health.py)
+  - 后端健康报告：数据库体积、行数、pair 新鲜度、seed 状态、预测与 outcome 质量概览
 - [indicator_candidates.py](/Users/zjj/vs_code/token-meme-monitor/token_meme_monitor/indicator_candidates.py)
   - 回测后新增候选指标的实时计算
 - [token_validation.py](/Users/zjj/vs_code/token-meme-monitor/token_meme_monitor/token_validation.py)
@@ -100,11 +102,11 @@
 9. 用规则引擎打分
 10. 计算候选指标（相对放量、市值桶、短期收益率等）
 11. 写入 `snapshots` 和 `signals`
-12. 基于 signal + token metadata 生成 `p3` 预测概率，写入 `signal_predictions`
+12. 基于 signal + token metadata 生成 `p4` 预测概率和分 horizon 分数，写入 `signal_predictions`
 13. 更新 `pairs` 状态与下一次刷新时间
 14. 如果达到告警资格，则尝试发送 Telegram
 15. 低频刷新 holder / top10 holder share 元数据
-16. 对已满 25h 且小时线窗口已闭合的预测补充 `signal_prediction_outcomes`，供后续 p3 历史命中率校准
+16. 对已满 25h 且小时线窗口已闭合的预测补充 `signal_prediction_outcomes`，供后续 p4 历史命中率校准
 
 ---
 
@@ -261,7 +263,7 @@
 
 当前版本：
 
-- `PREDICTOR_VERSION=p3`
+- `PREDICTOR_VERSION=p4`
 
 预测层不是本地大模型，也不依赖 GPU。它当前做三件事：
 
@@ -270,10 +272,14 @@
   - `prob_6h_up50`
   - `prob_24h_up100`
   - `risk_6h_dd30`
-- 把概率折算为 `opportunity_score`
+- 把概率折算为三个 horizon 分数：
+  - `short_momentum_score`：2小时短线机会，dashboard 主排序使用它
+  - `continuation_score`：6小时延续机会
+  - `breakout_score`：24小时强爆发观察
+- `opportunity_score` 保留为兼容字段，新生成预测中等于 `short_momentum_score`
 - 当本地已有足够成熟 outcome 样本时，用相似历史分桶命中率做保守校准
 
-p3 校准分桶会参考：
+p4 校准分桶会参考：
 
 - signal 分数桶
 - 阶段：`early / acceleration / late / exhaustion`
@@ -295,17 +301,86 @@ p3 校准分桶会参考：
 
 重要现实状态：
 
-- 截至 2026-04-26 当天，`signal_predictions` 已升级到 `p3`
-- 但本地最早 prediction 还未满 25h，`signal_prediction_outcomes` 暂无可用样本
-- 因此当前 p3 已接好校准链路，但短期内仍主要按规则概率运行
-- 等 worker 运行超过 25h、且外部小时线窗口闭合后，成熟预测会自动进入 outcome 表，后续 p3 校准才会真正生效
+- 截至 2026-04-28 晚间，`signal_predictions` 已升级到 `p4`
+- 本地已补齐旧 outcome 质量字段，并完成 p4 历史 prediction rebuild
+- 当前验证重点是 2h 短线机会分；6h / 24h 仅作为延续观察，暂不当作高置信买入依据
 
 维护命令：
 
 ```bash
 ./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes --limit 10000
 ./.venv/bin/python -m token_meme_monitor rebuild-predictions
+./.venv/bin/python -m token_meme_monitor backtest-predictions --max-price-divergence-pct 0.10
+./.venv/bin/python -m token_meme_monitor scheduled-backtest-report --max-price-divergence-pct 0.10
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker
 ./.venv/bin/python -m token_meme_monitor export-prediction-dataset
+./.venv/bin/python -m token_meme_monitor health-report --json
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --dry-run
+```
+
+定时回测巡检：
+
+- `scheduled-backtest-report` 会先刷新成熟 prediction outcome，再基于本地 prediction dataset 生成巡检报告
+- `run-scheduled-backtest-worker` 是项目内长驻 worker，默认每 `14400` 秒（4 小时）执行一次同样的巡检，不依赖 macOS `launchd`、cron 或其他系统调度
+- 最新报告写入：
+  - `data/backtests/scheduled/latest.json`
+  - `data/backtests/scheduled/latest.md`
+- 每次运行还会按 `YYYYMMDD-HHMM` 写一份归档报告，便于对比每 4 小时的变化
+- 报告会额外列出：
+  - 近期涨幅榜
+  - 涨幅较大但当时信号/短线机会分不足的疑似漏抓 token
+  - 命中强信号但当时已经过热的疑似追高 token
+  - 2h 概率和实际命中率偏差，以及高分桶样本不足提醒
+
+本地完整启动建议：
+
+| 服务 | 命令 | 职责 | 主要依赖 | 主要输出 |
+| --- | --- | --- | --- | --- |
+| 实时监控 worker | `./.venv/bin/python -m token_meme_monitor run-worker` | 发现新池子、刷新行情、计算信号、写入预测 | BSC RPC、Binance Alpha、DexScreener、GeckoTerminal | SQLite 中的 `pairs`、`snapshots`、`signals`、`signal_predictions` |
+| 定时回测 worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | 每 4 小时补成熟 outcome、跑回测、生成涨幅榜/漏抓/追高巡检报告 | 本地 SQLite，必要时请求 GeckoTerminal 补 outcome | `data/backtests/scheduled/latest.md`、`data/backtests/scheduled/latest.json` |
+| 前端 dashboard | `./.venv/bin/streamlit run dashboard/app.py` | 展示左侧候选列表、右侧详情、预测、历史记录和走势 | 本地 SQLite；详情趋势优先读本地缓存，缺失时少量请求 GeckoTerminal | `http://127.0.0.1:8501` |
+
+```bash
+# 终端 1：实时监控 worker，负责发现、刷新行情、写 snapshots/signals/predictions
+./.venv/bin/python -m token_meme_monitor run-worker
+```
+
+```bash
+# 终端 2：定时回测 worker，默认每 4 小时生成一次巡检报告
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
+  --interval-seconds 14400 \
+  --max-price-divergence-pct 0.10 \
+  --refresh-outcome-limit 1000
+```
+
+```bash
+# 终端 3：前端 dashboard
+./.venv/bin/streamlit run dashboard/app.py
+```
+
+启动后检查：
+
+```bash
+pgrep -af "token_meme_monitor run-worker|run-scheduled-backtest-worker|streamlit run dashboard/app.py"
+curl -i http://127.0.0.1:8501/_stcore/health
+```
+
+启动项目内定时 worker：
+
+```bash
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
+  --interval-seconds 14400 \
+  --max-price-divergence-pct 0.10 \
+  --refresh-outcome-limit 1000
+```
+
+本地只跑一轮用于验证：
+
+```bash
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
+  --once \
+  --skip-refresh-outcomes \
+  --max-price-divergence-pct 0.10
 ```
 
 ---
@@ -320,14 +395,24 @@ p3 校准分桶会参考：
   - 监控中的交易池
 - `snapshots`
   - 每次行情快照
+  - 冷热分层后，近期保留完整 `raw_json`，旧行的 `raw_json` 可压缩归档到 `snapshot_raw_archives`
+- `snapshot_hourly_rollups`
+  - 旧 snapshot 的 pair + hour 聚合结果
+  - 用于长期趋势复盘，避免必须保留每次刷新级别的旧明细 payload
+- `snapshot_raw_archives`
+  - 旧 snapshot `raw_json` 的 zlib 压缩归档
 - `signals`
   - 每次评分结果
+  - 冷热分层后，近期保留完整 `feature_json`，旧行保留适合 dashboard 历史展示的紧凑特征
+- `signal_feature_archives`
+  - 旧 signal 完整 `feature_json` 的 zlib 压缩归档
+  - `list_prediction_dataset_rows()` 会自动还原归档特征，保证 `rebuild-predictions` / `backtest-predictions` / `export-prediction-dataset` 仍读取完整模型输入
 - `signal_predictions`
-  - 每次 signal 对应的 p3 概率、机会分、阶段和预测解释
+  - 每次 signal 对应的 p4 概率、机会分、分 horizon 分数、阶段和预测解释
 - `signal_prediction_outcomes`
-  - p3 预测的成熟后结果标签
-  - 当前包含 2h / 6h / 24h 最大收益、6h 最大回撤、命中标记和样本数
-  - 用于后续概率校准和训练集导出
+  - p4 预测的成熟后结果标签
+  - 当前包含 2h / 6h / 24h 最大收益、6h 最大回撤、命中标记、样本数、outcome 来源、基准价来源、GeckoTerminal 基准 close、价格源偏差和质量标记
+  - 用于后续概率校准、训练集导出和事件级 walk-forward 回测
 - `alerts`
   - 告警发送记录
 - `outcomes`
@@ -381,6 +466,11 @@ p3 校准分桶会参考：
 - `pair` 快照刷新不再同步请求 Honeypot，holder 类指标由 side job 更新
 - DexScreener snapshot 会先校验 chain / pair / token / quote，明显不匹配时不会写入快照
 - DexScreener snapshot 只接受目标 token 位于 `baseToken`、报价资产位于 `quoteToken` 的返回；如果目标 token 出现在 quote 侧，会拒绝写入，避免把报价资产价格误记到目标 token 下
+- DexScreener 暂时查不到 snapshot 的 pair 会进入“未索引池子”退避：
+  - 初始约 5 分钟后重试
+  - 连续失败逐步延长
+  - 最长约 1 小时
+  - 重试次数和当前退避会写入 pair metadata，避免新池未被 DexScreener 收录时每轮占用刷新能力
 - Alpha token pair seed 会遵守 `pair_seed_failed_at` 的 TTL：
   - 没有找到 pair 的 token 不会每轮都占用 seed batch
   - TTL 到期后才重新进入 DexScreener seed 尝试
@@ -398,11 +488,14 @@ p3 校准分桶会参考：
   - dashboard 历史记录的 2h / 24h 回看使用 GeckoTerminal 外部 OHLCV 趋势数据，并按小时持久化缓存到 `external_trend_metrics`
   - `outcomes` 表仅为旧库兼容保留，不再由 worker 写入
 - `signal_prediction_outcomes` 仍然会由 worker 写入：
-  - 它服务于 p3 概率校准，不服务于 dashboard 历史记录展示
+  - 它服务于 p4 概率校准，不服务于 dashboard 历史记录展示
   - 当前优先使用 GeckoTerminal `hour` OHLCV 计算 2h / 6h / 24h 未来结果，使用信号触发时的 `price_usd` 作为基准价，并用小时 K 的 `high / low` 捕捉窗口内最大涨幅和最大回撤
+  - outcome 会额外记录 `outcome_source / base_price_source / base_price_usd / gecko_base_close_usd / price_divergence_pct / quality_flags_json`
+  - 当 signal 基准价与 GeckoTerminal 基准 close 偏离超过 10% 时，会写入 `price_source_divergence_gt_10pct`，便于后续回测过滤或降权
   - 历史小时线写入 `external_ohlcv` + `external_ohlcv_fetches`，同一个历史窗口不会重复请求外部接口
   - prediction 至少等待 25h，确保 24h 结果窗口对应的小时线已结束；窗口未闭合时本轮跳过，后续 worker 自动重试
-  - p3 校准只使用样本覆盖足够的 horizon：2h 至少 2 根小时线、6h 至少 5 根、24h 至少 18 根
+  - p4 校准只使用质量合格、样本覆盖足够的 horizon：2h 至少 2 根小时线、6h 至少 5 根、24h 至少 18 根
+  - p4 校准会排除 `local_snapshots`、价格源偏差超过 10% 的 outcome，以及带有对应 `partial_*` 质量标记的 horizon
 - `archived` 或命中严重风险的 signal 不会触发告警
 
 当前 worker 的现实约束：
@@ -546,7 +639,7 @@ p3 校准分桶会参考：
 ./.venv/bin/python -m unittest discover -s tests
 ```
 
-### 12.7 2026-04-26 p3 预测与维护链路
+### 12.7 2026-04-26 p4 预测与维护链路
 
 位置：
 
@@ -556,22 +649,55 @@ p3 校准分桶会参考：
 
 已落地：
 
-- `PREDICTOR_VERSION` 从 `p2` 升级到 `p3`
+- `PREDICTOR_VERSION` 已从 `p2` 升级到 `p3`，并在 2026-04-28 晚间升级到 `p4`
 - 新增历史分桶校准层 `build_prediction_calibration()`
+- p4 新增三类机会分：
+  - `short_momentum_score`
+  - `continuation_score`
+  - `breakout_score`
+- dashboard 主筛选、代表池选择和左侧列表默认使用 `short_momentum_score`，旧 `opportunity_score` 仅作为兼容回退
+- 校准样本按“事件级”去重：同一交易对、同一信号状态桶在 2 小时内只计一次，避免连续快照把同一个行情事件放大成几十个样本
+- 小样本校准只允许下调上涨概率；上涨概率只有事件样本达到更高门槛后才允许被经验命中率上调
 - worker 在写入 signal prediction 时会读取本地成熟 outcome 构造校准器
 - worker 每轮会尝试刷新成熟 prediction outcome
 - outcome 刷新后会清空 worker 内存中的 calibration cache
 - prediction outcome 现在优先从外部小时线缓存计算，不再依赖本地 snapshot 的稀疏采样
+- prediction outcome 会记录价格源质量字段，避免 DexScreener feature 价和 GeckoTerminal K 线基准价偏差污染回测
+- p4 历史校准现在只使用质量合格 outcome：
+  - 排除 `local_snapshots`
+  - 排除价格源偏差超过 10% 的样本
+  - 排除对应 horizon 带 `partial_*` 覆盖不足标记的样本
+- 新增事件级 expanding walk-forward 回测报告，测试段预测只使用该事件之前已成熟的 outcome 校准
+- 新增 OpenSpec change：
+  - `openspec/changes/prediction-outcome-quality-backtest`
+  - `openspec/changes/prediction-horizon-score-split`
+  - `openspec/changes/backend-health-calibration-hardening`
 - 新增 CLI：
   - `refresh-prediction-outcomes`
+  - `refresh-prediction-outcomes --refresh-missing-quality`
   - `rebuild-predictions`
+  - `backtest-predictions`
+  - `health-report`
 - `cleanup-data` 在 metadata-only 变化时也会重算 signal / prediction / pair state
 
-当前约束：
+当前状态：
 
-- 本地 `signal_prediction_outcomes` 在 2026-04-26 当天还没有成熟样本
-- 因此 p3 校准层当前处于“已接入、待样本生效”状态
-- 第一批线上 prediction 需要等至少 25h 后才会尝试补 outcome；如果外部小时线暂时不可用，本轮会跳过，避免把空样本固化成校准数据
+- 截至 2026-04-28，第一批 25h 成熟 prediction outcome 已经开始进入本地校准
+- 快照级 outcome 行数很多，但概率校准以事件级样本为准，避免 AGT / LIGHT 这类连续快照重复计权
+- 后续验证应优先看事件级 walk-forward，而不是直接用全量重建后的历史行做回测；全量重建会把当前校准应用到旧行，适合刷新 dashboard 展示，不适合单独证明历史准确率
+- 截至 2026-04-28 晚间加入 outcome 质量门控、重建 p4 prediction 后，本地 `backtest-predictions --max-price-divergence-pct 0.10` 结果：
+  - 原始 prediction dataset：`278,636` 行
+  - 去重后可用事件：`3,520`
+  - 训练事件：`2,464`
+  - 测试事件：`1,056`
+  - 重建时校准样本从 `7,504` 条过滤为 `6,743` 条
+  - p4 回测分桶按 `short_momentum_score` 分桶
+  - `<45` 桶：`1,042` 个测试事件，平均 2h 分 `23.7`，预测 2h `1.96%`，实际 2h `1.36%`
+  - `45-54` 桶：`14` 个测试事件，平均 2h 分 `47.9`，预测 2h `7.55%`，实际 2h `14.29%`
+  - `55+` 当前测试事件仍为 `0`，不能把高分段当成已验证高胜率区间
+  - outcome 质量字段已经补齐：`unknown_rows=0`
+  - `1,165` 条 outcome 超过 10% 价格源偏差并在本次回测中过滤
+  - 24h 翻倍命中样本仍少，当前不能把 24h 概率当成强买入依据
 
 ### 12.8 2026-04-26 代表池与历史数据缓存
 
@@ -582,6 +708,116 @@ p3 校准分桶会参考：
 - 历史 OHLCV 使用 `external_ohlcv` + `external_ohlcv_fetches` 存档，避免历史数据每次现用现查
 - GeckoTerminal 详情页 2h / 24h 区间涨幅使用 `external_trend_metrics` 存档
 - `validate-token-list` 会优先使用本地历史 OHLCV 缓存，只有窗口不完整时才请求外部接口
+
+### 12.9 2026-04-28 后端健康报告与本地数据现状
+
+新增命令：
+
+```bash
+./.venv/bin/python -m token_meme_monitor health-report
+./.venv/bin/python -m token_meme_monitor health-report --json
+```
+
+当前用途：
+
+- 快速查看 SQLite 体积和最大对象
+- 查看 `snapshots / signals / predictions / outcomes` 行数
+- 查看 active pair 中的 stale / no snapshot 数量
+- 查看 Alpha seed 成功和失败数量
+- 查看 p4 预测版本分布、成熟 prediction 是否缺 outcome
+- 查看 outcome 质量来源和价格源偏差数量
+
+截至 2026-04-28 晚间历史压缩前一次本地运行结果：
+
+- `data/monitor.db` 约 `2.28GB`
+- `snapshots` 约 `586k` 行，占用约 `1.07GB`
+- `signals` 约 `586k` 行，占用约 `756MB`
+- `signal_predictions` 约 `279k` 行
+- `signal_prediction_outcomes` 约 `169k` 行
+- `external_ohlcv` 约 `17k` 行
+- `pairs` 共 `349` 个，其中 active `311` 个
+- active pair 中 stale 约 `29` 个，no snapshot 约 `8` 个，后续观察它们是否随未索引退避和正常刷新收敛
+- Alpha token 共 `357` 个，seeded `271` 个，seed_failed `96` 个
+- 预测版本全量为 `p4`
+- 成熟 prediction 缺 outcome 数为 `0`
+
+### 12.10 2026-04-28 历史冷热分层与压缩
+
+新增命令：
+
+```bash
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --dry-run
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --execute
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --execute --vacuum
+```
+
+默认行为：
+
+- 不带 `--execute` 时只 dry-run，不修改数据库
+- `--before` 可指定明确 cutoff，例如 `2026-04-15T00:00:00+00:00`
+- `--vacuum` 只在 execute 后执行，用于真正回收 SQLite 文件空间
+
+压缩策略：
+
+- 旧 `snapshots` 会先按 pair + hour 写入 `snapshot_hourly_rollups`
+- 旧 `snapshots.raw_json` 会压缩到 `snapshot_raw_archives`，主表改为 `{}`
+- 旧 `signals.feature_json` 会压缩到 `signal_feature_archives`，主表改为紧凑展示字段
+- `signal_predictions` 和 `signal_prediction_outcomes` 不压缩，继续长期保留
+- prediction dataset 读取会自动从 `signal_feature_archives` 还原完整 feature，避免影响 `rebuild-predictions`、`backtest-predictions` 和训练集导出
+
+页面影响：
+
+- 最近 14 天详情页、走势、历史记录保持完整明细
+- 更旧历史记录保留时间、状态、分数、原因、风险、预测和 outcome
+- 更旧走势优先使用小时级聚合，不再依赖每次刷新级别的完整 raw payload
+
+操作建议：
+
+- 先运行 dry-run 看 eligible 行数和 JSON 体积
+- 第一次 execute 前建议暂停 worker/dashboard 或至少避开高频刷新窗口
+- `--vacuum` 会锁库，建议单独执行，不要在观察盘中运行
+
+2026-04-28 本地 dry-run 参考：
+
+- `--older-than-days 14`：当前没有 eligible 行，因为本地数据最早约为 2026-04-24
+- `--older-than-days 3`：约 `114k` 条 snapshots、`114k` 条 signals，JSON 热字段约 `226MB`
+- `--older-than-days 2`：约 `328k` 条 snapshots、`328k` 条 signals，JSON 热字段约 `663MB`
+- `--older-than-days 1`：约 `485k` 条 snapshots、`485k` 条 signals，JSON 热字段约 `983MB`
+
+2026-04-28 已执行策略：
+
+- 执行 `compact-history --older-than-days 1 --execute --vacuum`
+- 约 `487k` 条旧 snapshots 的 `raw_json` 已压缩到 `snapshot_raw_archives`
+- 约 `487k` 条旧 signals 的完整 `feature_json` 已压缩到 `signal_feature_archives`
+- 旧 signals 主表只保留页面摘要字段：
+  - `price_usd`
+  - `market_cap`
+  - `fdv`
+  - `liquidity_usd`
+  - `volume_h1`
+  - `volume_h24`
+  - `volume_to_liquidity_h1`
+  - `price_change_h1`
+  - `price_change_h24`
+  - `h1_return_live`
+  - `h24_return_live`
+  - `market_cap_bucket`
+- 压缩后 `data/monitor.db` 约 `1.77GB`
+- `snapshots` 从约 `1.07GB` 降到约 `319MB`
+- `signals` 从约 `761MB` 降到约 `444MB`
+- `snapshot_raw_archives` 约 `375MB`
+- `signal_feature_archives` 约 `238MB`
+- `list_prediction_dataset_rows()` 已验证会从归档表还原完整 feature，归档后回测可正常运行
+
+2026-04-28 压缩后回测结果：
+
+- 原始 prediction dataset：`281,954` 行
+- 去重后可用事件：`3,525`
+- 训练事件：`2,467`
+- 测试事件：`1,058`
+- `<45` 桶：`1,043` 个测试事件，平均 2h 分 `23.7`，预测 2h `1.96%`，实际 2h `1.36%`
+- `45-54` 桶：`15` 个测试事件，平均 2h 分 `47.8`，预测 2h `7.54%`，实际 2h `13.33%`
+- `55+` 当前测试事件仍为 `0`
 
 ---
 
@@ -619,13 +855,15 @@ p3 校准分桶会参考：
 
 当前最重要的后续事项：
 
-1. 等 `signal_predictions` 跑满 25h 后，检查 `signal_prediction_outcomes` 是否开始增长。
-2. 当 outcome 样本足够后，重新执行：
+1. 持续检查 `signal_prediction_outcomes` 是否稳定增长，并确认 `sample_count_24h` 可用比例。
+2. 每天或每次关键策略调整后执行：
    - `refresh-prediction-outcomes`
+   - 如需给旧 outcome 补质量字段，执行 `refresh-prediction-outcomes --refresh-missing-quality --limit <N>`
    - `rebuild-predictions`
+   - `backtest-predictions`
    - `export-prediction-dataset`
-3. 用真实线上 signal outcome 验证 p3，而不是只依赖 token list 事后锚点回测。
-4. 重点观察 p3 的概率校准方向：
+3. 用真实线上 signal outcome 做事件级 walk-forward 验证，而不是只依赖 token list 事后锚点回测。
+4. 重点观察 p4 的概率校准方向：
    - 是否继续过高
    - 是否过度保守
    - `prediction_empirical_lowered / raised` 出现在哪些 token 类型上
@@ -640,14 +878,16 @@ p3 校准分桶会参考：
 
 当前优先级：
 
-- 先把数据准确性、外部小时线缓存、真实 outcome 回填、回测样本和 p3 概率校准做到稳定。
+- 先把数据准确性、外部小时线缓存、真实 outcome 回填、回测样本和 p4 概率校准做到稳定。
 - 在预测逻辑没有稳定前，暂不切换数据库、不做大规模存储重构，避免同时引入数据迁移风险和策略误差。
 
-截至 2026-04-26 本地存储现状：
+截至 2026-04-28 本地存储现状：
 
-- `data/monitor.db` 约 `1.1GB`
-- `snapshots` 约 `325k` 行，占用约 `591MB`
-- `signals` 约 `325k` 行，占用约 `416MB`
+- `data/monitor.db` 约 `2.28GB`
+- `snapshots` 约 `586k` 行，占用约 `1.07GB`
+- `signals` 约 `586k` 行，占用约 `756MB`
+- `signal_predictions` 约 `279k` 行
+- `signal_prediction_outcomes` 约 `169k` 行
 - 数据主要增长来自实时快照 `raw_json` 和信号 `feature_json`
 - 当前 SQLite 仍可支撑单 worker + 单 dashboard 的开发验证阶段
 

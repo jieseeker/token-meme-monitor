@@ -59,10 +59,13 @@ def compute_prediction_outcome_from_ohlcv(
     observed_at = _as_utc(observed_at)
     observed_ts = int(observed_at.timestamp())
     normalized_rows = _normalize_ohlcv_rows(rows)
-    if base_price is None or base_price <= 0:
-        base_row = _latest_before_or_at(normalized_rows, observed_ts)
-        base_price = base_row["close"] if base_row else None
-    if base_price is None or base_price <= 0:
+    signal_base_price = base_price if base_price is not None and base_price > 0 else None
+    base_row = _latest_before_or_at(normalized_rows, observed_ts)
+    gecko_base_close = base_row["close"] if base_row else None
+    effective_base_price = signal_base_price or gecko_base_close
+    base_price_source = "signal_feature_price" if signal_base_price is not None else "geckoterminal_close"
+    price_divergence_pct = _price_divergence_pct(signal_base_price, gecko_base_close)
+    if effective_base_price is None or effective_base_price <= 0:
         return empty_prediction_outcome()
 
     def window(hours: int) -> list[dict[str, float]]:
@@ -72,11 +75,25 @@ def compute_prediction_outcome_from_ohlcv(
     values_2h = window(2)
     values_6h = window(6)
     values_24h = window(24)
-    max_return_2h = _max_return(values_2h, base_price)
-    max_return_6h = _max_return(values_6h, base_price)
-    max_return_24h = _max_return(values_24h, base_price)
-    min_return_6h = _min_return(values_6h, base_price)
+    max_return_2h = _max_return(values_2h, effective_base_price)
+    max_return_6h = _max_return(values_6h, effective_base_price)
+    max_return_24h = _max_return(values_24h, effective_base_price)
+    min_return_6h = _min_return(values_6h, effective_base_price)
+    quality_flags = _quality_flags(
+        signal_base_price=signal_base_price,
+        gecko_base_close=gecko_base_close,
+        price_divergence_pct=price_divergence_pct,
+        sample_count_2h=len(values_2h),
+        sample_count_6h=len(values_6h),
+        sample_count_24h=len(values_24h),
+    )
     return {
+        "outcome_source": "geckoterminal_hourly",
+        "base_price_source": base_price_source,
+        "base_price_usd": effective_base_price,
+        "gecko_base_close_usd": gecko_base_close,
+        "price_divergence_pct": price_divergence_pct,
+        "quality_flags": quality_flags,
         "max_return_2h": max_return_2h,
         "max_return_6h": max_return_6h,
         "max_return_24h": max_return_24h,
@@ -93,6 +110,12 @@ def compute_prediction_outcome_from_ohlcv(
 
 def empty_prediction_outcome() -> dict[str, Any]:
     return {
+        "outcome_source": "geckoterminal_hourly",
+        "base_price_source": "missing",
+        "base_price_usd": None,
+        "gecko_base_close_usd": None,
+        "price_divergence_pct": None,
+        "quality_flags": ["base_price_missing"],
         "max_return_2h": None,
         "max_return_6h": None,
         "max_return_24h": None,
@@ -217,6 +240,37 @@ def _max_return(rows: list[dict[str, float]], base_price: float) -> float | None
 
 def _min_return(rows: list[dict[str, float]], base_price: float) -> float | None:
     return min(row["low"] for row in rows) / base_price - 1 if rows else None
+
+
+def _price_divergence_pct(signal_base_price: float | None, gecko_base_close: float | None) -> float | None:
+    if signal_base_price is None or gecko_base_close is None or gecko_base_close <= 0:
+        return None
+    return signal_base_price / gecko_base_close - 1
+
+
+def _quality_flags(
+    *,
+    signal_base_price: float | None,
+    gecko_base_close: float | None,
+    price_divergence_pct: float | None,
+    sample_count_2h: int,
+    sample_count_6h: int,
+    sample_count_24h: int,
+) -> list[str]:
+    flags: list[str] = []
+    if signal_base_price is None:
+        flags.append("base_price_fallback_gecko_close")
+    if gecko_base_close is None:
+        flags.append("gecko_base_close_missing")
+    if price_divergence_pct is not None and abs(price_divergence_pct) > 0.10:
+        flags.append("price_source_divergence_gt_10pct")
+    if sample_count_2h < MIN_OUTCOME_SAMPLE_2H:
+        flags.append("partial_2h_ohlcv")
+    if sample_count_6h < MIN_OUTCOME_SAMPLE_6H:
+        flags.append("partial_6h_ohlcv")
+    if sample_count_24h < MIN_OUTCOME_SAMPLE_24H:
+        flags.append("partial_24h_ohlcv")
+    return flags
 
 
 def _feature_price(feature_json: str | None) -> float | None:

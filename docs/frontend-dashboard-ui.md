@@ -286,7 +286,20 @@
 - `prediction_prob_24h_up100`
 - `prediction_risk_6h_dd30`
 - `prediction_opportunity_score`
+- `prediction_short_momentum_score`
+- `prediction_continuation_score`
+- `prediction_breakout_score`
 - `candidate_strength`
+
+当前前端排序和筛选语义：
+
+- 主列表的预测侧强度优先使用 `prediction_short_momentum_score`
+- 旧 `prediction_opportunity_score` 只作为兼容回退
+- 预测 tab 中分开展示：
+  - `2小时短线机会`
+  - `6小时延续机会`
+  - `24小时爆发观察`
+- 24小时分数当前只作为观察项，不作为高置信买入信号
 
 ## 5. 已踩过的坑
 
@@ -430,7 +443,47 @@ metric_value(...) or overview_row.get("alpha_liquidity") or 0
 
 如果后续再做页面改造，应优先更新这份文档，再继续改代码。
 
-## 9. 新会话提示语
+## 9. 本地启动
+
+dashboard 只负责展示本地 SQLite 数据，不负责采集。完整本地环境建议同时启动三个进程：
+
+| 服务 | 命令 | 职责 | 主要依赖 | 主要输出 |
+| --- | --- | --- | --- | --- |
+| 实时监控 worker | `./.venv/bin/python -m token_meme_monitor run-worker` | 发现新池子、刷新行情、计算信号、写入预测 | BSC RPC、Binance Alpha、DexScreener、GeckoTerminal | SQLite 中的 `pairs`、`snapshots`、`signals`、`signal_predictions` |
+| 定时回测 worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | 每 4 小时补成熟 outcome、跑回测、生成涨幅榜/漏抓/追高巡检报告 | 本地 SQLite，必要时请求 GeckoTerminal 补 outcome | `data/backtests/scheduled/latest.md`、`data/backtests/scheduled/latest.json` |
+| 前端 dashboard | `./.venv/bin/streamlit run dashboard/app.py` | 展示左侧候选列表、右侧详情、预测、历史记录和走势 | 本地 SQLite；详情趋势优先读本地缓存，缺失时少量请求 GeckoTerminal | `http://127.0.0.1:8501` |
+
+```bash
+# 终端 1：实时监控 worker
+./.venv/bin/python -m token_meme_monitor run-worker
+```
+
+```bash
+# 终端 2：定时回测 worker，每 4 小时生成一次回测巡检报告
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
+  --interval-seconds 14400 \
+  --max-price-divergence-pct 0.10 \
+  --refresh-outcome-limit 1000
+```
+
+```bash
+# 终端 3：前端页面
+./.venv/bin/streamlit run dashboard/app.py
+```
+
+启动后可用下面两个命令确认：
+
+```bash
+pgrep -af "token_meme_monitor run-worker|run-scheduled-backtest-worker|streamlit run dashboard/app.py"
+curl -i http://127.0.0.1:8501/_stcore/health
+```
+
+定时回测报告位置：
+
+- `data/backtests/scheduled/latest.md`
+- `data/backtests/scheduled/latest.json`
+
+## 10. 新会话提示语
 
 以后每次为了修改前端页面而新开会话，建议先把下面这段完整发给模型：
 

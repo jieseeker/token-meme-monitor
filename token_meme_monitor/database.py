@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import zlib
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -99,6 +100,46 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS snapshot_hourly_rollups (
+        pair_address TEXT NOT NULL,
+        token_address TEXT NOT NULL,
+        observed_at_hour TEXT NOT NULL,
+        first_observed_at TEXT NOT NULL,
+        last_observed_at TEXT NOT NULL,
+        sample_count INTEGER NOT NULL,
+        open_price_usd REAL,
+        high_price_usd REAL,
+        low_price_usd REAL,
+        close_price_usd REAL,
+        avg_liquidity_usd REAL,
+        max_liquidity_usd REAL,
+        max_volume_h1 REAL,
+        max_volume_h24 REAL,
+        sum_volume_m5 REAL NOT NULL,
+        sum_buys_m5 INTEGER NOT NULL,
+        sum_sells_m5 INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(pair_address, observed_at_hour)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS snapshot_raw_archives (
+        snapshot_id INTEGER PRIMARY KEY,
+        archived_at TEXT NOT NULL,
+        compression TEXT NOT NULL,
+        raw_json_z BLOB NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS signal_feature_archives (
+        signal_id INTEGER PRIMARY KEY,
+        archived_at TEXT NOT NULL,
+        compression TEXT NOT NULL,
+        feature_json_z BLOB NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         signal_id INTEGER NOT NULL,
@@ -185,6 +226,9 @@ SCHEMA_STATEMENTS = [
         prob_24h_up100 REAL NOT NULL,
         risk_6h_dd30 REAL NOT NULL,
         opportunity_score INTEGER NOT NULL,
+        short_momentum_score INTEGER,
+        continuation_score INTEGER,
+        breakout_score INTEGER,
         stage TEXT NOT NULL,
         reasons_json TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -194,6 +238,12 @@ SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS signal_prediction_outcomes (
         signal_id INTEGER PRIMARY KEY,
         evaluated_at TEXT NOT NULL,
+        outcome_source TEXT NOT NULL DEFAULT 'unknown',
+        base_price_source TEXT NOT NULL DEFAULT 'unknown',
+        base_price_usd REAL,
+        gecko_base_close_usd REAL,
+        price_divergence_pct REAL,
+        quality_flags_json TEXT NOT NULL DEFAULT '[]',
         max_return_2h REAL,
         max_return_6h REAL,
         max_return_24h REAL,
@@ -210,7 +260,10 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_pairs_due ON pairs(active, next_refresh_at)",
     "CREATE INDEX IF NOT EXISTS idx_pairs_token ON pairs(token_address)",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_pair_time ON snapshots(pair_address, observed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at ON snapshots(observed_at)",
     "CREATE INDEX IF NOT EXISTS idx_signals_pair_time ON signals(pair_address, observed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_signals_observed_at ON signals(observed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_snapshot_hourly_rollups_pair_time ON snapshot_hourly_rollups(pair_address, observed_at_hour DESC)",
     "CREATE INDEX IF NOT EXISTS idx_alerts_sent_at ON alerts(sent_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_external_trend_pair_time ON external_trend_metrics(pair_address, observed_at_hour DESC)",
     "CREATE INDEX IF NOT EXISTS idx_external_ohlcv_lookup ON external_ohlcv(network, pool_address, timeframe, aggregate, source, ts DESC)",
@@ -219,6 +272,47 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_signal_predictions_maturity ON signal_predictions(observed_at)",
 ]
 PREDICTION_OUTCOME_MATURITY_HOURS = 25
+
+COMPACT_SIGNAL_FEATURE_KEYS = {
+    "fdv",
+    "h1_return_live",
+    "h24_return_live",
+    "liquidity_usd",
+    "market_cap",
+    "market_cap_bucket",
+    "price_change_h1",
+    "price_change_h24",
+    "price_usd",
+    "volume_h1",
+    "volume_h24",
+    "volume_to_liquidity_h1",
+}
+
+
+def _compress_text(value: str) -> bytes:
+    return zlib.compress(value.encode("utf-8"), level=9)
+
+
+def _decompress_text(value: bytes, compression: str) -> str:
+    if compression != "zlib":
+        raise ValueError(f"unsupported compression: {compression}")
+    return zlib.decompress(value).decode("utf-8")
+
+
+def _hour_bucket(value: str) -> str:
+    parsed = parse_datetime(value)
+    if parsed is None:
+        return value[:13] + ":00:00+00:00"
+    return isoformat_utc(parsed.replace(minute=0, second=0, microsecond=0)) or value
+
+
+def _compact_signal_features(raw: str, archived_at: datetime) -> str:
+    features = json_loads(raw, {})
+    if not isinstance(features, dict):
+        features = {}
+    compact = {key: features[key] for key in sorted(COMPACT_SIGNAL_FEATURE_KEYS) if key in features}
+    compact["_history_compacted"] = True
+    return json_dumps(compact)
 
 
 class MonitorRepository:
@@ -236,7 +330,38 @@ class MonitorRepository:
     def initialize(self) -> None:
         for statement in SCHEMA_STATEMENTS:
             self._conn.execute(statement)
+        self._ensure_schema_migrations()
         self._conn.commit()
+
+    def _ensure_schema_migrations(self) -> None:
+        self._ensure_column(
+            "signal_prediction_outcomes",
+            "outcome_source",
+            "TEXT NOT NULL DEFAULT 'unknown'",
+        )
+        self._ensure_column(
+            "signal_prediction_outcomes",
+            "base_price_source",
+            "TEXT NOT NULL DEFAULT 'unknown'",
+        )
+        self._ensure_column("signal_prediction_outcomes", "base_price_usd", "REAL")
+        self._ensure_column("signal_prediction_outcomes", "gecko_base_close_usd", "REAL")
+        self._ensure_column("signal_prediction_outcomes", "price_divergence_pct", "REAL")
+        self._ensure_column(
+            "signal_prediction_outcomes",
+            "quality_flags_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        self._ensure_column("signal_predictions", "short_momentum_score", "INTEGER")
+        self._ensure_column("signal_predictions", "continuation_score", "INTEGER")
+        self._ensure_column("signal_predictions", "breakout_score", "INTEGER")
+
+    def _ensure_column(self, table_name: str, column_name: str, definition: str) -> None:
+        rows = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        if column_name in existing_columns:
+            return
+        self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     def get_cursor(self, key: str) -> int | None:
         row = self._conn.execute(
@@ -561,12 +686,20 @@ class MonitorRepository:
         )
         self._conn.commit()
 
-    def schedule_pair_retry(self, pair_address: str, next_refresh_at: datetime, reason: str) -> None:
+    def schedule_pair_retry(
+        self,
+        pair_address: str,
+        next_refresh_at: datetime,
+        reason: str,
+        *,
+        metadata_updates: dict[str, Any] | None = None,
+    ) -> None:
         metadata_row = self._conn.execute(
             "SELECT metadata_json FROM pairs WHERE pair_address = ?",
             (pair_address,),
         ).fetchone()
         metadata = json_loads(metadata_row["metadata_json"] if metadata_row else None, {})
+        metadata.update(metadata_updates or {})
         metadata["last_retry_reason"] = reason
         metadata["last_retry_scheduled_at"] = isoformat_utc(next_refresh_at)
         self._conn.execute(
@@ -706,6 +839,295 @@ class MonitorRepository:
             raise RuntimeError("failed to fetch signal row after insert")
         return int(row["id"])
 
+    def estimate_history_compaction(self, before: datetime) -> dict[str, Any]:
+        before_iso = isoformat_utc(before)
+        snapshot_row = self._conn.execute(
+            """
+            SELECT
+                COUNT(*) AS rows_count,
+                COALESCE(SUM(LENGTH(raw_json)), 0) AS raw_bytes
+            FROM snapshots
+            WHERE observed_at < ? AND raw_json != '{}'
+            """,
+            (before_iso,),
+        ).fetchone()
+        signal_row = self._conn.execute(
+            """
+            SELECT
+                COUNT(*) AS rows_count,
+                COALESCE(SUM(LENGTH(feature_json)), 0) AS feature_bytes
+            FROM signals
+            WHERE observed_at < ? AND feature_json NOT LIKE '%"_history_compacted":true%'
+            """,
+            (before_iso,),
+        ).fetchone()
+        rollup_row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS rows_count
+            FROM (
+                SELECT pair_address, SUBSTR(observed_at, 1, 13) AS observed_hour
+                FROM snapshots
+                WHERE observed_at < ? AND raw_json != '{}'
+                GROUP BY pair_address, observed_hour
+            )
+            """,
+            (before_iso,),
+        ).fetchone()
+        return {
+            "before": before_iso,
+            "snapshot_rows": int(snapshot_row["rows_count"]) if snapshot_row else 0,
+            "snapshot_raw_json_bytes": int(snapshot_row["raw_bytes"]) if snapshot_row else 0,
+            "signal_rows": int(signal_row["rows_count"]) if signal_row else 0,
+            "signal_feature_json_bytes": int(signal_row["feature_bytes"]) if signal_row else 0,
+            "snapshot_hourly_rollup_rows": int(rollup_row["rows_count"]) if rollup_row else 0,
+        }
+
+    def compact_history(self, before: datetime, *, batch_size: int = 5000) -> dict[str, Any]:
+        before_iso = isoformat_utc(before)
+        if before_iso is None:
+            raise ValueError("before must be a valid datetime")
+        archived_at = utcnow()
+        self._upsert_snapshot_hourly_rollups(before_iso, archived_at)
+        snapshot_rows = self._archive_snapshot_raw_json(before_iso, archived_at, batch_size=batch_size)
+        signal_rows = self._archive_signal_features(before_iso, archived_at, batch_size=batch_size)
+        signal_recompacted_rows = self._recompact_archived_signal_features(before_iso, archived_at, batch_size=batch_size)
+        rollup_count = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM snapshot_hourly_rollups WHERE observed_at_hour < ?",
+            (before_iso,),
+        ).fetchone()
+        self._conn.commit()
+        return {
+            "before": before_iso,
+            "snapshot_rows_compacted": snapshot_rows,
+            "signal_rows_compacted": signal_rows,
+            "signal_rows_recompacted": signal_recompacted_rows,
+            "snapshot_hourly_rollup_rows": int(rollup_count["n"]) if rollup_count else 0,
+        }
+
+    def _upsert_snapshot_hourly_rollups(self, before_iso: str, now: datetime) -> None:
+        rows = self._conn.execute(
+            """
+            SELECT
+                pair_address,
+                token_address,
+                observed_at,
+                price_usd,
+                liquidity_usd,
+                volume_m5,
+                volume_h1,
+                volume_h24,
+                buys_m5,
+                sells_m5
+            FROM snapshots
+            WHERE observed_at < ? AND raw_json != '{}'
+            ORDER BY pair_address ASC, observed_at ASC
+            """,
+            (before_iso,),
+        )
+        rollups: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            hour = _hour_bucket(row["observed_at"])
+            key = (row["pair_address"], hour)
+            price = row["price_usd"]
+            liquidity = row["liquidity_usd"]
+            rollup = rollups.get(key)
+            if rollup is None:
+                rollup = {
+                    "pair_address": row["pair_address"],
+                    "token_address": row["token_address"],
+                    "observed_at_hour": hour,
+                    "first_observed_at": row["observed_at"],
+                    "last_observed_at": row["observed_at"],
+                    "sample_count": 0,
+                    "open_price_usd": price,
+                    "high_price_usd": price,
+                    "low_price_usd": price,
+                    "close_price_usd": price,
+                    "liquidity_sum": 0.0,
+                    "liquidity_samples": 0,
+                    "max_liquidity_usd": liquidity,
+                    "max_volume_h1": row["volume_h1"],
+                    "max_volume_h24": row["volume_h24"],
+                    "sum_volume_m5": 0.0,
+                    "sum_buys_m5": 0,
+                    "sum_sells_m5": 0,
+                }
+                rollups[key] = rollup
+            rollup["sample_count"] += 1
+            rollup["last_observed_at"] = row["observed_at"]
+            rollup["close_price_usd"] = price
+            if price is not None:
+                rollup["high_price_usd"] = price if rollup["high_price_usd"] is None else max(rollup["high_price_usd"], price)
+                rollup["low_price_usd"] = price if rollup["low_price_usd"] is None else min(rollup["low_price_usd"], price)
+            if liquidity is not None:
+                rollup["liquidity_sum"] += float(liquidity)
+                rollup["liquidity_samples"] += 1
+                rollup["max_liquidity_usd"] = (
+                    liquidity if rollup["max_liquidity_usd"] is None else max(rollup["max_liquidity_usd"], liquidity)
+                )
+            if row["volume_h1"] is not None:
+                rollup["max_volume_h1"] = row["volume_h1"] if rollup["max_volume_h1"] is None else max(rollup["max_volume_h1"], row["volume_h1"])
+            if row["volume_h24"] is not None:
+                rollup["max_volume_h24"] = row["volume_h24"] if rollup["max_volume_h24"] is None else max(rollup["max_volume_h24"], row["volume_h24"])
+            rollup["sum_volume_m5"] += float(row["volume_m5"] or 0)
+            rollup["sum_buys_m5"] += int(row["buys_m5"] or 0)
+            rollup["sum_sells_m5"] += int(row["sells_m5"] or 0)
+
+        now_iso = isoformat_utc(now)
+        for rollup in rollups.values():
+            avg_liquidity = None
+            if rollup["liquidity_samples"]:
+                avg_liquidity = rollup["liquidity_sum"] / rollup["liquidity_samples"]
+            self._conn.execute(
+                """
+                INSERT INTO snapshot_hourly_rollups(
+                    pair_address,
+                    token_address,
+                    observed_at_hour,
+                    first_observed_at,
+                    last_observed_at,
+                    sample_count,
+                    open_price_usd,
+                    high_price_usd,
+                    low_price_usd,
+                    close_price_usd,
+                    avg_liquidity_usd,
+                    max_liquidity_usd,
+                    max_volume_h1,
+                    max_volume_h24,
+                    sum_volume_m5,
+                    sum_buys_m5,
+                    sum_sells_m5,
+                    created_at,
+                    updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pair_address, observed_at_hour) DO UPDATE SET
+                    token_address = excluded.token_address,
+                    first_observed_at = excluded.first_observed_at,
+                    last_observed_at = excluded.last_observed_at,
+                    sample_count = excluded.sample_count,
+                    open_price_usd = excluded.open_price_usd,
+                    high_price_usd = excluded.high_price_usd,
+                    low_price_usd = excluded.low_price_usd,
+                    close_price_usd = excluded.close_price_usd,
+                    avg_liquidity_usd = excluded.avg_liquidity_usd,
+                    max_liquidity_usd = excluded.max_liquidity_usd,
+                    max_volume_h1 = excluded.max_volume_h1,
+                    max_volume_h24 = excluded.max_volume_h24,
+                    sum_volume_m5 = excluded.sum_volume_m5,
+                    sum_buys_m5 = excluded.sum_buys_m5,
+                    sum_sells_m5 = excluded.sum_sells_m5,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    rollup["pair_address"],
+                    rollup["token_address"],
+                    rollup["observed_at_hour"],
+                    rollup["first_observed_at"],
+                    rollup["last_observed_at"],
+                    rollup["sample_count"],
+                    rollup["open_price_usd"],
+                    rollup["high_price_usd"],
+                    rollup["low_price_usd"],
+                    rollup["close_price_usd"],
+                    avg_liquidity,
+                    rollup["max_liquidity_usd"],
+                    rollup["max_volume_h1"],
+                    rollup["max_volume_h24"],
+                    rollup["sum_volume_m5"],
+                    rollup["sum_buys_m5"],
+                    rollup["sum_sells_m5"],
+                    now_iso,
+                    now_iso,
+                ),
+            )
+
+    def _archive_snapshot_raw_json(self, before_iso: str, archived_at: datetime, *, batch_size: int) -> int:
+        archived_at_iso = isoformat_utc(archived_at)
+        total = 0
+        while True:
+            rows = self._conn.execute(
+                """
+                SELECT id, raw_json
+                FROM snapshots
+                WHERE observed_at < ? AND raw_json != '{}'
+                ORDER BY observed_at ASC
+                LIMIT ?
+                """,
+                (before_iso, batch_size),
+            ).fetchall()
+            if not rows:
+                return total
+            for row in rows:
+                self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO snapshot_raw_archives(snapshot_id, archived_at, compression, raw_json_z)
+                    VALUES(?, ?, 'zlib', ?)
+                    """,
+                    (int(row["id"]), archived_at_iso, _compress_text(row["raw_json"])),
+                )
+                self._conn.execute("UPDATE snapshots SET raw_json = '{}' WHERE id = ?", (int(row["id"]),))
+                total += 1
+
+    def _archive_signal_features(self, before_iso: str, archived_at: datetime, *, batch_size: int) -> int:
+        archived_at_iso = isoformat_utc(archived_at)
+        total = 0
+        while True:
+            rows = self._conn.execute(
+                """
+                SELECT id, feature_json
+                FROM signals
+                WHERE observed_at < ? AND feature_json NOT LIKE '%"_history_compacted":true%'
+                ORDER BY observed_at ASC
+                LIMIT ?
+                """,
+                (before_iso, batch_size),
+            ).fetchall()
+            if not rows:
+                return total
+            for row in rows:
+                self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO signal_feature_archives(signal_id, archived_at, compression, feature_json_z)
+                    VALUES(?, ?, 'zlib', ?)
+                    """,
+                    (int(row["id"]), archived_at_iso, _compress_text(row["feature_json"])),
+                )
+                self._conn.execute(
+                    "UPDATE signals SET feature_json = ? WHERE id = ?",
+                    (_compact_signal_features(row["feature_json"], archived_at), int(row["id"])),
+                )
+                total += 1
+
+    def _recompact_archived_signal_features(self, before_iso: str, archived_at: datetime, *, batch_size: int) -> int:
+        total = 0
+        offset = 0
+        while True:
+            rows = self._conn.execute(
+                """
+                SELECT s.id, s.feature_json, a.compression, a.feature_json_z
+                FROM signals s
+                JOIN signal_feature_archives a ON a.signal_id = s.id
+                WHERE s.observed_at < ? AND s.feature_json LIKE '%"_history_compacted":true%'
+                ORDER BY s.observed_at ASC
+                LIMIT ? OFFSET ?
+                """,
+                (before_iso, batch_size, offset),
+            ).fetchall()
+            if not rows:
+                return total
+            for row in rows:
+                full_feature_json = _decompress_text(row["feature_json_z"], row["compression"])
+                compact_feature_json = _compact_signal_features(full_feature_json, archived_at)
+                if compact_feature_json == row["feature_json"]:
+                    continue
+                self._conn.execute(
+                    "UPDATE signals SET feature_json = ? WHERE id = ?",
+                    (compact_feature_json, int(row["id"])),
+                )
+                total += 1
+            offset += batch_size
+
     def upsert_signal_prediction(
         self,
         signal_id: int,
@@ -728,10 +1150,13 @@ class MonitorRepository:
                 prob_24h_up100,
                 risk_6h_dd30,
                 opportunity_score,
+                short_momentum_score,
+                continuation_score,
+                breakout_score,
                 stage,
                 reasons_json,
                 created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(signal_id) DO UPDATE SET
                 pair_address = excluded.pair_address,
                 token_address = excluded.token_address,
@@ -742,6 +1167,9 @@ class MonitorRepository:
                 prob_24h_up100 = excluded.prob_24h_up100,
                 risk_6h_dd30 = excluded.risk_6h_dd30,
                 opportunity_score = excluded.opportunity_score,
+                short_momentum_score = excluded.short_momentum_score,
+                continuation_score = excluded.continuation_score,
+                breakout_score = excluded.breakout_score,
                 stage = excluded.stage,
                 reasons_json = excluded.reasons_json,
                 created_at = excluded.created_at
@@ -757,6 +1185,9 @@ class MonitorRepository:
                 prediction.prob_24h_up100,
                 prediction.risk_6h_dd30,
                 prediction.opportunity_score,
+                prediction.short_momentum_score,
+                prediction.continuation_score,
+                prediction.breakout_score,
                 prediction.stage,
                 json_dumps(list(prediction.reasons)),
                 isoformat_utc(utcnow()),
@@ -764,15 +1195,30 @@ class MonitorRepository:
         )
         self._conn.commit()
 
-    def list_predictions_needing_outcomes(self, now: datetime, limit: int = 100) -> list[dict[str, Any]]:
+    def list_predictions_needing_outcomes(
+        self,
+        now: datetime,
+        limit: int = 100,
+        *,
+        include_missing_quality: bool = False,
+    ) -> list[dict[str, Any]]:
         mature_before = now - timedelta(hours=PREDICTION_OUTCOME_MATURITY_HOURS)
-        rows = self._conn.execute(
+        outcome_filter = "outcome.signal_id IS NULL"
+        if include_missing_quality:
+            outcome_filter = """
+                (
+                    outcome.signal_id IS NULL
+                    OR outcome.outcome_source = 'unknown'
+                    OR outcome.base_price_source = 'unknown'
+                )
             """
+        rows = self._conn.execute(
+            f"""
             SELECT pred.*, s.feature_json
             FROM signal_predictions pred
             JOIN signals s ON s.id = pred.signal_id
             LEFT JOIN signal_prediction_outcomes outcome ON outcome.signal_id = pred.signal_id
-            WHERE outcome.signal_id IS NULL
+            WHERE {outcome_filter}
               AND pred.observed_at <= ?
             ORDER BY pred.observed_at ASC
             LIMIT ?
@@ -808,6 +1254,12 @@ class MonitorRepository:
         base = next((price for dt, price in prices if dt >= observed_at and price > 0), None)
         if base is None:
             return {
+                "outcome_source": "local_snapshots",
+                "base_price_source": "missing",
+                "base_price_usd": None,
+                "gecko_base_close_usd": None,
+                "price_divergence_pct": None,
+                "quality_flags": ["base_price_missing", "local_snapshot_fallback"],
                 "max_return_2h": None,
                 "max_return_6h": None,
                 "max_return_24h": None,
@@ -839,7 +1291,20 @@ class MonitorRepository:
         max_return_6h = max_return(values_6h)
         max_return_24h = max_return(values_24h)
         min_return_6h = min_return(values_6h)
+        quality_flags = ["local_snapshot_fallback"]
+        if len(values_2h) < 2:
+            quality_flags.append("partial_2h_snapshots")
+        if len(values_6h) < 5:
+            quality_flags.append("partial_6h_snapshots")
+        if len(values_24h) < 18:
+            quality_flags.append("partial_24h_snapshots")
         return {
+            "outcome_source": "local_snapshots",
+            "base_price_source": "local_snapshot_price",
+            "base_price_usd": base,
+            "gecko_base_close_usd": None,
+            "price_divergence_pct": None,
+            "quality_flags": quality_flags,
             "max_return_2h": max_return_2h,
             "max_return_6h": max_return_6h,
             "max_return_24h": max_return_24h,
@@ -859,6 +1324,12 @@ class MonitorRepository:
             INSERT INTO signal_prediction_outcomes(
                 signal_id,
                 evaluated_at,
+                outcome_source,
+                base_price_source,
+                base_price_usd,
+                gecko_base_close_usd,
+                price_divergence_pct,
+                quality_flags_json,
                 max_return_2h,
                 max_return_6h,
                 max_return_24h,
@@ -870,9 +1341,15 @@ class MonitorRepository:
                 sample_count_2h,
                 sample_count_6h,
                 sample_count_24h
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(signal_id) DO UPDATE SET
                 evaluated_at = excluded.evaluated_at,
+                outcome_source = excluded.outcome_source,
+                base_price_source = excluded.base_price_source,
+                base_price_usd = excluded.base_price_usd,
+                gecko_base_close_usd = excluded.gecko_base_close_usd,
+                price_divergence_pct = excluded.price_divergence_pct,
+                quality_flags_json = excluded.quality_flags_json,
                 max_return_2h = excluded.max_return_2h,
                 max_return_6h = excluded.max_return_6h,
                 max_return_24h = excluded.max_return_24h,
@@ -888,6 +1365,12 @@ class MonitorRepository:
             (
                 signal_id,
                 isoformat_utc(evaluated_at or utcnow()),
+                outcome.get("outcome_source") or "unknown",
+                outcome.get("base_price_source") or "unknown",
+                outcome.get("base_price_usd"),
+                outcome.get("gecko_base_close_usd"),
+                outcome.get("price_divergence_pct"),
+                outcome.get("quality_flags_json") or json_dumps(list(outcome.get("quality_flags") or [])),
                 outcome.get("max_return_2h"),
                 outcome.get("max_return_6h"),
                 outcome.get("max_return_24h"),
@@ -1129,6 +1612,9 @@ class MonitorRepository:
                 pred.prob_24h_up100 AS prediction_prob_24h_up100,
                 pred.risk_6h_dd30 AS prediction_risk_6h_dd30,
                 pred.opportunity_score AS prediction_opportunity_score,
+                COALESCE(pred.short_momentum_score, pred.opportunity_score) AS prediction_short_momentum_score,
+                pred.continuation_score AS prediction_continuation_score,
+                pred.breakout_score AS prediction_breakout_score,
                 pred.stage AS prediction_stage,
                 pred.reasons_json AS prediction_reasons
             FROM pairs p
@@ -1154,7 +1640,7 @@ class MonitorRepository:
                 p.active DESC,
                 snap.observed_at IS NOT NULL DESC,
                 snap.observed_at DESC,
-                COALESCE(pred.opportunity_score, 0) DESC,
+                COALESCE(pred.short_momentum_score, pred.opportunity_score, 0) DESC,
                 COALESCE(s.score, 0) DESC,
                 p.discovered_at DESC
             LIMIT ?
@@ -1205,6 +1691,9 @@ class MonitorRepository:
                 pred.prob_24h_up100 AS prediction_prob_24h_up100,
                 pred.risk_6h_dd30 AS prediction_risk_6h_dd30,
                 pred.opportunity_score AS prediction_opportunity_score,
+                COALESCE(pred.short_momentum_score, pred.opportunity_score) AS prediction_short_momentum_score,
+                pred.continuation_score AS prediction_continuation_score,
+                pred.breakout_score AS prediction_breakout_score,
                 pred.stage AS prediction_stage,
                 pred.reasons_json AS prediction_reasons,
                 outcome.max_return_2h AS outcome_max_return_2h,
@@ -1266,6 +1755,9 @@ class MonitorRepository:
                 pred.prob_24h_up100,
                 pred.risk_6h_dd30,
                 pred.opportunity_score,
+                COALESCE(pred.short_momentum_score, pred.opportunity_score) AS short_momentum_score,
+                pred.continuation_score,
+                pred.breakout_score,
                 pred.stage,
                 pred.reasons_json AS prediction_reasons,
                 outcome.max_return_2h,
@@ -1279,20 +1771,37 @@ class MonitorRepository:
                 outcome.sample_count_2h,
                 outcome.sample_count_6h,
                 outcome.sample_count_24h,
+                outcome.outcome_source,
+                outcome.base_price_source,
+                outcome.base_price_usd,
+                outcome.gecko_base_close_usd,
+                outcome.price_divergence_pct,
+                outcome.quality_flags_json,
                 t.symbol AS token_symbol,
                 t.name AS token_name,
-                t.metadata_json AS token_metadata_json
+                t.metadata_json AS token_metadata_json,
+                archive.compression AS archived_feature_compression,
+                archive.feature_json_z AS archived_feature_json_z
             FROM signals s
             LEFT JOIN signal_predictions pred ON pred.signal_id = s.id
             LEFT JOIN signal_prediction_outcomes outcome ON outcome.signal_id = s.id
             LEFT JOIN tokens t ON t.token_address = s.token_address
+            LEFT JOIN signal_feature_archives archive ON archive.signal_id = s.id
             WHERE pred.signal_id IS NOT NULL
             ORDER BY s.observed_at ASC
             {limit_sql}
             """,
             params,
         ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            archived_feature_json = item.pop("archived_feature_json_z", None)
+            archived_feature_compression = item.pop("archived_feature_compression", None)
+            if archived_feature_json is not None and archived_feature_compression:
+                item["feature_json"] = _decompress_text(archived_feature_json, archived_feature_compression)
+            result.append(item)
+        return result
 
     def get_external_trend_metrics(
         self,

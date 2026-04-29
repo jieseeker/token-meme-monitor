@@ -20,6 +20,32 @@ class SignalContext:
     features: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PredictionConfidence:
+    title: str
+    body: str
+    tone: str
+    chips: tuple[str, ...]
+    evidence: tuple[str, ...]
+
+
+DISPLAY_TIER_LABELS = {
+    "launch": "启动异动",
+    "risk_momentum": "高风险动量",
+    "strong": "强确认",
+    "overextended": "已涨过多",
+    "normal": "普通观察",
+}
+
+OVEREXTENDED_PREDICTION_REASONS = {
+    "prediction_overextended_h1",
+    "prediction_h1_overextended",
+    "prediction_h4_overextended",
+    "prediction_overextended_24h",
+    "prediction_h24_overextended",
+}
+
+
 def parse_token_metadata(raw_metadata: str | None) -> dict[str, Any]:
     metadata = json_loads(raw_metadata, {})
     return metadata if isinstance(metadata, dict) else {}
@@ -138,6 +164,22 @@ def build_overview_frame(raw_overview_df: pd.DataFrame) -> pd.DataFrame:
         _series_from_frame(overview_df, "prediction_opportunity_score", overview_df.index),
         errors="coerce",
     )
+    short_momentum_score = pd.to_numeric(
+        _series_from_frame(overview_df, "prediction_short_momentum_score", overview_df.index),
+        errors="coerce",
+    )
+    overview_df["prediction_short_momentum_score"] = short_momentum_score.where(
+        short_momentum_score.notna(),
+        overview_df["prediction_opportunity_score"],
+    )
+    overview_df["prediction_continuation_score"] = pd.to_numeric(
+        _series_from_frame(overview_df, "prediction_continuation_score", overview_df.index),
+        errors="coerce",
+    )
+    overview_df["prediction_breakout_score"] = pd.to_numeric(
+        _series_from_frame(overview_df, "prediction_breakout_score", overview_df.index),
+        errors="coerce",
+    )
     for column in (
         "prediction_prob_2h_up20",
         "prediction_prob_6h_up50",
@@ -160,16 +202,23 @@ def build_overview_frame(raw_overview_df: pd.DataFrame) -> pd.DataFrame:
         overview_df["selection_pair_state"].isin(["focused", "alerted"])
         | (overview_df["signal_score"].fillna(-1) >= 65)
     )
-    overview_df["has_prediction_opportunity"] = overview_df["prediction_opportunity_score"].fillna(-1) >= 45
+    overview_df["has_prediction_opportunity"] = overview_df["prediction_short_momentum_score"].fillna(-1) >= 45
     overview_df["sort_live_score"] = pd.to_numeric(overview_df["last_score"], errors="coerce").fillna(-1)
     overview_df["sort_alpha_score"] = pd.to_numeric(overview_df["alpha_score"], errors="coerce").fillna(-1)
     overview_df["candidate_strength"] = pd.concat(
         [
             overview_df["display_score"],
-            overview_df["prediction_opportunity_score"].fillna(-1),
+            overview_df["prediction_short_momentum_score"].fillna(-1),
         ],
         axis=1,
     ).max(axis=1)
+    tier_frame = overview_df.apply(_build_display_tier, axis=1, result_type="expand")
+    overview_df["display_tier"] = tier_frame["tier"]
+    overview_df["display_tier_label"] = tier_frame["label"]
+    overview_df["display_tier_rank"] = pd.to_numeric(tier_frame["rank"], errors="coerce").fillna(0)
+    overview_df["display_priority_score"] = pd.to_numeric(tier_frame["priority"], errors="coerce").fillna(
+        overview_df["candidate_strength"]
+    )
     return keep_representative_pair_per_token(overview_df)
 
 
@@ -183,17 +232,27 @@ def keep_representative_pair_per_token(overview_df: pd.DataFrame) -> pd.DataFram
     dedupe_df["_prediction_rank"] = (
         dedupe_df["has_prediction_opportunity"].astype(int) if "has_prediction_opportunity" in dedupe_df.columns else 0
     )
-    if "prediction_opportunity_score" in dedupe_df.columns:
-        dedupe_df["_opportunity_score"] = pd.to_numeric(
-            dedupe_df["prediction_opportunity_score"],
+    if "prediction_short_momentum_score" in dedupe_df.columns:
+        dedupe_df["_prediction_primary_score"] = pd.to_numeric(
+            dedupe_df["prediction_short_momentum_score"],
             errors="coerce",
         ).fillna(-1)
+    elif "prediction_opportunity_score" in dedupe_df.columns:
+        dedupe_df["_prediction_primary_score"] = pd.to_numeric(dedupe_df["prediction_opportunity_score"], errors="coerce").fillna(-1)
     else:
-        dedupe_df["_opportunity_score"] = -1
+        dedupe_df["_prediction_primary_score"] = -1
     if "signal_score" in dedupe_df.columns:
         dedupe_df["_selection_score"] = pd.to_numeric(dedupe_df["signal_score"], errors="coerce").fillna(-1)
     else:
         dedupe_df["_selection_score"] = -1
+    if "display_tier_rank" in dedupe_df.columns:
+        dedupe_df["_display_tier_rank"] = pd.to_numeric(dedupe_df["display_tier_rank"], errors="coerce").fillna(0)
+    else:
+        dedupe_df["_display_tier_rank"] = 0
+    if "display_priority_score" in dedupe_df.columns:
+        dedupe_df["_display_priority_score"] = pd.to_numeric(dedupe_df["display_priority_score"], errors="coerce").fillna(-1)
+    else:
+        dedupe_df["_display_priority_score"] = -1
     with_token = dedupe_df[dedupe_df["_token_key"] != ""].copy()
     without_token = dedupe_df[dedupe_df["_token_key"] == ""].copy()
     if not with_token.empty:
@@ -202,21 +261,32 @@ def keep_representative_pair_per_token(overview_df: pd.DataFrame) -> pd.DataFram
                 by=[
                     "_token_key",
                     "_live_rank",
+                    "_display_tier_rank",
+                    "_display_priority_score",
                     "_prediction_rank",
-                    "_opportunity_score",
+                    "_prediction_primary_score",
                     "_signal_rank",
                     "_selection_score",
                     "pair_pool_liquidity",
                     "snapshot_observed_at_dt",
                     "sort_alpha_score",
                 ],
-                ascending=[True, False, False, False, False, False, False, False, False],
+                ascending=[True, False, False, False, False, False, False, False, False, False, False],
             )
             .drop_duplicates(subset=["_token_key"], keep="first")
             .sort_index()
         )
     return pd.concat([with_token, without_token]).sort_index().drop(
-        columns=["_token_key", "_live_rank", "_signal_rank", "_prediction_rank", "_opportunity_score", "_selection_score"],
+        columns=[
+            "_token_key",
+            "_live_rank",
+            "_signal_rank",
+            "_prediction_rank",
+            "_prediction_primary_score",
+            "_selection_score",
+            "_display_tier_rank",
+            "_display_priority_score",
+        ],
         errors="ignore",
     )
 
@@ -240,13 +310,26 @@ def filter_overview_frame(
     derived_df["has_recent_snapshot"] = derived_df["is_live_active"]
     derived_df["sort_has_snapshot"] = derived_df["has_recent_snapshot"].astype(int)
     derived_df["sort_snapshot"] = derived_df["snapshot_observed_at_dt"]
-    derived_df["sort_opportunity_score"] = pd.to_numeric(
-        derived_df.get("prediction_opportunity_score"),
+    derived_df["sort_prediction_primary_score"] = pd.to_numeric(
+        derived_df.get("prediction_short_momentum_score"),
         errors="coerce",
     ).fillna(-1)
+    derived_df["sort_display_tier_rank"] = pd.to_numeric(derived_df.get("display_tier_rank"), errors="coerce").fillna(0)
+    derived_df["sort_display_priority_score"] = pd.to_numeric(
+        derived_df.get("display_priority_score"),
+        errors="coerce",
+    ).fillna(derived_df["candidate_strength"])
     derived_df = derived_df.sort_values(
-        by=["sort_has_snapshot", "sort_opportunity_score", "sort_live_score", "sort_snapshot", "sort_alpha_score"],
-        ascending=[False, False, False, False, False],
+        by=[
+            "sort_has_snapshot",
+            "sort_display_tier_rank",
+            "sort_display_priority_score",
+            "sort_prediction_primary_score",
+            "sort_live_score",
+            "sort_snapshot",
+            "sort_alpha_score",
+        ],
+        ascending=[False, False, False, False, False, False, False],
     )
 
     filtered_df = derived_df[
@@ -388,6 +471,165 @@ def build_conclusion(
     }
 
 
+def build_prediction_confidence(row: Mapping[str, Any]) -> PredictionConfidence:
+    prediction_reasons = set(_json_list(_row_get(row, "prediction_reasons")))
+    opportunity = _coerce_float(
+        first_non_missing(
+            _row_get(row, "prediction_short_momentum_score"),
+            _row_get(row, "prediction_opportunity_score"),
+        )
+    )
+    opportunity = -1.0 if opportunity is None else opportunity
+
+    if "prediction_empirical_sparse" in prediction_reasons:
+        return PredictionConfidence(
+            title="历史样本不足",
+            body="相似历史样本还不够，当前概率主要来自规则概率；实盘复核时要优先看量能延续、买卖结构和回撤风险。",
+            tone="neutral",
+            chips=("样本不足", "规则概率"),
+            evidence=("校准样本不足", "不主动上调概率", "优先复核量能延续"),
+        )
+
+    calibrated_reasons = {
+        "prediction_empirical_calibrated",
+        "prediction_empirical_lowered",
+        "prediction_empirical_raised",
+    }
+    if prediction_reasons & calibrated_reasons:
+        if "prediction_empirical_lowered" in prediction_reasons:
+            direction = "历史校准下调"
+        elif "prediction_empirical_raised" in prediction_reasons:
+            direction = "历史校准上调"
+        else:
+            direction = "历史命中率校准"
+        return PredictionConfidence(
+            title="已叠加历史校准",
+            body="概率已结合相似历史分段的历史命中率做保守校准；如果当前量价已经过热，仍需按追高风险处理。",
+            tone="accent",
+            chips=("历史命中率", "保守校准"),
+            evidence=(direction, "相似样本已达到校准门槛", "仍需结合最新量价"),
+        )
+
+    if opportunity >= 55:
+        return PredictionConfidence(
+            title="高分段仍需复核",
+            body="短线机会进入高分区，但当前没有足量历史样本桶支撑，概率不能当作确定性信号。",
+            tone="warn",
+            chips=("高分段", "需复核"),
+            evidence=("未命中足量历史桶", "重点确认是否已过热", "优先看买卖结构"),
+        )
+
+    return PredictionConfidence(
+        title="规则概率",
+        body="当前概率来自实时指标规则，后续会随着更多 outcome 样本继续校准。",
+        tone="neutral",
+        chips=("规则模型", "等待校准"),
+        evidence=("尚未触发历史校准", "适合观察排序", "不作为确定性信号"),
+    )
+
+
+def _build_display_tier(row: Mapping[str, Any]) -> dict[str, Any]:
+    features = _json_dict(_row_get(row, "last_feature_json"))
+    reasons = set(_json_list(_row_get(row, "last_reasons")))
+    prediction_reasons = set(_json_list(_row_get(row, "prediction_reasons")))
+    risk_flags = set(_json_list(_row_get(row, "last_risk_flags"))) | set(_json_list(_row_get(row, "risk_flags")))
+
+    score = _coerce_float(first_non_missing(_row_get(row, "signal_score"), _row_get(row, "last_score"), default=-1))
+    score = -1.0 if score is None else score
+    opportunity = _coerce_float(first_non_missing(_row_get(row, "prediction_short_momentum_score"), _row_get(row, "prediction_opportunity_score")))
+    opportunity = -1.0 if opportunity is None else opportunity
+    alpha_score = _coerce_float(_row_get(row, "alpha_score"))
+    alpha_score = -1.0 if alpha_score is None else alpha_score
+    strength = max(score, opportunity, alpha_score if score < 0 and opportunity < 0 else -1.0)
+
+    volume_h1 = _coerce_float(first_non_missing(features.get("volume_h1"), _row_get(row, "volume_h1"), default=0))
+    volume_h1 = 0.0 if volume_h1 is None else volume_h1
+    volume_to_liquidity_h1 = _coerce_float(features.get("volume_to_liquidity_h1"))
+    volume_to_liquidity_h1 = 0.0 if volume_to_liquidity_h1 is None else volume_to_liquidity_h1
+    price_change_m5 = _coerce_float(features.get("price_change_m5"))
+    price_change_m5 = 0.0 if price_change_m5 is None else price_change_m5
+    price_change_h1 = _coerce_float(features.get("price_change_h1"))
+    price_change_h1 = 0.0 if price_change_h1 is None else price_change_h1
+    h1_return_live = _coerce_float(features.get("h1_return_live"))
+    h4_return_live = _coerce_float(features.get("h4_return_live"))
+    h24_return_live = _coerce_float(features.get("h24_return_live"))
+    pair_state = str(first_non_missing(_row_get(row, "selection_pair_state"), _row_get(row, "last_pair_state"), _row_get(row, "state"), default=""))
+
+    severe_risk = bool({"missing_price", "liquidity_near_zero"} & risk_flags)
+    structural_risk = bool({"fdv_liquidity_stretched", "sell_pressure", "missing_project_metadata"} & risk_flags)
+    turnover_hot = volume_to_liquidity_h1 >= 2.0 or "volume_to_liquidity_breakout" in reasons
+    volume_hot = volume_h1 >= 50_000
+    price_accelerating = (
+        price_change_h1 >= 12
+        or price_change_m5 >= 8
+        or "positive_price_trend" in reasons
+        or "prediction_price_accelerating" in prediction_reasons
+    )
+    attention_hot = (
+        alpha_score >= 100
+        or "alpha_hot_score" in reasons
+        or "binance_futures_listed" in reasons
+        or "prediction_alpha_hot" in prediction_reasons
+        or "prediction_futures_attention" in prediction_reasons
+    )
+    launch_momentum = not severe_risk and (
+        (volume_hot and turnover_hot and (price_accelerating or attention_hot))
+        or (opportunity >= 55 and turnover_hot and volume_hot)
+        or (price_change_h1 >= 20 and volume_h1 >= 30_000)
+    )
+    strong_confirmed = (
+        coerce_metadata_bool(_row_get(row, "last_should_alert"))
+        or pair_state == "alerted"
+        or (score >= 78 and not severe_risk)
+    )
+    overextended = (
+        bool(prediction_reasons & OVEREXTENDED_PREDICTION_REASONS)
+        or (h1_return_live is not None and h1_return_live > 0.70)
+        or (h4_return_live is not None and h4_return_live > 1.60)
+        or (h24_return_live is not None and h24_return_live > 3.00)
+        or price_change_h1 >= 70.0
+        or price_change_m5 >= 25.0
+    )
+
+    if overextended and not severe_risk:
+        tier = "overextended"
+        rank = 180
+    elif launch_momentum and structural_risk:
+        tier = "risk_momentum"
+        rank = 350
+    elif launch_momentum:
+        tier = "launch"
+        rank = 400
+    elif strong_confirmed:
+        tier = "strong"
+        rank = 300
+    else:
+        tier = "normal"
+        rank = 100
+
+    momentum_bonus = min(volume_to_liquidity_h1, 10.0) * 2.0 + min(max(price_change_h1, 0.0), 100.0) * 0.2
+    volume_bonus = min(volume_h1 / 10_000.0, 25.0)
+    priority = rank * 1_000.0 + max(strength, 0.0) + momentum_bonus + volume_bonus
+    return {
+        "tier": tier,
+        "label": DISPLAY_TIER_LABELS[tier],
+        "rank": rank,
+        "priority": priority,
+    }
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    parsed = json_loads(value, {}) if isinstance(value, str) else value
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: Any) -> list[str]:
+    parsed = json_loads(value, []) if isinstance(value, str) else value
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if item not in (None, "")]
+
+
 def _series_from_frame(frame: pd.DataFrame, column: str, index: pd.Index, default: Any = None) -> pd.Series:
     if column in frame.columns:
         return frame[column]
@@ -445,6 +687,15 @@ def _coerce_int(value: Any) -> int | None:
         return None
     try:
         return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Any) -> float | None:
+    if _is_missing(value):
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

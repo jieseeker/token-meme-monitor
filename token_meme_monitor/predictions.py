@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from token_meme_monitor.models import PredictionResult, SignalDecision
@@ -10,13 +11,16 @@ from token_meme_monitor.prediction_outcomes import (
     MIN_OUTCOME_SAMPLE_6H,
     MIN_OUTCOME_SAMPLE_24H,
 )
-from token_meme_monitor.utils import json_loads
+from token_meme_monitor.utils import json_loads, parse_datetime
 
 
-PREDICTOR_VERSION = "p3"
+PREDICTOR_VERSION = "p4"
 MIN_CALIBRATION_SAMPLES = 12
+MIN_CALIBRATION_RAISE_SAMPLES = 60
 CALIBRATION_PRIOR_STRENGTH = 12.0
 MAX_CALIBRATION_BLEND = 0.65
+CALIBRATION_EPISODE_HOURS = 2
+MAX_CALIBRATION_PRICE_DIVERGENCE_PCT = 0.10
 
 
 @dataclass
@@ -63,12 +67,22 @@ class PredictionCalibration:
 def build_prediction_calibration(rows: list[Mapping[str, Any]]) -> PredictionCalibration:
     buckets: dict[tuple[str, ...], _CalibrationBucket] = {}
     total_rows = 0
-    for row in rows:
+    last_episode_at: dict[tuple[str, ...], datetime] = {}
+    for row in sorted(rows, key=_calibration_sort_key):
         features = _mapping_from_json(row.get("feature_json"))
         token_metadata = _mapping_from_json(row.get("token_metadata_json"))
         stage = str(row.get("stage") or "early")
         score = _int(row.get("score"))
         if not _has_calibration_outcome(row):
+            continue
+        if _is_duplicate_calibration_episode(
+            row,
+            score=score,
+            stage=stage,
+            features=features,
+            token_metadata=token_metadata,
+            last_episode_at=last_episode_at,
+        ):
             continue
         total_rows += 1
         for key in _calibration_keys(score=score, stage=stage, features=features, token_metadata=token_metadata):
@@ -242,24 +256,28 @@ def build_prediction_result(
                 hits=calibration_bucket.hit_2h_up20,
                 samples=calibration_bucket.sample_2h_up20,
                 cap=0.18,
+                min_raise_samples=MIN_CALIBRATION_RAISE_SAMPLES,
             )
             prob_6h_up50 = _calibrate_probability(
                 prob_6h_up50,
                 hits=calibration_bucket.hit_6h_up50,
                 samples=calibration_bucket.sample_6h_up50,
                 cap=0.16,
+                min_raise_samples=MIN_CALIBRATION_RAISE_SAMPLES,
             )
             prob_24h_up100 = _calibrate_probability(
                 prob_24h_up100,
                 hits=calibration_bucket.hit_24h_up100,
                 samples=calibration_bucket.sample_24h_up100,
                 cap=0.20,
+                min_raise_samples=MIN_CALIBRATION_RAISE_SAMPLES,
             )
             risk_6h_dd30 = _calibrate_probability(
                 risk_6h_dd30,
                 hits=calibration_bucket.hit_6h_dd30,
                 samples=calibration_bucket.sample_6h_dd30,
                 cap=0.35,
+                min_raise_samples=MIN_CALIBRATION_SAMPLES,
             )
             after_upside_average = (prob_2h_up20 + prob_6h_up50 + prob_24h_up100) / 3.0
             if (
@@ -274,17 +292,35 @@ def build_prediction_result(
                 if calibration_bucket.max_samples < 40:
                     reasons.append("prediction_empirical_sparse")
 
-    upside_score = (
-        (prob_2h_up20 / 0.18) * 30.0
-        + (prob_6h_up50 / 0.16) * 35.0
-        + (prob_24h_up100 / 0.20) * 35.0
+    risk_ratio = risk_6h_dd30 / 0.35
+    short_momentum_score = _score_from_components(
+        (prob_2h_up20 / 0.18) * 72.0
+        + (prob_6h_up50 / 0.16) * 8.0
+        - risk_ratio * 16.0
+        + 16.0
     )
-    risk_penalty = (risk_6h_dd30 / 0.35) * 30.0
-    opportunity_score = int(round(max(0.0, min(100.0, upside_score - risk_penalty + 15.0))))
-    if opportunity_score >= 70:
-        reasons.append("prediction_high_opportunity")
-    elif opportunity_score <= 35:
+    continuation_score = _score_from_components(
+        (prob_6h_up50 / 0.16) * 58.0
+        + (prob_2h_up20 / 0.18) * 12.0
+        + (prob_24h_up100 / 0.20) * 8.0
+        - risk_ratio * 26.0
+        + 8.0
+    )
+    breakout_score = _score_from_components(
+        (prob_24h_up100 / 0.20) * 62.0
+        + (prob_6h_up50 / 0.16) * 10.0
+        - risk_ratio * 30.0
+        + 4.0
+    )
+    opportunity_score = short_momentum_score
+    if short_momentum_score >= 50:
+        reasons.append("prediction_short_momentum_opportunity")
+    elif short_momentum_score <= 35:
         reasons.append("prediction_low_opportunity")
+    if continuation_score >= 60:
+        reasons.append("prediction_continuation_opportunity")
+    if breakout_score >= 60:
+        reasons.append("prediction_breakout_watch")
 
     return PredictionResult(
         predictor_version=PREDICTOR_VERSION,
@@ -295,6 +331,9 @@ def build_prediction_result(
         opportunity_score=opportunity_score,
         stage=stage,
         reasons=tuple(dict.fromkeys(reasons)),
+        short_momentum_score=short_momentum_score,
+        continuation_score=continuation_score,
+        breakout_score=breakout_score,
     )
 
 
@@ -310,12 +349,15 @@ def _stage(early_score: float, momentum_score: float, exhaustion_score: float) -
     return "early"
 
 
-def _calibrate_probability(base: float, *, hits: int, samples: int, cap: float) -> float:
+def _calibrate_probability(base: float, *, hits: int, samples: int, cap: float, min_raise_samples: int) -> float:
     if samples < MIN_CALIBRATION_SAMPLES:
         return base
     smoothed_empirical = (hits + base * CALIBRATION_PRIOR_STRENGTH) / (samples + CALIBRATION_PRIOR_STRENGTH)
     blend = min(MAX_CALIBRATION_BLEND, samples / (samples + 40.0))
-    return round(max(0.005, min(cap, base * (1.0 - blend) + smoothed_empirical * blend)), 4)
+    calibrated = max(0.005, min(cap, base * (1.0 - blend) + smoothed_empirical * blend))
+    if calibrated > base and samples < min_raise_samples:
+        return base
+    return round(calibrated, 4)
 
 
 def _calibration_keys(
@@ -400,26 +442,117 @@ def _mapping_from_json(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _calibration_sort_key(row: Mapping[str, Any]) -> tuple[int, str]:
+    observed_at = _row_observed_at(row)
+    if observed_at is None:
+        return (1, "")
+    return (0, observed_at.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+
+def _is_duplicate_calibration_episode(
+    row: Mapping[str, Any],
+    *,
+    score: int,
+    stage: str,
+    features: Mapping[str, Any],
+    token_metadata: Mapping[str, Any],
+    last_episode_at: dict[tuple[str, ...], datetime],
+) -> bool:
+    observed_at = _row_observed_at(row)
+    identity = str(row.get("pair_address") or row.get("token_address") or "")
+    if observed_at is None or not identity:
+        return False
+    episode_key = (
+        identity.lower(),
+        stage or "early",
+        _score_bucket(score),
+        _return_bucket(_float(features.get("h1_return_live")), short_window=True),
+        _return_bucket(_float(features.get("h24_return_live")), short_window=False),
+        _turnover_bucket(_float(features.get("volume_to_liquidity_h1"))),
+        _quality_bucket(token_metadata),
+    )
+    previous_at = last_episode_at.get(episode_key)
+    if previous_at is not None and (observed_at - previous_at).total_seconds() < CALIBRATION_EPISODE_HOURS * 3600:
+        return True
+    last_episode_at[episode_key] = observed_at
+    return False
+
+
+def _row_observed_at(row: Mapping[str, Any]) -> datetime | None:
+    raw = row.get("observed_at")
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        try:
+            parsed = parse_datetime(str(raw)) if raw else None
+        except ValueError:
+            return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _has_calibration_outcome(row: Mapping[str, Any]) -> bool:
+    if not _row_quality_usable_for_calibration(row):
+        return False
     return (
-        _int(row.get("sample_count_2h")) >= MIN_OUTCOME_SAMPLE_2H
-        or _int(row.get("sample_count_6h")) >= MIN_OUTCOME_SAMPLE_6H
-        or _int(row.get("sample_count_24h")) >= MIN_OUTCOME_SAMPLE_24H
+        _has_eligible_2h_outcome(row)
+        or _has_eligible_6h_outcome(row)
+        or _has_eligible_24h_outcome(row)
     )
 
 
 def _add_outcome(bucket: _CalibrationBucket, row: Mapping[str, Any]) -> None:
-    if _int(row.get("sample_count_2h")) >= MIN_OUTCOME_SAMPLE_2H:
+    if _has_eligible_2h_outcome(row):
         bucket.sample_2h_up20 += 1
         bucket.hit_2h_up20 += _int(row.get("hit_2h_up20"))
-    if _int(row.get("sample_count_6h")) >= MIN_OUTCOME_SAMPLE_6H:
+    if _has_eligible_6h_outcome(row):
         bucket.sample_6h_up50 += 1
         bucket.hit_6h_up50 += _int(row.get("hit_6h_up50"))
         bucket.sample_6h_dd30 += 1
         bucket.hit_6h_dd30 += _int(row.get("hit_6h_dd30"))
-    if _int(row.get("sample_count_24h")) >= MIN_OUTCOME_SAMPLE_24H:
+    if _has_eligible_24h_outcome(row):
         bucket.sample_24h_up100 += 1
         bucket.hit_24h_up100 += _int(row.get("hit_24h_up100"))
+
+
+def _row_quality_usable_for_calibration(row: Mapping[str, Any]) -> bool:
+    outcome_source = str(row.get("outcome_source") or "")
+    if outcome_source == "local_snapshots":
+        return False
+    price_divergence_pct = _float(row.get("price_divergence_pct"))
+    if price_divergence_pct is not None and abs(price_divergence_pct) > MAX_CALIBRATION_PRICE_DIVERGENCE_PCT:
+        return False
+    quality_flags = _quality_flags(row)
+    return "price_source_divergence_gt_10pct" not in quality_flags
+
+
+def _has_eligible_2h_outcome(row: Mapping[str, Any]) -> bool:
+    return _int(row.get("sample_count_2h")) >= MIN_OUTCOME_SAMPLE_2H and not (
+        {"partial_2h_ohlcv", "partial_2h_snapshots"} & set(_quality_flags(row))
+    )
+
+
+def _has_eligible_6h_outcome(row: Mapping[str, Any]) -> bool:
+    return _int(row.get("sample_count_6h")) >= MIN_OUTCOME_SAMPLE_6H and not (
+        {"partial_6h_ohlcv", "partial_6h_snapshots"} & set(_quality_flags(row))
+    )
+
+
+def _has_eligible_24h_outcome(row: Mapping[str, Any]) -> bool:
+    return _int(row.get("sample_count_24h")) >= MIN_OUTCOME_SAMPLE_24H and not (
+        {"partial_24h_ohlcv", "partial_24h_snapshots"} & set(_quality_flags(row))
+    )
+
+
+def _quality_flags(row: Mapping[str, Any]) -> list[str]:
+    raw = row.get("quality_flags_json")
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    parsed = json_loads(str(raw), []) if raw not in (None, "") else []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 def _int(value: Any) -> int:
@@ -457,3 +590,7 @@ def _probability_from_prior(*, prior: float, positive: float, negative: float, c
     logit = math.log(prior / (1.0 - prior)) + positive - negative
     probability = 1.0 / (1.0 + math.exp(-logit))
     return round(max(0.005, min(cap, probability)), 4)
+
+
+def _score_from_components(value: float) -> int:
+    return int(round(max(0.0, min(100.0, value))))
