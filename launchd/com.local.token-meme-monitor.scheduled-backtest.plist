@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.token-meme-monitor.scheduled-backtest</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/zjj/vs_code/token-meme-monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/zjj/vs_code/token-meme-monitor/.venv/bin/python</string>
+    <string>-m</string>
+    <string>token_meme_monitor</string>
+    <string>run-scheduled-backtest-worker</string>
+    <string>--interval-seconds</string>
+    <string>14400</string>
+    <string>--max-price-divergence-pct</string>
+    <string>0.10</string>
+    <string>--refresh-outcome-limit</string>
+    <string>5000</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/token-meme-monitor/logs/scheduled-backtest.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/token-meme-monitor/logs/scheduled-backtest.launchd.err.log</string>
+</dict>
+</plist>
