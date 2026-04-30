@@ -13,7 +13,7 @@ The monitor already stores `signal_predictions` and mature `signal_prediction_ou
 
 **Non-Goals:**
 
-- Replace the current `p3` probability model.
+- Replace the probability model. At the time of this change the model was `p3`; the current runtime model is documented in `docs/backend-core-logic.md`.
 - Train a local ML model.
 - Change dashboard sorting or alert thresholds in this change.
 - Delete or rewrite legacy outcome rows.

@@ -30,6 +30,21 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("print-config", help="Print resolved runtime config")
     health_report = subparsers.add_parser("health-report", help="Print backend health and data quality counters")
     health_report.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    runtime_status = subparsers.add_parser("runtime-status", help="Print local service runtime status")
+    runtime_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    runtime_status.add_argument("--runtime-dir", default="/tmp/token-meme-monitor", help="Runtime PID/log root")
+    runtime_status.add_argument("--dashboard-host", default="127.0.0.1", help="Dashboard host for status output")
+    runtime_status.add_argument("--dashboard-port", type=int, default=8501, help="Dashboard port for status output")
+    lifecycle_inventory = subparsers.add_parser("lifecycle-inventory", help="Print read-only database lifecycle inventory")
+    lifecycle_inventory.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    lifecycle_inventory.add_argument("--snapshot-retention-days", type=int, default=14, help="Snapshot/signals retention horizon")
+    lifecycle_integrity = subparsers.add_parser("lifecycle-integrity", help="Print read-only lifecycle integrity findings")
+    lifecycle_integrity.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    retention_plan = subparsers.add_parser("retention-plan", help="Build a dry-run retention plan")
+    retention_plan.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    retention_plan.add_argument("--older-than-days", type=int, default=14, help="Retention cutoff age")
+    retention_plan.add_argument("--apply", action="store_true", help="Reserved for destructive cleanup; requires --backup-path")
+    retention_plan.add_argument("--backup-path", default="", help="Required before destructive cleanup can be added")
     compact_history = subparsers.add_parser("compact-history", help="Compact cold snapshot and signal history")
     compact_history.add_argument("--older-than-days", type=int, default=14, help="Compact rows older than this many days")
     compact_history.add_argument("--before", default=None, help="Explicit UTC cutoff timestamp, e.g. 2026-04-02T00:00:00+00:00")
@@ -82,6 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also recompute mature outcomes written before outcome-quality fields existed",
     )
+    refresh_risk = subparsers.add_parser(
+        "refresh-risk-enrichment",
+        help="Refresh optional observation-only token risk snapshots",
+    )
+    refresh_risk.add_argument("--fixture-json", default="", help="Optional local fixture provider JSON")
+    refresh_risk.add_argument("--limit", type=int, default=None, help="Optional max tokens to refresh")
+    refresh_risk.add_argument("--ttl-hours", type=int, default=6, help="Risk snapshot TTL in hours")
     rebuild_predictions = subparsers.add_parser("rebuild-predictions", help="Recompute stored signal predictions")
     rebuild_predictions.add_argument("--limit", type=int, default=None, help="Optional max rows to recompute")
     backtest_predictions = subparsers.add_parser(
@@ -105,6 +127,33 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Optional absolute price-source divergence filter, e.g. 0.10 for 10%%",
+    )
+    strategy_feedback = subparsers.add_parser(
+        "strategy-feedback-report",
+        help="Build a review-only strategy feedback report from stored predictions and outcomes",
+    )
+    strategy_feedback.add_argument(
+        "--json-out",
+        default="data/backtests/strategy_feedback.json",
+        help="Path to JSON report output",
+    )
+    strategy_feedback.add_argument(
+        "--md-out",
+        default="data/backtests/strategy_feedback.md",
+        help="Path to Markdown report output",
+    )
+    strategy_feedback.add_argument("--limit", type=int, default=None, help="Optional max dataset rows to load")
+    strategy_feedback.add_argument(
+        "--min-slice-events",
+        type=int,
+        default=30,
+        help="Minimum mature outcomes before a slice can emit a recommendation",
+    )
+    strategy_feedback.add_argument(
+        "--max-price-divergence-pct",
+        type=float,
+        default=0.10,
+        help="Absolute price-source divergence filter, e.g. 0.10 for 10%%",
     )
     scheduled_backtest = subparsers.add_parser(
         "scheduled-backtest-report",
@@ -241,6 +290,74 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(render_health_report(report))
+        return 0
+
+    if args.command == "runtime-status":
+        from token_meme_monitor.runtime_status import build_runtime_status, default_runtime_services, render_runtime_status
+
+        services = default_runtime_services(
+            args.runtime_dir,
+            dashboard_host=args.dashboard_host,
+            dashboard_port=args.dashboard_port,
+        )
+        report = build_runtime_status(services)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_runtime_status(report))
+        return 0
+
+    if args.command == "lifecycle-inventory":
+        from token_meme_monitor.data_lifecycle import build_lifecycle_inventory, render_lifecycle_inventory
+
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            report = build_lifecycle_inventory(
+                repo,
+                database_path=config.database_path,
+                snapshot_retention_days=args.snapshot_retention_days,
+            )
+        finally:
+            repo.close()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_lifecycle_inventory(report))
+        return 0
+
+    if args.command == "lifecycle-integrity":
+        from token_meme_monitor.data_lifecycle import build_lifecycle_integrity_report, render_lifecycle_integrity
+
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            report = build_lifecycle_integrity_report(repo)
+        finally:
+            repo.close()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_lifecycle_integrity(report))
+        return 0
+
+    if args.command == "retention-plan":
+        from token_meme_monitor.data_lifecycle import build_retention_plan, render_retention_plan
+
+        if args.older_than_days <= 0:
+            parser.error("--older-than-days must be positive")
+        if args.apply and not args.backup_path:
+            parser.error("--apply requires --backup-path; destructive retention is not implemented in this command yet")
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            plan = build_retention_plan(repo, older_than_days=args.older_than_days)
+        finally:
+            repo.close()
+        if args.json:
+            print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_retention_plan(plan))
         return 0
 
     if args.command == "compact-history":
@@ -558,6 +675,35 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "refresh-risk-enrichment":
+        from token_meme_monitor.risk_enrichment import FixtureRiskProvider, refresh_risk_snapshots
+
+        if args.ttl_hours <= 0:
+            parser.error("--ttl-hours must be positive")
+        providers = []
+        if args.fixture_json:
+            providers.append(FixtureRiskProvider.from_json_file(args.fixture_json))
+        if not providers:
+            parser.error("at least one risk provider must be configured, e.g. --fixture-json")
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            token_addresses = repo.list_token_addresses(limit=args.limit)
+            result = refresh_risk_snapshots(
+                repo,
+                token_addresses,
+                providers=providers,
+                ttl_hours=args.ttl_hours,
+            )
+        finally:
+            repo.close()
+        print(
+            f"risk enrichment refreshed at {utcnow().isoformat(timespec='seconds')} "
+            f"(tokens={len(token_addresses)}, updated={result['updated']}, failed={result['failed']}, "
+            f"no_coverage={result['no_coverage']}, skipped_current={result['skipped_current']})"
+        )
+        return 0
+
     if args.command == "rebuild-predictions":
         repo = MonitorRepository(config.database_path)
         repo.initialize()
@@ -621,6 +767,32 @@ def main(argv: list[str] | None = None) -> int:
             f"(rows={report['total_rows']}, usable_events={report['usable_events']}, "
             f"train_events={report['train_events']}, test_events={report['test_events']}, "
             f"json='{args.json_out}', markdown='{args.md_out}')"
+        )
+        return 0
+
+    if args.command == "strategy-feedback-report":
+        from token_meme_monitor.strategy_feedback import build_strategy_feedback_report, write_strategy_feedback_outputs
+
+        if args.min_slice_events <= 0:
+            parser.error("--min-slice-events must be positive")
+        repo = MonitorRepository(config.database_path)
+        repo.initialize()
+        try:
+            rows = repo.list_prediction_dataset_rows(limit=args.limit)
+            report = build_strategy_feedback_report(
+                rows,
+                min_slice_events=args.min_slice_events,
+                max_price_divergence_pct=args.max_price_divergence_pct,
+            )
+            run_id = repo.insert_strategy_feedback_report(report)
+        finally:
+            repo.close()
+        write_strategy_feedback_outputs(report, json_path=args.json_out, markdown_path=args.md_out)
+        summary = report["summary"]
+        print(
+            f"strategy feedback report completed at {report['generated_at']} "
+            f"(run_id={run_id}, predictions={summary['prediction_count']}, outcomes={summary['outcome_count']}, "
+            f"recommendations={summary['recommendation_count']}, json='{args.json_out}', markdown='{args.md_out}')"
         )
         return 0
 

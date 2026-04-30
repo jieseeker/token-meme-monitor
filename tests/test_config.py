@@ -16,6 +16,8 @@ class ConfigTests(unittest.TestCase):
                 "FOCUS_SCORE_THRESHOLD": "0",
                 "DASHBOARD_AUTO_REFRESH_SECONDS": "0",
                 "MAX_PAIRS_PER_CYCLE": "0",
+                "RISK_ENRICHMENT_TTL_HOURS": "0",
+                "RISK_ENRICHMENT_BATCH_SIZE": "0",
             },
             clear=False,
         ):
@@ -25,6 +27,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.signal.focus_score_threshold, 0)
         self.assertEqual(config.dashboard_auto_refresh_seconds, 0)
         self.assertEqual(config.max_pairs_per_cycle, 0)
+        self.assertEqual(config.risk_enrichment_ttl_hours, 0)
+        self.assertEqual(config.risk_enrichment_batch_size, 0)
 
     def test_bsc_rpc_urls_override_primary_rpc_url(self) -> None:
         with patch.dict(

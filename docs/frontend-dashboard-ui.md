@@ -134,55 +134,44 @@
 当前详情页有效改造包括：
 
 - 顶部是 `detail hero` 样式
-- 地址区拆成独立卡片
-  - `Pair Address`
-  - `Token Address + 复制按钮`
+- `Token Address + 复制按钮` 放在顶部 token symbol 后方，不跟 token name / quote symbol / 状态那一行混排
+- token 地址不展示可见字段标签，直接显示短地址文本，后面跟一个小复制按钮
+- `Pair Address` 只通过外链入口和内部选择态使用，不在右侧首屏重复展示
 - 币安标签和 Top10 持仓占比作为普通 meta 字段合并进 `detail hero` 的信息行，不再单独做 insight 卡片
   - `币安标签`
   - `Top10 持仓占比`
-- 右侧详情采用 `st.segmented_control` 切换详情视图，不再使用 `st.tabs`
-- 详情视图切换控件应直接出现在详情头部和地址卡片之后
-- 默认第一个视图是 `量价快照`，其中展示：
+- 右侧详情不再使用 `st.tabs` 或 `st.segmented_control` 做模式切换，所有关键内容合并成单页决策面板
+- 单页决策面板按固定顺序展示：
   - detail hero
-  - 地址卡片
-  - 当前量价与结果指标
-- `量价快照` 视图不要重复展示 `最近状态`
+  - 顶部 token symbol 后方的短地址和小复制按钮
+  - 操作结论：普通观察 / 继续跟踪 / 重点关注等标题、内容和建议合并在同一个结论框内
+  - 快速判断：机会强度、风险等级，复用和量价快照一致的紧凑小卡片
+  - 量价快照：当前市值、当前单价、链上持币人数、流动性、5 分钟成交额、1 小时成交额、24 小时成交额，使用同一套紧凑小卡片
+  - 判断拆解：主要支撑、主要风险、下一步观察；下一步观察使用和预测/复盘一致的紧凑信息行样式
+  - 预测结构和复盘验证
+  - 完整走势：价格、1 小时成交额、流动性纵向展示
+  - 证据中心：判断依据、指标解释、最近信号三张摘要卡纵向展示
+- 右侧详情主内容采用单列纵向排版；不要在决策卡、预测复盘、走势图或证据中心里做左右分栏。少量指标卡和量价快照可以使用紧凑自动网格，避免单卡一行造成过度占高。
+- 右侧详情的单列内容必须保留清晰纵向节奏：区块标题、结论框、指标卡、判断拆解、预测复盘、走势图和证据中心之间要有可感知留白，避免连续卡片贴得过紧。
+- 单页首屏默认服务快速判断，文案必须使用人话，不展示英文 code、原始 feature 字段或完整概率矩阵。
+- 单页决策面板不要重复展示 `最近状态`
   - 状态已经在 detail hero 的 meta 信息中展示
-  - 指标卡只保留量价、流动性、持币人数、成交额和外部区间涨幅
-- 其余长内容统一收进同一组详情视图：
-  - `量价快照`
-  - `结论依据`
-  - `指标备注`
-  - `走势`
-  - `预测`
-  - `历史记录`
-- `结论依据` 视图展示操作结论卡片，以及命中原因和风险提示；不要把 `普通观察 / 继续跟踪 / 重点关注` 这类结论卡放回 `量价快照`。
-- `结论依据` 视图不使用 Streamlit 默认 `st.subheader` / 裸粗体标题，应使用和其它视图一致的 `section-heading` 样式组织 `正向依据` 和 `风险提示`。
-- 右侧详情页不再使用 Streamlit 默认表格展示说明类内容；`结论依据`、`指标备注`、`预测`、`历史记录` 都使用统一的单行文案列表排版。
-- `指标备注` 视图每行只展示中文名称、当前值和备注；英文字段不在页面展示，避免行高和横向信息过重。
-- `历史记录` 视图每条信号压成一行文案，展示观测时间、分数、机会分、状态、阶段、概率、实际结果、命中原因和风险提示。
-- `历史记录` 视图的命中原因和风险提示应展示中文标题，不直接展示英文 code。
-- `历史记录` 视图里的 2h / 24h 涨幅列使用和 `量价快照` 一致的 GeckoTerminal 外部区间涨幅；已结束的小时按 `pair + 观测小时` 写入 SQLite 本地缓存，后续优先读库，避免重复请求外部接口。
-- `预测` 视图展示 p3 概率预测：
-  - `2小时涨20%概率`
-  - `6小时涨50%概率`
-  - `24小时翻倍概率`
-  - `6小时回撤30%风险`
-  - `综合机会分`
-  - `阶段判断`
-  - 预测因子中文解释
-- `预测` 视图文案必须说明这是“规则概率叠加历史命中率校准”，用于排序和复盘，不直接触发正式告警。
-- `指标备注`、`历史记录`、`走势` 视图的标题说明和主体内容之间应统一保留 `0.75rem` 垂直间距。
-- `走势` 视图不要把价格、流动性和成交额混在同一张图里；不同量纲应拆成独立图表，默认价格走势全宽展示，流动性和 1 小时成交额并排展示。
+  - 指标卡只保留会改变操作优先级的核心字段
+- 证据中心不使用大折叠块；底部只展示摘要卡，完整资料通过 `st.popover` 打开：
+  - `完整依据`
+  - `完整指标`
+  - `历史信号`
+- 证据中心的 `st.popover` 入口必须设计成贴近摘要卡底部的轻量文字触发器，实际点击目标就是文字本身；不要使用箭头、胶囊按钮、透明覆盖层或列表页那套高对比大按钮样式。
+- 预测细节文案必须说明这是“规则概率叠加历史命中率校准”，用于排序和复盘，不直接触发正式告警。
+- 本地 review note / watchlist 存储在 `decision_notes`，不得写回 signal、prediction、outcome 或 score 字段。
+- 完整走势不要把价格、流动性和成交额混在同一张图里；不同量纲应拆成独立图表，按价格、1 小时成交额、流动性的顺序单列展示。
 - 后续新增长表格、走势图或历史记录时，优先放入现有详情视图；只有会影响快速决策的字段才放到首屏。
 
 当前性能边界：
 
-- 只有当前选中的详情视图会执行对应重内容
-- `量价快照` 视图会读取外部 GeckoTerminal 趋势数据
-- `走势` 视图才读取最近 snapshots
-- `历史记录` 视图才读取最近 signals
-- 未选中的详情视图不应提前触发数据查询或图表加工
+- 右侧详情单页会读取当前 pair 的 recent snapshots 绘制走势
+- 右侧详情单页会读取当前 pair 的 recent signals 生成证据中心和历史信号弹层
+- 外部趋势接口不在详情单页主动请求，走势以本地 SQLite 快照为准
 
 ### 3.6 复制按钮
 
@@ -224,7 +213,7 @@
 - 通过 `@st.fragment(run_every=...)` 做定时刷新
 - 刷新读的是本地 SQLite 数据库
 - 主列表、快照和信号展示都读本地 SQLite 数据库
-- 详情 `量价快照` 视图会读取 GeckoTerminal 外部趋势数据；已结束的小时先查 SQLite 本地缓存，缺失时才请求外部接口并写回缓存；当前未收线小时只保留短 TTL 的 `@st.cache_data`
+- 详情单页只读取本地 recent snapshots / recent signals，不主动请求外部趋势接口
 
 也就是说：
 
@@ -403,10 +392,10 @@ metric_value(...) or overview_row.get("alpha_liquidity") or 0
 虽然已经清掉一批旧代码，但前端仍然有这些债务：
 
 - 顶部布局仍然存在对 Streamlit 内部容器的样式覆盖
-- `Token Address` 复制按钮仍然是 iframe 组件，不是统一组件体系
+- `Token Address` 复制按钮仍然是 `st.html` 浏览器侧复制组件，不是统一组件体系
 - [dashboard/app.py](/Users/zjj/vs_code/token-meme-monitor/dashboard/app.py) 仍然承担样式注入和大部分渲染函数
 - [dashboard/view_models.py](/Users/zjj/vs_code/token-meme-monitor/dashboard/view_models.py) 已承接数据派生、信号上下文和结论判断，后续新增可测试展示逻辑应优先放到这里
-- `Prediction` 视图只展示已有预测结果，当前不展示校准样本数量；后续如果 p3 outcome 样本变多，可以增加“校准样本/置信度”展示
+- 单页里的 `预测结构` 区只展示已有预测结果，当前不展示校准样本数量；后续如果 p4 outcome 样本变多，可以增加“校准样本/置信度”展示
 
 ## 7. 后续前端改造建议
 
@@ -445,43 +434,21 @@ metric_value(...) or overview_row.get("alpha_liquidity") or 0
 
 ## 9. 本地启动
 
-dashboard 只负责展示本地 SQLite 数据，不负责采集。完整本地环境建议同时启动三个进程：
+dashboard 只负责展示本地 SQLite 数据，不负责采集。完整运行方式以根目录 README 为准。
 
-| 服务 | 命令 | 职责 | 主要依赖 | 主要输出 |
-| --- | --- | --- | --- | --- |
-| 实时监控 worker | `./.venv/bin/python -m token_meme_monitor run-worker` | 发现新池子、刷新行情、计算信号、写入预测 | BSC RPC、Binance Alpha、DexScreener、GeckoTerminal | SQLite 中的 `pairs`、`snapshots`、`signals`、`signal_predictions` |
-| 定时回测 worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | 每 4 小时补成熟 outcome、跑回测、生成涨幅榜/漏抓/追高巡检报告 | 本地 SQLite，必要时请求 GeckoTerminal 补 outcome | `data/backtests/scheduled/latest.md`、`data/backtests/scheduled/latest.json` |
-| 前端 dashboard | `./.venv/bin/streamlit run dashboard/app.py` | 展示左侧候选列表、右侧详情、预测、历史记录和走势 | 本地 SQLite；详情趋势优先读本地缓存，缺失时少量请求 GeckoTerminal | `http://127.0.0.1:8501` |
+常用命令：
 
 ```bash
-# 终端 1：实时监控 worker
-./.venv/bin/python -m token_meme_monitor run-worker
+./restart.sh
+./restart.sh status
+./restart.sh stop
 ```
 
-```bash
-# 终端 2：定时回测 worker，每 4 小时生成一次回测巡检报告
-./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
-  --interval-seconds 14400 \
-  --max-price-divergence-pct 0.10 \
-  --refresh-outcome-limit 1000
+dashboard 地址：
+
+```text
+http://127.0.0.1:8501
 ```
-
-```bash
-# 终端 3：前端页面
-./.venv/bin/streamlit run dashboard/app.py
-```
-
-启动后可用下面两个命令确认：
-
-```bash
-pgrep -af "token_meme_monitor run-worker|run-scheduled-backtest-worker|streamlit run dashboard/app.py"
-curl -i http://127.0.0.1:8501/_stcore/health
-```
-
-定时回测报告位置：
-
-- `data/backtests/scheduled/latest.md`
-- `data/backtests/scheduled/latest.json`
 
 ## 10. 新会话提示语
 
@@ -498,7 +465,6 @@ curl -i http://127.0.0.1:8501/_stcore/health
 
 后端核心逻辑文档：
 - /Users/zjj/vs_code/token-meme-monitor/docs/backend-core-logic.md
-- /Users/zjj/vs_code/token-meme-monitor/docs/signal-indicator-baseline.md
 
 当前前端已经完成的关键点：
 - 页面标题为 “Binance Alpha / BSC 监控面板”
@@ -508,11 +474,11 @@ curl -i http://127.0.0.1:8501/_stcore/health
 - 顶部有筛选模式，筛选栏下面的状态条已移除
 - 详情区已有 Token Address 复制按钮
 - 详情区已新增 币安标签 / Top10 持仓占比 的 meta 信息
-- 详情区使用 `st.segmented_control` 做按需视图切换，不再使用 `st.tabs`
+- 详情区是单页决策面板，不再使用 `st.segmented_control` / `st.tabs` 切换模式
 - overview 数据派生和结论判断已拆到 dashboard/view_models.py
 - 左侧列表使用 `st.radio`，并通过 query sync key 区分外部深链接和用户点击
 - 同 token 多交易池时，代表池选择先保留活跃池，再看机会分、信号分和流动性
-- 详情区有 `预测` 视图，展示 p3 概率和预测因子中文解释
+- 详情区合并为单页：核心判断、预测结构、复盘验证、完整走势和证据中心顺序展示
 - 临时前端 debug 展示已移除
 
 要求：

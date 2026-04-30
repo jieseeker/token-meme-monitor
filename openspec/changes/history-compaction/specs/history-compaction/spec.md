@@ -18,12 +18,17 @@ The system SHALL move large cold JSON payloads into compressed archive tables be
 - **WHEN** a signal row older than the cutoff has full `feature_json`
 - **THEN** the original payload is stored in `signal_feature_archives` and `signals.feature_json` becomes a compact display subset
 
-### Requirement: Prediction maintenance can read archived full features
-The system SHALL restore archived full signal features when loading prediction dataset rows.
+### Requirement: Prediction maintenance can read still-compacted full features
+The system SHALL restore archived full signal features when loading prediction dataset rows only while the signal hot row still contains the compact placeholder.
 
-#### Scenario: Prediction dataset includes compacted signal
-- **WHEN** a signal has archived full features
+#### Scenario: Prediction dataset includes still-compacted signal
+- **WHEN** a signal has archived full features and its current `feature_json` contains `_history_compacted:true`
 - **THEN** `list_prediction_dataset_rows()` returns the archived full `feature_json`
+
+#### Scenario: Prediction dataset includes repaired compacted-history signal
+- **WHEN** a signal has archived full features but its current `feature_json` no longer contains `_history_compacted:true`
+- **THEN** `list_prediction_dataset_rows()` returns the current hot-row `feature_json`
+- **AND** the stale archived blob does not overwrite the repair
 
 ### Requirement: History compaction is explicit and inspectable
 The system SHALL provide a CLI command that estimates compaction impact without mutation by default.

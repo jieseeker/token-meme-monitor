@@ -11,6 +11,9 @@ from dashboard.view_models import (
     build_database_revision_key,
     build_conclusion,
     build_prediction_confidence,
+    build_decision_workbench_view,
+    build_risk_observation_view,
+    build_strategy_feedback_view,
     build_latest_signal_context,
     build_overview_frame,
     filter_overview_frame,
@@ -299,6 +302,56 @@ class DashboardViewModelTests(unittest.TestCase):
         self.assertEqual(confidence.tone, "accent")
         self.assertIn("历史命中率", confidence.body)
         self.assertIn("历史校准下调", confidence.evidence)
+
+    def test_strategy_feedback_view_compacts_latest_report_for_dashboard(self) -> None:
+        view = build_strategy_feedback_view(
+            {
+                "generated_at": "2026-04-29T10:00:00+00:00",
+                "summary": {
+                    "prediction_count": 100,
+                    "outcome_count": 80,
+                    "missing_outcome_rate": 0.2,
+                    "recommendation_count": 2,
+                },
+                "recommendations": [
+                    {
+                        "dimension": "stage",
+                        "slice_key": "early",
+                        "suggested_action": "review_for_more_weight",
+                        "evidence": {"events": 40, "lift_2h": 0.3, "win_rate_2h": 0.7},
+                        "risk_note": "review first",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(view["generated_at"], "2026-04-29T10:00:00+00:00")
+        self.assertEqual(view["prediction_count"], 100)
+        self.assertEqual(view["recommendation_count"], 2)
+        self.assertEqual(view["top_recommendations"][0]["label"], "stage:early")
+
+    def test_risk_observation_view_distinguishes_unknown_failure_and_high_risk(self) -> None:
+        unknown = build_risk_observation_view(None)
+        failed = build_risk_observation_view({"status": "failure", "failure_reason": "no_coverage"})
+        high = build_risk_observation_view({"status": "ok", "risk_level": "high", "provider": "fixture"})
+
+        self.assertEqual(unknown["label"], "unknown")
+        self.assertEqual(failed["tone"], "warn")
+        self.assertEqual(high["tone"], "danger")
+
+    def test_decision_workbench_view_summarizes_queue_counts(self) -> None:
+        view = build_decision_workbench_view(
+            {
+                "high_confidence": [{"case_id": "signal:1"}],
+                "missed_prediction": [],
+                "strong_win": [{"case_id": "signal:2"}, {"case_id": "signal:3"}],
+                "stale_data": [],
+            }
+        )
+
+        self.assertEqual(view["queue_counts"]["high_confidence"], 1)
+        self.assertEqual(view["queue_counts"]["strong_win"], 2)
+        self.assertEqual(view["total_cases"], 3)
 
     def test_resolve_selected_pair_prefers_query_param_over_session_state(self) -> None:
         selected_pair = resolve_selected_pair(

@@ -257,6 +257,73 @@ SCHEMA_STATEMENTS = [
         sample_count_24h INTEGER NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS risk_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_address TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        risk_level TEXT NOT NULL,
+        confidence REAL,
+        holder_concentration_pct REAL,
+        liquidity_locked INTEGER,
+        owner_renounced INTEGER,
+        buy_tax_pct REAL,
+        sell_tax_pct REAL,
+        failure_reason TEXT,
+        normalized_json TEXT NOT NULL DEFAULT '{}',
+        raw_json TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_feedback_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        generated_at TEXT NOT NULL,
+        feedback_version TEXT NOT NULL,
+        window_start TEXT,
+        window_end TEXT,
+        prediction_count INTEGER NOT NULL,
+        outcome_count INTEGER NOT NULL,
+        missing_outcome_count INTEGER NOT NULL,
+        baseline_json TEXT NOT NULL,
+        summary_json TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_feedback_slices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        dimension TEXT NOT NULL,
+        slice_key TEXT NOT NULL,
+        metrics_json TEXT NOT NULL,
+        recommendation_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY(run_id) REFERENCES strategy_feedback_runs(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_feedback_recommendations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        dimension TEXT NOT NULL,
+        slice_key TEXT NOT NULL,
+        suggested_action TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        risk_note TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES strategy_feedback_runs(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS decision_notes (
+        case_id TEXT PRIMARY KEY,
+        note TEXT NOT NULL DEFAULT '',
+        watchlisted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_pairs_due ON pairs(active, next_refresh_at)",
     "CREATE INDEX IF NOT EXISTS idx_pairs_token ON pairs(token_address)",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_pair_time ON snapshots(pair_address, observed_at DESC)",
@@ -270,6 +337,12 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_external_json_cache_fetched ON external_json_cache(fetched_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_signal_predictions_pair_time ON signal_predictions(pair_address, observed_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_signal_predictions_maturity ON signal_predictions(observed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_token_provider ON risk_snapshots(token_address, provider, fetched_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_risk_snapshots_status ON risk_snapshots(status, risk_level)",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_feedback_runs_generated ON strategy_feedback_runs(generated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_feedback_slices_run ON strategy_feedback_slices(run_id, dimension, slice_key)",
+    "CREATE INDEX IF NOT EXISTS idx_strategy_feedback_recommendations_run ON strategy_feedback_recommendations(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_decision_notes_watchlisted ON decision_notes(watchlisted, updated_at DESC)",
 ]
 PREDICTION_OUTCOME_MATURITY_HOURS = 25
 
@@ -313,6 +386,50 @@ def _compact_signal_features(raw: str, archived_at: datetime) -> str:
     compact = {key: features[key] for key in sorted(COMPACT_SIGNAL_FEATURE_KEYS) if key in features}
     compact["_history_compacted"] = True
     return json_dumps(compact)
+
+
+def _is_compacted_signal_features(raw: str | None) -> bool:
+    features = json_loads(raw, {})
+    return isinstance(features, dict) and features.get("_history_compacted") is True
+
+
+def _bool_to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return 1 if bool(value) else 0
+
+
+def _int_to_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(int(value))
+
+
+def _risk_snapshot_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    normalized = json_loads(row["normalized_json"], {})
+    if not isinstance(normalized, dict):
+        normalized = {}
+    raw = json_loads(row["raw_json"], {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "id": row["id"],
+        "token_address": row["token_address"],
+        "provider": row["provider"],
+        "fetched_at": row["fetched_at"],
+        "expires_at": row["expires_at"],
+        "status": row["status"],
+        "risk_level": row["risk_level"],
+        "confidence": row["confidence"],
+        "holder_concentration_pct": row["holder_concentration_pct"],
+        "liquidity_locked": _int_to_bool(row["liquidity_locked"]),
+        "owner_renounced": _int_to_bool(row["owner_renounced"]),
+        "buy_tax_pct": row["buy_tax_pct"],
+        "sell_tax_pct": row["sell_tax_pct"],
+        "failure_reason": row["failure_reason"],
+        "normalized": normalized,
+        "raw": raw,
+    }
 
 
 class MonitorRepository:
@@ -1798,7 +1915,11 @@ class MonitorRepository:
             item = dict(row)
             archived_feature_json = item.pop("archived_feature_json_z", None)
             archived_feature_compression = item.pop("archived_feature_compression", None)
-            if archived_feature_json is not None and archived_feature_compression:
+            if (
+                archived_feature_json is not None
+                and archived_feature_compression
+                and _is_compacted_signal_features(item.get("feature_json"))
+            ):
                 item["feature_json"] = _decompress_text(archived_feature_json, archived_feature_compression)
             result.append(item)
         return result
@@ -2085,6 +2206,284 @@ class MonitorRepository:
             (cache_key, isoformat_utc(fetched_at or utcnow()), json_dumps(value)),
         )
         self._conn.commit()
+
+    def insert_strategy_feedback_report(self, report: dict[str, Any]) -> int:
+        summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        baseline = report.get("baseline") if isinstance(report.get("baseline"), dict) else {}
+        cursor = self._conn.execute(
+            """
+            INSERT INTO strategy_feedback_runs(
+                generated_at,
+                feedback_version,
+                window_start,
+                window_end,
+                prediction_count,
+                outcome_count,
+                missing_outcome_count,
+                baseline_json,
+                summary_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(report.get("generated_at") or isoformat_utc(utcnow())),
+                str(report.get("feedback_version") or ""),
+                report.get("window_start"),
+                report.get("window_end"),
+                int(summary.get("prediction_count") or 0),
+                int(summary.get("outcome_count") or 0),
+                int(summary.get("missing_outcome_count") or 0),
+                json_dumps(baseline),
+                json_dumps(summary),
+            ),
+        )
+        run_id = int(cursor.lastrowid)
+        for item in report.get("slices") or []:
+            if not isinstance(item, dict):
+                continue
+            self._conn.execute(
+                """
+                INSERT INTO strategy_feedback_slices(
+                    run_id,
+                    dimension,
+                    slice_key,
+                    metrics_json,
+                    recommendation_json
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    str(item.get("dimension") or ""),
+                    str(item.get("slice_key") or ""),
+                    json_dumps(item.get("metrics") if isinstance(item.get("metrics"), dict) else {}),
+                    json_dumps(item.get("recommendation") if isinstance(item.get("recommendation"), dict) else {}),
+                ),
+            )
+        created_at = str(report.get("generated_at") or isoformat_utc(utcnow()))
+        for item in report.get("recommendations") or []:
+            if not isinstance(item, dict):
+                continue
+            self._conn.execute(
+                """
+                INSERT INTO strategy_feedback_recommendations(
+                    run_id,
+                    dimension,
+                    slice_key,
+                    suggested_action,
+                    evidence_json,
+                    risk_note,
+                    created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    str(item.get("dimension") or ""),
+                    str(item.get("slice_key") or ""),
+                    str(item.get("suggested_action") or ""),
+                    json_dumps(item.get("evidence") if isinstance(item.get("evidence"), dict) else {}),
+                    str(item.get("risk_note") or ""),
+                    created_at,
+                ),
+            )
+        self._conn.commit()
+        return run_id
+
+    def get_latest_strategy_feedback_report(self) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT *
+            FROM strategy_feedback_runs
+            ORDER BY generated_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        run_id = int(row["id"])
+        slices = [
+            {
+                "dimension": item["dimension"],
+                "slice_key": item["slice_key"],
+                "metrics": json_loads(item["metrics_json"], {}),
+                "recommendation": json_loads(item["recommendation_json"], {}),
+            }
+            for item in self._conn.execute(
+                """
+                SELECT dimension, slice_key, metrics_json, recommendation_json
+                FROM strategy_feedback_slices
+                WHERE run_id = ?
+                ORDER BY dimension ASC, slice_key ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        ]
+        recommendations = [
+            {
+                "dimension": item["dimension"],
+                "slice_key": item["slice_key"],
+                "suggested_action": item["suggested_action"],
+                "evidence": json_loads(item["evidence_json"], {}),
+                "risk_note": item["risk_note"],
+            }
+            for item in self._conn.execute(
+                """
+                SELECT dimension, slice_key, suggested_action, evidence_json, risk_note
+                FROM strategy_feedback_recommendations
+                WHERE run_id = ?
+                ORDER BY id ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        ]
+        return {
+            "run_id": run_id,
+            "generated_at": row["generated_at"],
+            "feedback_version": row["feedback_version"],
+            "window_start": row["window_start"],
+            "window_end": row["window_end"],
+            "summary": json_loads(row["summary_json"], {}),
+            "baseline": json_loads(row["baseline_json"], {}),
+            "slices": slices,
+            "recommendations": recommendations,
+        }
+
+    def insert_risk_snapshot(self, snapshot: dict[str, Any]) -> int:
+        normalized = snapshot.get("normalized") if isinstance(snapshot.get("normalized"), dict) else {}
+        raw = snapshot.get("raw") if isinstance(snapshot.get("raw"), dict) else {}
+        cursor = self._conn.execute(
+            """
+            INSERT INTO risk_snapshots(
+                token_address,
+                provider,
+                fetched_at,
+                expires_at,
+                status,
+                risk_level,
+                confidence,
+                holder_concentration_pct,
+                liquidity_locked,
+                owner_renounced,
+                buy_tax_pct,
+                sell_tax_pct,
+                failure_reason,
+                normalized_json,
+                raw_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(snapshot.get("token_address") or ""),
+                str(snapshot.get("provider") or ""),
+                str(snapshot.get("fetched_at") or isoformat_utc(utcnow())),
+                str(snapshot.get("expires_at") or isoformat_utc(utcnow())),
+                str(snapshot.get("status") or "unknown"),
+                str(snapshot.get("risk_level") or "unknown"),
+                snapshot.get("confidence"),
+                normalized.get("holder_concentration_pct"),
+                _bool_to_int(normalized.get("liquidity_locked")),
+                _bool_to_int(normalized.get("owner_renounced")),
+                normalized.get("buy_tax_pct"),
+                normalized.get("sell_tax_pct"),
+                snapshot.get("failure_reason"),
+                json_dumps(normalized),
+                json_dumps(raw),
+            ),
+        )
+        self._conn.commit()
+        return int(cursor.lastrowid)
+
+    def get_latest_risk_snapshot(self, token_address: str, *, provider: str | None = None) -> dict[str, Any] | None:
+        if provider:
+            row = self._conn.execute(
+                """
+                SELECT *
+                FROM risk_snapshots
+                WHERE token_address = ? AND provider = ?
+                ORDER BY fetched_at DESC, id DESC
+                LIMIT 1
+                """,
+                (token_address, provider),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                """
+                SELECT *
+                FROM risk_snapshots
+                WHERE token_address = ?
+                ORDER BY fetched_at DESC, id DESC
+                LIMIT 1
+                """,
+                (token_address,),
+            ).fetchone()
+        return _risk_snapshot_from_row(row) if row else None
+
+    def list_latest_risk_snapshots(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        limit_sql = "" if limit is None else "LIMIT ?"
+        params: tuple[Any, ...] = () if limit is None else (limit,)
+        rows = self._conn.execute(
+            f"""
+            SELECT rs.*
+            FROM risk_snapshots rs
+            JOIN (
+                SELECT token_address, provider, max(fetched_at) AS fetched_at
+                FROM risk_snapshots
+                GROUP BY token_address, provider
+            ) latest
+              ON latest.token_address = rs.token_address
+             AND latest.provider = rs.provider
+             AND latest.fetched_at = rs.fetched_at
+            ORDER BY rs.fetched_at DESC, rs.id DESC
+            {limit_sql}
+            """,
+            params,
+        ).fetchall()
+        return [_risk_snapshot_from_row(row) for row in rows]
+
+    def list_token_addresses(self, *, limit: int | None = None) -> list[str]:
+        limit_sql = "" if limit is None else "LIMIT ?"
+        params: tuple[Any, ...] = () if limit is None else (limit,)
+        rows = self._conn.execute(
+            f"""
+            SELECT token_address
+            FROM tokens
+            ORDER BY last_seen_at DESC
+            {limit_sql}
+            """,
+            params,
+        ).fetchall()
+        return [str(row["token_address"]) for row in rows]
+
+    def upsert_decision_note(self, case_id: str, *, note: str, watchlisted: bool, updated_at: datetime | None = None) -> None:
+        now_raw = isoformat_utc(updated_at or utcnow())
+        self._conn.execute(
+            """
+            INSERT INTO decision_notes(case_id, note, watchlisted, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(case_id) DO UPDATE SET
+                note = excluded.note,
+                watchlisted = excluded.watchlisted,
+                updated_at = excluded.updated_at
+            """,
+            (case_id, note, 1 if watchlisted else 0, now_raw, now_raw),
+        )
+        self._conn.commit()
+
+    def get_decision_note(self, case_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT case_id, note, watchlisted, created_at, updated_at
+            FROM decision_notes
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "case_id": row["case_id"],
+            "note": row["note"],
+            "watchlisted": bool(row["watchlisted"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def list_snapshot_context(self, pair_address: str, since: datetime) -> list[dict[str, Any]]:
         rows = self._conn.execute(

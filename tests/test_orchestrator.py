@@ -10,7 +10,7 @@ import requests
 from token_meme_monitor.config import AppConfig, SignalConfig
 from token_meme_monitor.models import AlphaToken, DiscoveredPair, PairSnapshot
 from token_meme_monitor.orchestrator import MonitorWorker
-from token_meme_monitor.utils import json_loads, parse_datetime
+from token_meme_monitor.utils import json_dumps, json_loads, parse_datetime
 
 
 class FakeAlphaClient:
@@ -190,6 +190,45 @@ def alpha_token(address: str, symbol: str = "MEME", holders: int | None = 1000) 
 
 
 class OrchestratorTests(unittest.TestCase):
+    def test_risk_enrichment_disabled_by_default_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            worker = MonitorWorker(
+                AppConfig(
+                    bsc_rpc_url="http://127.0.0.1:8545",
+                    factory_address="0x0000000000000000000000000000000000000001",
+                    database_path=str(Path(tmpdir) / "monitor.db"),
+                )
+            )
+
+            refreshed = worker.refresh_risk_enrichment_if_enabled()
+
+            self.assertEqual(refreshed, 0)
+            worker.close()
+
+    def test_optional_risk_enrichment_refresh_uses_fixture_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fixture_path = Path(tmpdir) / "risk.json"
+            fixture_path.write_text(json_dumps({"0xtoken": {"risk_level": "high", "confidence": 0.8}}), encoding="utf-8")
+            worker = MonitorWorker(
+                AppConfig(
+                    bsc_rpc_url="http://127.0.0.1:8545",
+                    factory_address="0x0000000000000000000000000000000000000001",
+                    database_path=str(Path(tmpdir) / "monitor.db"),
+                    risk_enrichment_fixture_path=str(fixture_path),
+                    risk_enrichment_batch_size=10,
+                    risk_enrichment_ttl_hours=6,
+                )
+            )
+            now = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+            worker._repo.upsert_token("0xtoken", "MEME", "Meme", now, {"is_binance_alpha": True})
+
+            refreshed = worker.refresh_risk_enrichment_if_enabled(now=now)
+            latest = worker._repo.get_latest_risk_snapshot("0xtoken", provider="fixture")
+
+            self.assertEqual(refreshed, 1)
+            self.assertEqual(latest["risk_level"], "high")
+            worker.close()
+
     def test_missing_pair_created_at_is_scheduled_for_retry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             worker = MonitorWorker(

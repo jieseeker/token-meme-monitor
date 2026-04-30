@@ -23,6 +23,7 @@ from token_meme_monitor.market_data import build_alpha_reference, sanitize_alpha
 from token_meme_monitor.models import AlphaToken
 from token_meme_monitor.prediction_outcomes import compute_prediction_outcome_with_hourly_ohlcv
 from token_meme_monitor.predictions import PredictionCalibration, build_prediction_calibration, build_prediction_result
+from token_meme_monitor.risk_enrichment import FixtureRiskProvider, refresh_risk_snapshots
 from token_meme_monitor.signals import SignalEngine
 from token_meme_monitor.utils import json_loads, parse_datetime, utcnow
 
@@ -110,6 +111,12 @@ class MonitorWorker:
             self.refresh_holder_metrics_if_due()
         except Exception:
             LOGGER.exception("holder metrics refresh failed")
+        try:
+            refreshed_risk = self.refresh_risk_enrichment_if_enabled()
+            if refreshed_risk:
+                LOGGER.info("updated %s risk enrichment snapshots", refreshed_risk)
+        except Exception:
+            LOGGER.exception("risk enrichment refresh failed")
         try:
             updated_outcomes = self.refresh_prediction_outcomes()
             if updated_outcomes:
@@ -651,6 +658,21 @@ class MonitorWorker:
                 return 0
         self._holder_metrics_ran_at = now
         return self.refresh_holder_metrics(now=now)
+
+    def refresh_risk_enrichment_if_enabled(self, *, now=None) -> int:
+        if not self._config.risk_enrichment_fixture_path:
+            return 0
+        token_addresses = self._repo.list_token_addresses(limit=max(1, self._config.risk_enrichment_batch_size))
+        if not token_addresses:
+            return 0
+        result = refresh_risk_snapshots(
+            self._repo,
+            token_addresses,
+            providers=[FixtureRiskProvider.from_json_file(self._config.risk_enrichment_fixture_path)],
+            now=now or utcnow(),
+            ttl_hours=max(1, self._config.risk_enrichment_ttl_hours),
+        )
+        return result["updated"] + result["failed"] + result["no_coverage"]
 
     def refresh_holder_metrics(self, *, now=None) -> int:
         now = now or utcnow()

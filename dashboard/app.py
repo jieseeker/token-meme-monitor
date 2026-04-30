@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from dashboard.view_models import (
+    build_conclusion,
     build_database_revision_key,
     build_latest_signal_context,
     build_overview_frame,
@@ -34,6 +35,7 @@ from dashboard.view_models import (
 from token_meme_monitor.clients.geckoterminal import GeckoTerminalClient, compute_lookback_returns
 from token_meme_monitor.config import load_config
 from token_meme_monitor.database import MonitorRepository
+from token_meme_monitor.decision_workbench import build_decision_case, export_cases_csv
 from token_meme_monitor.utils import first_non_missing, json_loads
 
 
@@ -46,17 +48,6 @@ PAIR_QUERY_SYNC_KEY = "_last_synced_pair_query"
 DASHBOARD_LAST_REFRESH_TS_KEY = "_dashboard_last_refresh_ts"
 DASHBOARD_REFRESH_RERUN_PENDING_KEY = "_dashboard_refresh_rerun_pending"
 DASHBOARD_STATUS_KEY = "_dashboard_status"
-DETAIL_VIEW_WIDGET_KEY = "detail_view_mode"
-DETAIL_VIEW_PAIR_SYNC_KEY = "_detail_view_pair_sync"
-
-DETAIL_VIEW_OPTIONS = [
-    ("overview", "量价快照"),
-    ("prediction", "预测"),
-    ("explanation", "结论依据"),
-    ("features", "指标备注"),
-    ("trend", "走势"),
-    ("history", "历史记录"),
-]
 FILTER_MODES = {
     "discover": ("宽松观察", 0, 500, 5000),
     "balanced": ("平衡跟踪", 0, 1000, 15000),
@@ -292,8 +283,8 @@ def inject_styles() -> None:
   --accent-wash: rgba(15, 118, 110, 0.08);
   --risk: #b45309;
   --danger: #ef4444;
-  --shadow-soft: 0 14px 34px rgba(17, 24, 39, 0.07);
-  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.05), 0 10px 24px rgba(17, 24, 39, 0.04);
+  --shadow-soft: 0 8px 22px rgba(17, 24, 39, 0.05);
+  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.035);
 }
 .stApp {
   background:
@@ -400,7 +391,7 @@ div[data-testid="stSegmentedControl"] [role="radiogroup"] {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(255,255,255,0.82);
-  box-shadow: 0 1px 2px rgba(17,24,39,0.04);
+  box-shadow: none;
 }
 div[data-testid="stSegmentedControl"] label {
   min-height: 2.34rem;
@@ -410,9 +401,10 @@ div[data-testid="stSegmentedControl"] label {
 div[data-testid="stExpander"] {
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: rgba(255,255,255,0.70);
-  box-shadow: 0 1px 2px rgba(17,24,39,0.04);
+  background: rgba(255,255,255,0.52);
+  box-shadow: none;
   margin-top: 0.25rem;
+  overflow: hidden;
 }
 div[data-testid="stExpander"] summary {
   min-height: 2.75rem;
@@ -501,7 +493,7 @@ div[data-testid="stNumberInput"] input:focus {
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-end;
-  margin: 0.15rem 0 0.78rem;
+  margin: 0.42rem 0 0.98rem;
 }
 .section-kicker {
   color: var(--accent-strong);
@@ -530,8 +522,8 @@ div[data-testid="stNumberInput"] input:focus {
     linear-gradient(100deg, rgba(230,244,241,0.92), rgba(255,255,255,0.82) 38%, rgba(250,246,236,0.84)),
     var(--panel-strong);
   border-radius: 20px;
-  padding: 1.38rem 1.48rem;
-  margin-bottom: 1rem;
+  padding: 1.44rem 1.54rem;
+  margin-bottom: 1.18rem;
   box-shadow: var(--shadow-soft);
 }
 .detail-hero:before {
@@ -561,9 +553,17 @@ div[data-testid="stNumberInput"] input:focus {
   border-left: 3px solid rgba(15,118,110,0.42);
   border-radius: 14px;
   background: rgba(255,255,255,0.84);
-  padding: 0.72rem 0.88rem;
-  margin: 0.3rem 0 0.86rem;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.03);
+  padding: 0.88rem 1rem;
+  margin: 0.36rem 0 1.14rem;
+  box-shadow: none;
+}
+.conclusion-panel.verdict-good {
+  border-left-color: rgba(15,118,110,0.78);
+  background: rgba(236,253,245,0.72);
+}
+.conclusion-panel.verdict-warn {
+  border-left-color: rgba(180,83,9,0.74);
+  background: rgba(255,251,235,0.74);
 }
 .conclusion-title {
   color: var(--text);
@@ -571,11 +571,33 @@ div[data-testid="stNumberInput"] input:focus {
   font-weight: 850;
   line-height: 1.25;
 }
+.conclusion-body {
+  display: grid;
+  gap: 0.52rem;
+  margin-top: 0.32rem;
+}
 .conclusion-copy {
   color: var(--muted);
   font-size: 0.86rem;
   line-height: 1.38;
-  margin-top: 0.18rem;
+}
+.conclusion-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.52rem;
+  align-items: start;
+  border-top: 1px solid rgba(17,24,39,0.07);
+  padding-top: 0.52rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.38;
+}
+.conclusion-action span {
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 840;
+  line-height: 1.38;
+  white-space: nowrap;
 }
 .score-box {
   min-width: 9.2rem;
@@ -647,6 +669,177 @@ div[data-testid="stNumberInput"] input:focus {
   border-color: rgba(107,114,128,0.18);
   background: rgba(249,250,251,0.82);
 }
+.decision-factor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin: 0.86rem 0 1.08rem;
+}
+.decision-factor-grid.compact {
+  grid-template-columns: 1fr;
+}
+.decision-factor-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-left: 3px solid rgba(15,118,110,0.44);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.78);
+  padding: 0.84rem 0.94rem;
+}
+.decision-factor-panel.tone-risk {
+  border-left-color: #d97706;
+  background: rgba(255,251,235,0.72);
+}
+.decision-factor-title {
+  color: var(--text);
+  font-size: 0.94rem;
+  font-weight: 860;
+  line-height: 1.28;
+}
+.decision-factor-list {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0.58rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.decision-factor-list li {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+.decision-factor-list li:before {
+  content: "";
+  display: inline-block;
+  width: 0.36rem;
+  height: 0.36rem;
+  border-radius: 999px;
+  background: rgba(15,118,110,0.62);
+  margin-right: 0.42rem;
+  transform: translateY(-0.08rem);
+}
+.decision-factor-panel.tone-risk .decision-factor-list li:before {
+  background: rgba(217,119,6,0.72);
+}
+.evidence-center-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.92rem;
+  margin: 0.88rem 0 0.7rem;
+}
+.evidence-card {
+  position: relative;
+  min-height: 8.7rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid rgba(15,118,110,0.40);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.80);
+  padding: 0.9rem 0.96rem 1.08rem;
+}
+.evidence-card-title {
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 860;
+  line-height: 1.25;
+}
+.evidence-card-copy {
+  color: var(--subtle);
+  font-size: 0.78rem;
+  font-weight: 740;
+  line-height: 1.35;
+  margin-top: 0.16rem;
+}
+.evidence-card-list {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0.62rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.evidence-card-list li {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+.evidence-card-list li:before {
+  content: "";
+  display: inline-block;
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 999px;
+  background: rgba(15,118,110,0.56);
+  margin-right: 0.38rem;
+  transform: translateY(-0.08rem);
+}
+.evidence-popover-anchor {
+  display: block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) {
+  height: 0;
+  margin: 0 !important;
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) {
+  display: flex;
+  justify-content: center;
+  height: 0;
+  margin: -0.64rem 0 1.42rem !important;
+  overflow: visible;
+  position: relative;
+  z-index: 2;
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button {
+  width: auto !important;
+  min-width: 4rem;
+  max-width: none;
+  min-height: 1.5rem;
+  height: 1.5rem;
+  justify-content: center !important;
+  align-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent-strong) !important;
+  box-shadow: none;
+  padding: 0 0.42rem;
+  transform: translateY(0);
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button:hover {
+  border: 0;
+  background: rgba(15,118,110,0.10);
+  color: var(--accent-strong) !important;
+  transform: translateY(0.04rem);
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button:focus-visible {
+  outline: 2px solid rgba(15,118,110,0.34);
+  outline-offset: 2px;
+  background: rgba(15,118,110,0.10);
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button svg {
+  display: none !important;
+}
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button p,
+div[data-testid="element-container"]:has(.evidence-popover-anchor) + div[data-testid="element-container"]:has(div[data-testid="stPopover"]) button span {
+  color: var(--accent-strong) !important;
+  display: block;
+  width: auto;
+  max-width: none;
+  font-size: 0.76rem;
+  font-weight: 840;
+  line-height: 1.2;
+  text-align: center !important;
+  padding-left: 0;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  opacity: 1;
+}
 .link-row {
   display: flex;
   flex-wrap: wrap;
@@ -667,28 +860,47 @@ div[data-testid="stNumberInput"] input:focus {
   border-color: rgba(15,118,110,0.34);
   background: #d9efeb;
 }
-.hero-address-line {
+.token-title-line {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.52rem;
-  margin-top: 0.72rem;
-  padding-top: 0.62rem;
-  border-top: 1px solid rgba(17,24,39,0.07);
+  gap: 0.46rem 0.66rem;
+}
+.token-title-line h2 {
+  margin-bottom: 0.12rem;
+}
+.token-identity-line {
   color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: 0.86rem;
+  line-height: 1.4;
 }
-.hero-address-label {
-  color: var(--subtle);
-  font-weight: 820;
+.token-name-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-.hero-address-value {
-  color: var(--text);
+.token-address-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  line-height: 1.2;
+}
+.token-address-value {
+  min-width: 0;
+  color: #475569;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
   font-weight: 760;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+}
+.token-address-inline .copy-address-button {
+  flex: 0 0 auto;
+  min-width: 2.5rem;
+  padding: 0.2rem 0.42rem;
+  font-size: 0.68rem;
 }
 .copy-address-button {
   appearance: none;
@@ -720,26 +932,33 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .detail-line-list {
   display: grid;
-  gap: 0.54rem;
-  margin-top: 0.76rem;
+  gap: 0.68rem;
+  margin-top: 0.86rem;
 }
-.detail-line-list.compact { margin-top: 0.55rem; }
+.detail-line-list.compact { margin-top: 0.68rem; }
 .detail-line-item {
   display: grid;
   grid-template-columns: minmax(8.2rem, 0.8fr) minmax(5.4rem, 0.44fr) minmax(0, 2.2fr);
-  gap: 0.66rem;
+  gap: 0.78rem;
   align-items: start;
-  padding: 0.68rem 0.88rem;
+  padding: 0.78rem 0.96rem;
   border: 1px solid var(--line);
   border-left: 3px solid rgba(15, 118, 110, 0.42);
   border-radius: 12px;
   background: rgba(255,255,255,0.84);
-  box-shadow: 0 1px 2px rgba(17,24,39,0.03);
+  box-shadow: none;
+}
+.detail-line-item > * {
+  min-width: 0;
 }
 .detail-line-item.compact {
-  grid-template-columns: minmax(7.2rem, 0.7fr) minmax(4.3rem, 0.34fr) minmax(0, 2.3fr);
-  gap: 0.52rem;
-  padding: 0.48rem 0.72rem;
+  grid-template-columns: minmax(7.2rem, 0.34fr) minmax(0, 1fr);
+  column-gap: 0.82rem;
+  row-gap: 0.28rem;
+  padding: 0.58rem 0.8rem;
+}
+.detail-line-item.compact > div:first-child {
+  grid-row: 1 / span 2;
 }
 .detail-line-item.tone-risk {
   border-left-color: #d97706;
@@ -764,29 +983,40 @@ div[data-testid="stNumberInput"] input:focus {
   font-weight: 850;
   line-height: 1.3;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .detail-line-body {
   color: var(--muted);
   font-size: 0.91rem;
   line-height: 1.5;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .detail-line-item.compact .detail-line-title,
 .detail-line-item.compact .detail-line-value { line-height: 1.22; }
+.detail-line-item.compact .detail-line-value {
+  grid-column: 2;
+  grid-row: 1;
+}
+.detail-line-item.compact .detail-line-body {
+  grid-column: 2;
+  grid-row: 2;
+}
 .detail-line-item.compact .detail-line-body { font-size: 0.88rem; line-height: 1.34; }
 .feature-line-list {
   display: grid;
-  gap: 0.5rem;
-  margin-top: 0.72rem;
+  gap: 0.62rem;
+  margin-top: 0.82rem;
 }
 .feature-line-item {
   display: grid;
   grid-template-columns: minmax(9.6rem, 0.95fr) minmax(0, 2.05fr) minmax(10.5rem, 1.05fr);
   column-gap: 1.45rem;
-  row-gap: 0.28rem;
+  row-gap: 0.34rem;
   align-items: start;
-  padding: 0.5rem 0.72rem;
+  padding: 0.58rem 0.78rem;
   border: 1px solid var(--line);
   border-left: 3px solid rgba(15, 118, 110, 0.36);
   border-radius: 12px;
@@ -817,16 +1047,16 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .history-list {
   display: grid;
-  gap: 0.72rem;
-  margin-top: 0.76rem;
+  gap: 0.86rem;
+  margin-top: 0.86rem;
 }
 .history-card {
   border: 1px solid var(--line);
   border-left: 3px solid rgba(15, 118, 110, 0.36);
   border-radius: 14px;
   background: rgba(255,255,255,0.86);
-  padding: 0.76rem 0.86rem;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.03);
+  padding: 0.86rem 0.94rem;
+  box-shadow: none;
 }
 .history-card.tone-risk {
   border-left-color: #d97706;
@@ -873,8 +1103,8 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .history-body {
   display: grid;
-  gap: 0.38rem;
-  margin-top: 0.62rem;
+  gap: 0.46rem;
+  margin-top: 0.72rem;
 }
 .history-row {
   display: grid;
@@ -896,17 +1126,17 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.4rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9.4rem, 1fr));
   gap: 0.82rem;
-  margin: 0.8rem 0 1.08rem;
+  margin: 0.88rem 0 1.30rem;
 }
 .metric-card {
-  min-height: 6.05rem;
+  min-height: 5.65rem;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgba(255,255,255,0.90);
   padding: 0.86rem 0.92rem;
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
 }
 .metric-card.tone-risk {
   border-color: rgba(180,83,9,0.20);
@@ -920,10 +1150,10 @@ div[data-testid="stNumberInput"] input:focus {
 }
 .metric-value {
   color: var(--text);
-  font-size: 1.35rem;
+  font-size: 1.22rem;
   font-weight: 860;
   line-height: 1.2;
-  margin-top: 0.36rem;
+  margin-top: 0.42rem;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -931,20 +1161,20 @@ div[data-testid="stNumberInput"] input:focus {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
-  margin-top: 0.28rem;
+  margin-top: 0.34rem;
 }
 .prediction-confidence {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.86rem;
+  gap: 1rem;
   border: 1px solid rgba(15,118,110,0.13);
   border-left: 3px solid rgba(15,118,110,0.42);
   border-radius: 14px;
   background: rgba(255,255,255,0.84);
-  padding: 0.72rem 0.86rem;
-  margin: 0.78rem 0 0.72rem;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.03);
+  padding: 0.86rem 0.96rem;
+  margin: 0.9rem 0 1.02rem;
+  box-shadow: none;
 }
 .prediction-confidence.tone-warn {
   border-left-color: #d97706;
@@ -963,7 +1193,7 @@ div[data-testid="stNumberInput"] input:focus {
   color: var(--muted);
   font-size: 0.86rem;
   line-height: 1.42;
-  margin-top: 0.2rem;
+  margin-top: 0.28rem;
 }
 .prediction-confidence-chips {
   display: flex;
@@ -989,8 +1219,8 @@ div[data-testid="stNumberInput"] input:focus {
 .prediction-confidence-evidence {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.34rem;
-  margin-top: 0.48rem;
+  gap: 0.42rem;
+  margin-top: 0.58rem;
 }
 .prediction-confidence-evidence span {
   color: var(--muted);
@@ -1006,9 +1236,9 @@ div[data-testid="stNumberInput"] input:focus {
 .trend-stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(8.7rem, 1fr));
-  gap: 0.68rem;
-  margin: 0.74rem 0 1.02rem;
-  padding: 0.2rem 0 0.42rem;
+  gap: 0.82rem;
+  margin: 0.86rem 0 1.18rem;
+  padding: 0.26rem 0 0.52rem;
   border-bottom: 1px solid rgba(17,24,39,0.07);
 }
 .trend-stat {
@@ -1040,8 +1270,8 @@ div[data-testid="stNumberInput"] input:focus {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  gap: 0.8rem;
-  margin: 0.88rem 0 0.36rem;
+  gap: 0.9rem;
+  margin: 1.08rem 0 0.46rem;
 }
 .trend-chart-title {
   color: var(--text);
@@ -1118,7 +1348,7 @@ div[data-testid="stButton"] button {
   padding: 0.34rem 0.72rem;
   background: rgba(255,255,255,0.86);
   color: var(--text) !important;
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
   text-align: left !important;
   transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
 }
@@ -1205,7 +1435,7 @@ div[data-testid="stRadio"] [role="radiogroup"] label,
   border-radius: 16px;
   padding: 0.56rem 0.82rem;
   background: rgba(255,255,255,0.86);
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
   transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
 }
 div[data-testid="stRadio"] [role="radiogroup"] label > div:last-child,
@@ -1253,8 +1483,14 @@ div[data-testid="stAlert"] {
     flex-wrap: wrap;
   }
   .score-box { width: 100%; text-align: left; }
+  .decision-factor-grid {
+    grid-template-columns: 1fr;
+  }
+  .evidence-center-grid {
+    grid-template-columns: 1fr;
+  }
   .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
   .trend-chart-header {
     flex-direction: column;
@@ -1267,6 +1503,12 @@ div[data-testid="stAlert"] {
   .detail-line-item.compact {
     grid-template-columns: 1fr;
     gap: 0.24rem;
+  }
+  .detail-line-item.compact > div:first-child,
+  .detail-line-item.compact .detail-line-value,
+  .detail-line-item.compact .detail-line-body {
+    grid-column: auto;
+    grid-row: auto;
   }
   .feature-line-item,
   .history-row {
@@ -2074,13 +2316,20 @@ def build_list_labels(df: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
         tier = clean_text(row.get("display_tier_label"), "")
         state = translate_state(row.get("selection_pair_state") or row.get("state"))
         score = row.get("display_score")
-        score_label = "待评分" if pd.isna(score) or float(score) < 0 else f"信号 {int(score)}"
         short_score = row.get("prediction_short_momentum_score")
         if pd.isna(short_score):
             short_score = row.get("prediction_opportunity_score")
-        opportunity_label = "" if pd.isna(short_score) else f" · 短线 {int(short_score)}"
+        strength_values = []
+        for raw_value in (score, short_score):
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if not pd.isna(numeric) and numeric >= 0:
+                strength_values.append(numeric)
+        strength_label = f"强度 {int(max(strength_values))}" if strength_values else "待评分"
         tier_label = f" · {tier}" if tier else ""
-        labels[pair] = f"{symbol}{tier_label} · {state} · {score_label}{opportunity_label}"
+        labels[pair] = f"{symbol}{tier_label} · {strength_label} · {state}"
         options.append(pair)
     return options, labels
 
@@ -2107,17 +2356,7 @@ def build_list_groups(df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
 
 
 def select_pair(pair_address: str) -> None:
-    previous_pair = st.session_state.get("selected_pair")
     st.session_state["selected_pair"] = pair_address
-    if previous_pair != pair_address:
-        st.session_state[DETAIL_VIEW_WIDGET_KEY] = "overview"
-        st.session_state[DETAIL_VIEW_PAIR_SYNC_KEY] = pair_address
-
-
-def sync_detail_view_for_pair(pair_address: str) -> None:
-    if st.session_state.get(DETAIL_VIEW_PAIR_SYNC_KEY) != pair_address:
-        st.session_state[DETAIL_VIEW_WIDGET_KEY] = "overview"
-        st.session_state[DETAIL_VIEW_PAIR_SYNC_KEY] = pair_address
 
 
 def dashboard_refresh_seconds(value: Any) -> int:
@@ -2260,43 +2499,246 @@ def render_refresh_badge_countdown(refresh_seconds: int) -> None:
         st.rerun(scope="app")
 
 
-def render_overview(row: pd.Series, signal_context: Any, database_path: str, pair_address: str) -> None:
-    observed_at_raw = (
-        signal_context.observed_at
-        if signal_context is not None and signal_context.observed_at not in (None, "")
-        else row.get("snapshot_observed_at") or row.get("last_snapshot_at")
+def best_score_label(*values: Any) -> str:
+    scores = []
+    for value in values:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not pd.isna(numeric) and numeric >= 0:
+            scores.append(numeric)
+    return "--" if not scores else f"{int(max(scores))} 分"
+
+
+def numeric_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(numeric) else numeric
+
+
+def opportunity_level(score: Any) -> tuple[str, str]:
+    numeric = numeric_or_none(score)
+    if numeric is None or numeric < 0:
+        return "待确认", "neutral"
+    if numeric >= 70:
+        return "高", "good"
+    if numeric >= 50:
+        return "中", "warn"
+    return "低", "neutral"
+
+
+def risk_level(row: pd.Series, conclusion: dict[str, Any]) -> tuple[str, str]:
+    risk = numeric_or_none(row.get("prediction_risk_6h_dd30"))
+    risks = [clean_text(item) for item in list(conclusion.get("risks") or []) if clean_text(item)]
+    meaningful_risks = [item for item in risks if item not in {"暂未发现显著风险", "仍需等待更多确认"}]
+    if risk is not None and risk >= 0.3:
+        return "高风险", "risk"
+    if risk is not None and risk >= 0.18:
+        return "中风险", "warn"
+    if meaningful_risks:
+        return "中风险", "warn"
+    return "低风险", "good"
+
+
+def build_beginner_decision_items(row: pd.Series, conclusion: dict[str, Any]) -> list[dict[str, str]]:
+    short_score = first_non_missing(row.get("prediction_short_momentum_score"), row.get("prediction_opportunity_score"))
+    short_score_numeric = numeric_or_none(short_score)
+    opportunity, opportunity_tone = opportunity_level(short_score)
+    risk, risk_tone = risk_level(row, conclusion)
+    risk_probability = row.get("prediction_risk_6h_dd30")
+    risk_note = (
+        f"回撤风险 {format_percent(risk_probability)}"
+        if format_percent(risk_probability) != "--"
+        else "结合流动性、卖压和过热状态判断"
     )
-    external_metrics = get_external_trend_metrics(database_path, pair_address, observed_at_raw)
-    render_section("量价快照", "当前量价与结果指标", "先看规模、流动性和区间表现，再决定是否继续加大关注。")
+    return [
+        {
+            "label": "机会强度",
+            "value": opportunity,
+            "note": "短线机会分 --" if short_score_numeric is None else f"短线机会分 {int(short_score_numeric)}",
+            "tone": opportunity_tone,
+        },
+        {
+            "label": "风险等级",
+            "value": risk,
+            "note": risk_note,
+            "tone": risk_tone,
+        },
+    ]
+
+
+def render_beginner_decision_summary(items: list[dict[str, str]]) -> None:
+    render_metric_cards(items)
+
+
+def build_next_watch_items(row: pd.Series, signal_context: Any) -> list[str]:
+    volume_h1 = metric_value(signal_context, row, "volume_h1")
+    probability = row.get("prediction_prob_2h_up20")
+    risk = numeric_or_none(row.get("prediction_risk_6h_dd30"))
+    risk_action = (
+        "回撤风险偏高，冲高后优先等回踩确认。"
+        if risk is not None and risk >= 0.3
+        else "如果买盘、成交或流动性转弱，降级观察。"
+    )
+    return [
+        f"看 1小时成交是否延续（当前 {format_money(volume_h1)}）。",
+        f"观察 2小时内是否接近 +20% 目标（当前概率 {format_percent(probability)}）。",
+        risk_action,
+    ]
+
+
+def render_next_watch_items(items: list[str]) -> None:
+    if not items:
+        return
+    labels = ("成交延续", "目标接近", "风险变化")
+    render_detail_lines(
+        [
+            {
+                "title": labels[index] if index < len(labels) else f"观察点 {index + 1}",
+                "value": "待验证",
+                "body": item,
+                "tone": "risk" if index >= 2 or "风险" in item or "降级" in item else "accent",
+            }
+            for index, item in enumerate(items)
+            if clean_text(item)
+        ],
+        compact=True,
+    )
+
+
+def render_conclusion_summary(conclusion: dict[str, Any]) -> None:
+    title = clean_text(conclusion.get("title"), "普通观察")
+    summary = clean_text(conclusion.get("summary"), "")
+    action = clean_text(conclusion.get("action"), "")
+    klass = clean_text(conclusion.get("klass"), "verdict-neutral")
+    summary_html = f"<div class='conclusion-copy'>{html.escape(summary)}</div>" if summary else ""
+    action_html = f"<div class='conclusion-action'><span>建议</span><div>{html.escape(action)}</div></div>" if action else ""
+    st.markdown(
+        f"<div class='conclusion-panel {html.escape(klass)}'>"
+        f"<div class='conclusion-title'>{html.escape(title)}</div>"
+        f"<div class='conclusion-body'>{summary_html}{action_html}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_decision_factor_panels(strengths: list[str], risks: list[str], *, compact: bool = False) -> None:
+    def list_html(items: list[str]) -> str:
+        visible_items = items[:3] or ["暂无"]
+        return "".join(f"<li>{html.escape(item)}</li>" for item in visible_items)
+
+    grid_class = "decision-factor-grid compact" if compact else "decision-factor-grid"
+    st.markdown(
+        f"<div class='{grid_class}'>"
+        "<div class='decision-factor-panel'>"
+        "<div class='decision-factor-title'>主要支撑</div>"
+        f"<ul class='decision-factor-list'>{list_html(strengths)}</ul>"
+        "</div>"
+        "<div class='decision-factor-panel tone-risk'>"
+        "<div class='decision-factor-title'>主要风险</div>"
+        f"<ul class='decision-factor-list'>{list_html(risks)}</ul>"
+        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_overview_mini_trend(
+    database_path: str,
+    revision: tuple[tuple[str, int, int], ...],
+    pair_address: str,
+) -> None:
+    snapshots_df = load_recent_snapshots_frame(database_path, revision, pair_address)
+    render_section("走势验证", "价格与成交是否延续", "只看最近快照里的价格和 1 小时成交额，用来确认信号有没有继续走强。")
+    if snapshots_df.empty:
+        st.info("当前还没有足够快照绘制走势。")
+        return
+    chart_df = snapshots_df.copy()
+    chart_df["observed_at"] = pd.to_datetime(chart_df["observed_at"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["observed_at"]).sort_values("observed_at").tail(36)
+    if chart_df.empty:
+        st.info("当前快照缺少有效时间，暂时无法绘制走势。")
+        return
+    for column in ("price_usd", "volume_h1"):
+        if column in chart_df.columns:
+            chart_df[column] = pd.to_numeric(chart_df[column], errors="coerce")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        price_chart = build_trend_chart(
+            chart_df,
+            column="price_usd",
+            label="价格",
+            color="#0f766e",
+            height=160,
+            value_format=price_axis_format(chart_df["price_usd"]),
+            value_formatter=format_price,
+        )
+        if price_chart is not None:
+            render_trend_chart_header("价格", "方向是否延续。")
+            st.altair_chart(price_chart, width="stretch")
+        else:
+            st.info("暂无价格走势。")
+    with col2:
+        volume_chart = build_trend_chart(
+            chart_df,
+            column="volume_h1",
+            label="1小时成交额",
+            color="#b45309",
+            height=160,
+            value_format="$,.2s",
+            value_formatter=format_money,
+        )
+        if volume_chart is not None:
+            render_trend_chart_header("1小时成交额", "量能是否跟上。")
+            st.altair_chart(volume_chart, width="stretch")
+        else:
+            st.info("暂无成交额走势。")
+
+
+def render_overview(
+    row: pd.Series,
+    signal_context: Any,
+    database_path: str,
+    pair_address: str,
+    revision: tuple[tuple[str, int, int], ...],
+) -> None:
+    conclusion = build_conclusion(signal_context, row, explain_reason=explain_reason, explain_risk=explain_risk)
+    render_section("决策摘要", "小白先看这三项", "先看建议动作、机会强度和风险等级，再决定是否继续深挖。")
+    render_conclusion_summary(conclusion)
+    render_beginner_decision_summary(build_beginner_decision_items(row, conclusion))
+    strengths = [clean_text(item) for item in list(conclusion.get("strengths") or [])[:3] if clean_text(item)]
+    risks = [clean_text(item) for item in list(conclusion.get("risks") or [])[:3] if clean_text(item)]
+    render_decision_factor_panels(strengths, risks)
+    short_score = first_non_missing(row.get("prediction_short_momentum_score"), row.get("prediction_opportunity_score"))
     render_metric_cards(
         [
             {
-                "label": "当前市值",
-                "value": format_money(
-                    first_non_missing(
-                        metric_value(signal_context, row, "market_cap"),
-                        row.get("alpha_market_cap"),
-                        metric_value(signal_context, row, "fdv"),
-                    )
-                ),
-                "note": "优先使用实时快照",
+                "label": "短线机会分",
+                "value": best_score_label(short_score),
+                "note": "2小时优先级",
             },
             {
-                "label": "当前单价",
-                "value": format_price(first_non_missing(metric_value(signal_context, row, "price_usd"), row.get("alpha_price"))),
-                "note": "快照缺失时回退 Alpha",
+                "label": "2小时上涨概率",
+                "value": format_percent(row.get("prediction_prob_2h_up20")),
+                "note": "涨幅 20% 目标",
             },
-            {"label": "链上持币人数", "value": format_holders(row.get("holder_count")), "note": "用于判断分布深度"},
-            {"label": "1小时成交额", "value": format_money(metric_value(signal_context, row, "volume_h1")), "note": "观察当前换手"},
             {
                 "label": "流动性",
                 "value": format_money(first_non_missing(metric_value(signal_context, row, "liquidity_usd"), row.get("alpha_liquidity"))),
                 "note": "用于判断承接能力",
             },
-            {"label": "外部2小时涨幅", "value": format_percent(external_metrics.get("external_return_2h")), "note": "GeckoTerminal 小时线"},
-            {"label": "外部24小时涨幅", "value": format_percent(external_metrics.get("external_return_24h")), "note": "已缓存历史区间"},
+            {"label": "1小时成交额", "value": format_money(metric_value(signal_context, row, "volume_h1")), "note": "观察当前换手"},
         ]
     )
+    render_section("下一步观察", "接下来验证什么", "用最少的观察点判断这条信号是否继续成立。")
+    render_next_watch_items(build_next_watch_items(row, signal_context))
+    render_overview_mini_trend(database_path, revision, pair_address)
 
 
 def render_prediction(row: pd.Series) -> None:
@@ -2344,24 +2786,104 @@ def render_prediction(row: pd.Series) -> None:
         st.info("当前还没有预测解释因子。")
 
 
-def render_explanation(signal_context: Any, row: pd.Series) -> None:
-    score = resolve_score(signal_context, row)
-    title = "继续观察"
-    summary = "当前信号还没有达到强确认状态。"
-    if score is not None and not pd.isna(score):
-        if int(score) >= 78:
-            title = "重点复核"
-            summary = "信号分进入重点关注区间，需要结合流动性、成交延续和风险项确认。"
-        elif int(score) >= 65:
-            title = "继续跟踪"
-            summary = "信号分达到跟踪区间，适合持续观察后续成交和价格结构。"
-    st.markdown(
-        "<div class='conclusion-panel'>"
-        f"<div class='conclusion-title'>{html.escape(title)}</div>"
-        f"<div class='conclusion-copy'>{html.escape(summary)}</div>"
-        "</div>",
-        unsafe_allow_html=True,
+def render_decision_workbench(row: pd.Series) -> None:
+    case = build_decision_case(_dashboard_case_row(row))
+    prediction = case.get("prediction") or {}
+    outcome = case.get("outcome") or {}
+    render_section(
+        "复盘",
+        clean_text(case.get("token_symbol") or case.get("token_address")),
+        "只对照当时预测和后续结果，判断这个策略分段是否靠谱。",
     )
+    render_detail_lines(
+        [
+            {
+                "title": "当时预测",
+                "value": join_segments(
+                    [
+                        detail_segment("短线分 ", prediction.get("short_momentum_score")),
+                        detail_segment("2小时 ", format_percent(prediction.get("prob_2h_up20"))),
+                        detail_segment("6小时 ", format_percent(prediction.get("prob_6h_up50"))),
+                    ]
+                ),
+                "body": join_segments(
+                    [
+                        detail_segment("阶段 ", format_stage(prediction.get("stage"))),
+                        detail_segment("记录时间 ", case.get("observed_at")),
+                    ],
+                    separator=" · ",
+                ),
+                "tone": "good" if (prediction.get("short_momentum_score") or 0) >= 70 else "neutral",
+            },
+            {
+                "title": "后续结果",
+                "value": join_segments(
+                    [
+                        detail_segment("2小时 ", format_percent(outcome.get("max_return_2h"))),
+                        detail_segment("24小时 ", format_percent(outcome.get("max_return_24h"))),
+                        detail_segment("回撤 ", format_percent(outcome.get("min_return_6h"))),
+                    ]
+                ),
+                "body": join_segments(
+                    [
+                        detail_segment("2h 命中 ", outcome.get("hit_2h_up20"), skip_empty=False),
+                        detail_segment("样本 ", outcome.get("sample_count_2h"), skip_empty=False),
+                    ]
+                ),
+                "tone": "warn" if outcome.get("hit_2h_up20") == 0 and (prediction.get("short_momentum_score") or 0) >= 70 else "accent",
+            },
+        ],
+        compact=True,
+    )
+    st.download_button(
+        "导出当前复盘记录 CSV",
+        data=export_cases_csv([case]),
+        file_name=f"{clean_text(case.get('case_id'), 'decision-case').replace(':', '-')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+def _dashboard_case_row(row: pd.Series) -> dict[str, Any]:
+    data = row.to_dict()
+    return {
+        "signal_id": data.get("signal_id"),
+        "pair_address": data.get("pair_address"),
+        "token_address": data.get("token_address"),
+        "token_symbol": data.get("token_symbol"),
+        "token_name": data.get("token_name"),
+        "observed_at": data.get("last_signal_at") or data.get("snapshot_observed_at"),
+        "score": first_non_missing(data.get("last_score"), data.get("score")),
+        "pair_state": first_non_missing(data.get("last_pair_state"), data.get("state")),
+        "reasons": first_non_missing(data.get("last_reasons"), data.get("reasons")),
+        "risk_flags": first_non_missing(data.get("last_risk_flags"), data.get("risk_flags")),
+        "feature_json": first_non_missing(data.get("last_feature_json"), data.get("feature_json")),
+        "prediction_reasons": data.get("prediction_reasons"),
+        "prob_2h_up20": data.get("prediction_prob_2h_up20"),
+        "prob_6h_up50": data.get("prediction_prob_6h_up50"),
+        "prob_24h_up100": data.get("prediction_prob_24h_up100"),
+        "risk_6h_dd30": data.get("prediction_risk_6h_dd30"),
+        "short_momentum_score": data.get("prediction_short_momentum_score"),
+        "opportunity_score": data.get("prediction_opportunity_score"),
+        "continuation_score": data.get("prediction_continuation_score"),
+        "breakout_score": data.get("prediction_breakout_score"),
+        "stage": data.get("prediction_stage"),
+        "max_return_2h": data.get("outcome_max_return_2h"),
+        "max_return_6h": data.get("outcome_max_return_6h"),
+        "max_return_24h": data.get("outcome_max_return_24h"),
+        "min_return_6h": data.get("outcome_min_return_6h"),
+        "hit_2h_up20": data.get("outcome_hit_2h_up20"),
+        "hit_6h_up50": data.get("outcome_hit_6h_up50"),
+        "hit_24h_up100": data.get("outcome_hit_24h_up100"),
+        "sample_count_2h": data.get("outcome_sample_count_2h"),
+        "sample_count_6h": data.get("outcome_sample_count_6h"),
+        "sample_count_24h": data.get("outcome_sample_count_24h"),
+    }
+
+
+def render_explanation(signal_context: Any, row: pd.Series) -> None:
+    conclusion = build_conclusion(signal_context, row, explain_reason=explain_reason, explain_risk=explain_risk)
+    render_conclusion_summary(conclusion)
     render_section("结论依据", "正向依据", "把当前结论拆回具体规则，方便确认这条信号强在哪里。")
     if signal_context is None or not signal_context.reasons:
         st.info("当前暂无正向命中规则。")
@@ -2537,11 +3059,330 @@ def render_history(signals_df: pd.DataFrame) -> None:
     st.markdown("<div class='history-list'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
 
 
+def build_expert_summary_items(row: pd.Series, signal_context: Any) -> list[dict[str, str]]:
+    del signal_context
+    short_score = first_non_missing(row.get("prediction_short_momentum_score"), row.get("prediction_opportunity_score"))
+    return [
+        {"label": "短线机会分", "value": best_score_label(short_score), "note": "2小时优先级"},
+        {"label": "2小时概率", "value": format_percent(row.get("prediction_prob_2h_up20")), "note": "涨 20%"},
+        {"label": "6小时概率", "value": format_percent(row.get("prediction_prob_6h_up50")), "note": "涨 50%"},
+        {"label": "回撤风险", "value": format_percent(row.get("prediction_risk_6h_dd30")), "note": "6小时跌 30%", "tone": "risk"},
+    ]
+
+
+def render_expert_summary(row: pd.Series, signal_context: Any) -> None:
+    render_metric_cards(build_expert_summary_items(row, signal_context))
+
+
+def render_expert_prediction_panel(row: pd.Series) -> None:
+    render_section("预测结构", "概率与分数", "快速拆解这条信号的短线、延续、爆发和回撤结构。")
+    short_score = first_non_missing(row.get("prediction_short_momentum_score"), row.get("prediction_opportunity_score"))
+    render_detail_lines(
+        [
+            {
+                "title": "上涨概率",
+                "value": join_segments(
+                    [
+                        detail_segment("2小时 ", format_percent(row.get("prediction_prob_2h_up20"))),
+                        detail_segment("6小时 ", format_percent(row.get("prediction_prob_6h_up50"))),
+                        detail_segment("24小时 ", format_percent(row.get("prediction_prob_24h_up100"))),
+                    ]
+                ),
+                "body": "规则概率叠加历史命中率校准，用于排序和复盘，不直接触发正式告警。",
+            },
+            {
+                "title": "机会分层",
+                "value": join_segments(
+                    [
+                        detail_segment("短线 ", "--" if numeric_or_none(short_score) is None else str(int(numeric_or_none(short_score) or 0))),
+                        detail_segment(
+                            "延续 ",
+                            "--"
+                            if numeric_or_none(row.get("prediction_continuation_score")) is None
+                            else str(int(numeric_or_none(row.get("prediction_continuation_score")) or 0)),
+                        ),
+                        detail_segment(
+                            "爆发 ",
+                            "--"
+                            if numeric_or_none(row.get("prediction_breakout_score")) is None
+                            else str(int(numeric_or_none(row.get("prediction_breakout_score")) or 0)),
+                        ),
+                    ]
+                ),
+                "body": detail_segment("阶段 ", format_stage(row.get("prediction_stage"))) or "",
+            },
+            {
+                "title": "回撤风险",
+                "value": detail_segment("6小时 ", format_percent(row.get("prediction_risk_6h_dd30"))) or "--",
+                "body": "追高前先看成交和流动性是否继续承接。",
+                "tone": "risk",
+            },
+        ],
+        compact=True,
+    )
+    render_prediction_confidence(row)
+
+
+def render_expert_workbench_panel(row: pd.Series) -> None:
+    case = build_decision_case(_dashboard_case_row(row))
+    prediction = case.get("prediction") or {}
+    outcome = case.get("outcome") or {}
+    render_section("复盘验证", "预测 vs 结果", "对照当时判断和后续结果，看这个分段是否靠谱。")
+    render_detail_lines(
+        [
+            {
+                "title": "当时预测",
+                "value": join_segments(
+                    [
+                        detail_segment("短线分 ", prediction.get("short_momentum_score")),
+                        detail_segment("2小时 ", format_percent(prediction.get("prob_2h_up20"))),
+                        detail_segment("6小时 ", format_percent(prediction.get("prob_6h_up50"))),
+                    ]
+                ),
+                "body": join_segments(
+                    [
+                        detail_segment("阶段 ", format_stage(prediction.get("stage"))),
+                        detail_segment("记录时间 ", case.get("observed_at")),
+                    ],
+                    separator=" · ",
+                ),
+                "tone": "good" if (prediction.get("short_momentum_score") or 0) >= 70 else "neutral",
+            },
+            {
+                "title": "后续结果",
+                "value": join_segments(
+                    [
+                        detail_segment("2小时 ", format_percent(outcome.get("max_return_2h"))),
+                        detail_segment("24小时 ", format_percent(outcome.get("max_return_24h"))),
+                        detail_segment("回撤 ", format_percent(outcome.get("min_return_6h"))),
+                    ]
+                ),
+                "body": join_segments(
+                    [
+                        detail_segment("2h 命中 ", outcome.get("hit_2h_up20"), skip_empty=False),
+                        detail_segment("样本 ", outcome.get("sample_count_2h"), skip_empty=False),
+                    ]
+                ),
+                "tone": "warn" if outcome.get("hit_2h_up20") == 0 and (prediction.get("short_momentum_score") or 0) >= 70 else "accent",
+            },
+        ],
+        compact=True,
+    )
+    st.download_button(
+        "导出当前复盘记录 CSV",
+        data=export_cases_csv([case]),
+        file_name=f"{clean_text(case.get('case_id'), 'decision-case').replace(':', '-')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+def render_expert_trend_panel(
+    database_path: str,
+    revision: tuple[tuple[str, int, int], ...],
+    pair_address: str,
+) -> None:
+    render_section("完整走势", "价格、成交、流动性", "不同量纲拆开看，避免一张图里互相误导。")
+    snapshots_df = load_recent_snapshots_frame(database_path, revision, pair_address)
+    if snapshots_df.empty:
+        st.info("当前还没有该代币的快照数据。")
+        return
+    chart_df = snapshots_df.copy()
+    chart_df["observed_at"] = pd.to_datetime(chart_df["observed_at"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["observed_at"]).sort_values("observed_at").tail(48)
+    if chart_df.empty:
+        st.info("当前快照缺少有效时间，暂时无法绘制走势。")
+        return
+    for column in ("price_usd", "liquidity_usd", "volume_h1"):
+        if column in chart_df.columns:
+            chart_df[column] = pd.to_numeric(chart_df[column], errors="coerce")
+
+    price_chart = build_trend_chart(
+        chart_df,
+        column="price_usd",
+        label="价格",
+        color="#0f766e",
+        height=230,
+        value_format=price_axis_format(chart_df["price_usd"]),
+        value_formatter=format_price,
+    )
+    if price_chart is not None:
+        render_trend_chart_header("价格", "先看方向是否延续。")
+        st.altair_chart(price_chart, width="stretch")
+    else:
+        st.info("暂无价格走势。")
+
+    volume_chart = build_trend_chart(
+        chart_df,
+        column="volume_h1",
+        label="1小时成交额",
+        color="#b45309",
+        height=180,
+        value_format="$,.2s",
+        value_formatter=format_money,
+    )
+    if volume_chart is not None:
+        render_trend_chart_header("1小时成交额", "量能是否跟上。")
+        st.altair_chart(volume_chart, width="stretch")
+    else:
+        st.info("暂无成交额走势。")
+
+    liquidity_chart = build_trend_chart(
+        chart_df,
+        column="liquidity_usd",
+        label="流动性",
+        color="#2563eb",
+        height=180,
+        value_format="$,.2s",
+        value_formatter=format_money,
+    )
+    if liquidity_chart is not None:
+        render_trend_chart_header("流动性", "承接是否稳定。")
+        st.altair_chart(liquidity_chart, width="stretch")
+    else:
+        st.info("暂无流动性走势。")
+
+
+def render_evidence_summary_card(title: str, copy: str, items: list[str]) -> None:
+    visible_items = [clean_text(item) for item in items if clean_text(item)][:3] or ["暂无可展示摘要"]
+    st.markdown(
+        "<div class='evidence-card'>"
+        f"<div class='evidence-card-title'>{html.escape(title)}</div>"
+        f"<div class='evidence-card-copy'>{html.escape(copy)}</div>"
+        "<ul class='evidence-card-list'>"
+        + "".join(f"<li>{html.escape(item)}</li>" for item in visible_items)
+        + "</ul></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_evidence_popover(label: str) -> Any:
+    st.markdown(f"<span class='evidence-popover-anchor' data-label='{html.escape(label, quote=True)}'></span>", unsafe_allow_html=True)
+    return st.popover(label, use_container_width=False)
+
+
+def build_evidence_reason_preview(conclusion: dict[str, Any]) -> list[str]:
+    strengths = [clean_text(item) for item in list(conclusion.get("strengths") or []) if clean_text(item)]
+    risks = [clean_text(item) for item in list(conclusion.get("risks") or []) if clean_text(item)]
+    items = [f"支撑：{item}" for item in strengths[:2]]
+    items.extend(f"风险：{item}" for item in risks[:2])
+    return items
+
+
+def build_evidence_indicator_preview(signal_context: Any) -> list[str]:
+    rows = build_indicator_rows(signal_context.features if signal_context is not None else {})
+    return [
+        f"{clean_text(row.get('title'))}：{clean_text(row.get('value'))}"
+        for row in rows[:3]
+        if clean_text(row.get("title"))
+    ]
+
+
+def build_evidence_history_preview(signals_df: pd.DataFrame) -> list[str]:
+    if signals_df.empty:
+        return []
+    items: list[str] = []
+    for _, row in signals_df.head(3).iterrows():
+        score = row.get("score")
+        score_label = "待评分" if pd.isna(score) else f"分数 {int(score)}"
+        short_score = row.get("prediction_short_momentum_score")
+        if pd.isna(short_score):
+            short_score = row.get("prediction_opportunity_score")
+        short_label = "" if pd.isna(short_score) else f" · 短线 {int(short_score)}"
+        probability = format_percent(row.get("prediction_prob_2h_up20"))
+        probability_label = "" if probability == "--" else f" · 2小时 {probability}"
+        items.append(f"{format_timestamp(row.get('observed_at'))} · {score_label}{short_label}{probability_label}")
+    return items
+
+
+def render_evidence_center(signal_context: Any, row: pd.Series, recent_signals_df: pd.DataFrame) -> None:
+    conclusion = build_conclusion(signal_context, row, explain_reason=explain_reason, explain_risk=explain_risk)
+    render_section("证据中心", "资料摘要", "页面只展示最关键证据；需要排查时再打开完整依据、指标和历史信号。")
+    render_evidence_summary_card("判断依据", "命中原因和风险提示", build_evidence_reason_preview(conclusion))
+    with render_evidence_popover("完整依据"):
+        render_explanation(signal_context, row)
+    render_evidence_summary_card("指标解释", "关键指标中文解释", build_evidence_indicator_preview(signal_context))
+    with render_evidence_popover("完整指标"):
+        render_features(signal_context)
+    render_evidence_summary_card("最近信号", "最近几轮信号摘要", build_evidence_history_preview(recent_signals_df))
+    with render_evidence_popover("历史信号"):
+        render_history(recent_signals_df)
+
+
+def render_decision_detail_page(
+    signal_context: Any,
+    row: pd.Series,
+    *,
+    database_path: str,
+    revision: tuple[tuple[str, int, int], ...],
+    pair_address: str,
+) -> None:
+    conclusion = build_conclusion(signal_context, row, explain_reason=explain_reason, explain_risk=explain_risk)
+    render_section("决策面板", "先看结论，再看证据", "核心判断、预测复盘和走势验证放在同一页，减少来回切换。")
+    render_conclusion_summary(conclusion)
+    render_beginner_decision_summary(build_beginner_decision_items(row, conclusion))
+    render_section("量价快照", "规模、价格和成交", "把当前市值、价格、持币人数和成交强度放回小卡片，辅助判断信号是否有承接。")
+    render_metric_cards(
+        [
+            {
+                "label": "当前市值",
+                "value": format_money(
+                    first_non_missing(
+                        metric_value(signal_context, row, "market_cap"),
+                        row.get("alpha_market_cap"),
+                        metric_value(signal_context, row, "fdv"),
+                        row.get("alpha_fdv"),
+                    )
+                ),
+                "note": "优先使用实时快照",
+            },
+            {
+                "label": "当前单价",
+                "value": format_price(
+                    first_non_missing(
+                        metric_value(signal_context, row, "price_usd"),
+                        row.get("price_usd"),
+                        row.get("alpha_price"),
+                    )
+                ),
+                "note": "快照缺失时回退 Alpha",
+            },
+            {
+                "label": "链上持币人数",
+                "value": format_holders(row.get("holder_count")),
+                "note": "观察筹码分布",
+            },
+            {
+                "label": "流动性",
+                "value": format_money(first_non_missing(metric_value(signal_context, row, "liquidity_usd"), row.get("alpha_liquidity"))),
+                "note": "池子承接能力",
+            },
+            {"label": "5分钟成交额", "value": format_money(metric_value(signal_context, row, "volume_m5")), "note": "短线活跃"},
+            {"label": "1小时成交额", "value": format_money(metric_value(signal_context, row, "volume_h1")), "note": "当前换手"},
+            {
+                "label": "24小时成交额",
+                "value": format_money(first_non_missing(metric_value(signal_context, row, "volume_h24"), row.get("alpha_volume_24h"))),
+                "note": "日内活跃度",
+            },
+        ]
+    )
+
+    strengths = [clean_text(item) for item in list(conclusion.get("strengths") or [])[:3] if clean_text(item)]
+    risks = [clean_text(item) for item in list(conclusion.get("risks") or [])[:3] if clean_text(item)]
+    render_section("判断拆解", "支撑、风险和下一步", "把结论拆成可观察的理由，避免只看单个分数。")
+    render_decision_factor_panels(strengths, risks, compact=True)
+    render_section("下一步观察", "接下来验证什么", "用最少的观察点判断这条信号是否继续成立。")
+    render_next_watch_items(build_next_watch_items(row, signal_context))
+    render_expert_prediction_panel(row)
+    render_expert_workbench_panel(row)
+    render_expert_trend_panel(database_path, revision, pair_address)
+    render_evidence_center(signal_context, row, load_recent_signals_frame(database_path, revision, pair_address))
+
+
 def render_detail(row: pd.Series, *, database_path: str, revision: tuple[tuple[str, int, int], ...]) -> None:
     signal_context = build_latest_signal_context(row)
     pair_address = str(row.get("pair_address") or "")
     token_address = str(row.get("token_address") or "")
-    sync_detail_view_for_pair(pair_address)
     token_address_short = token_address[:8] + "..." + token_address[-6:] if len(token_address) > 16 else token_address
     symbol = clean_text(row.get("token_symbol"), token_address[:8])
     token_name = clean_text(row.get("token_name"), "未命名代币")
@@ -2579,8 +3420,15 @@ def render_detail(row: pd.Series, *, database_path: str, revision: tuple[tuple[s
     st.html(
         "<div class='detail-hero'>"
         "<div class='detail-hero-top'>"
-        f"<div><div class='section-kicker'>Alpha 候选标的</div><h2>{html.escape(symbol)}</h2>"
-        f"<div class='section-copy'>{html.escape(token_name)} / {html.escape(clean_text(row.get('quote_symbol'), '-'))} · {html.escape(state)}</div></div>"
+        "<div><div class='section-kicker'>Alpha 候选标的</div>"
+        "<div class='token-title-line'>"
+        f"<h2>{html.escape(symbol)}</h2>"
+        "<span class='token-address-inline'>"
+        f"<span class='token-address-value' title='{html.escape(token_address)}'>{html.escape(token_address_short)}</span>"
+        f"<button id='{html.escape(copy_button_id, quote=True)}' class='copy-address-button' type='button' data-copy='{html.escape(token_address, quote=True)}' "
+        "aria-label='复制代币地址'>复制</button></span>"
+        "</div>"
+        f"<div class='token-identity-line'><span class='token-name-copy'>{html.escape(token_name)} / {html.escape(clean_text(row.get('quote_symbol'), '-'))} · {html.escape(state)}</span></div></div>"
         f"<div class='score-box'><div class='section-copy'>当前信号强度</div><div style='font-size:1.24rem;font-weight:850'>{html.escape(score_label)}</div></div>"
         "</div>"
         "<div class='meta-chip-row'>"
@@ -2592,10 +3440,6 @@ def render_detail(row: pd.Series, *, database_path: str, revision: tuple[tuple[s
         f"<a class='link-pill' href='https://bscscan.com/token/{quote(token_address)}' target='_blank'>BscScan 代币</a>"
         f"<a class='link-pill' href='https://bscscan.com/address/{quote(pair_address)}' target='_blank'>BscScan 交易对</a>"
         "</div>"
-        f"<div class='hero-address-line'><span class='hero-address-label'>代币地址</span>"
-        f"<span class='hero-address-value' title='{html.escape(token_address)}'>{html.escape(token_address_short)}</span>"
-        f"<button id='{html.escape(copy_button_id, quote=True)}' class='copy-address-button' type='button' data-copy='{html.escape(token_address, quote=True)}' "
-        "aria-label='复制代币地址'>复制</button></div>"
         "</div>"
         f"""
 <script>
@@ -2658,31 +3502,8 @@ def render_detail(row: pd.Series, *, database_path: str, revision: tuple[tuple[s
         width="stretch",
         unsafe_allow_javascript=True,
     )
-    view = st.segmented_control(
-        "详情视图",
-        options=[key for key, _ in DETAIL_VIEW_OPTIONS],
-        format_func=lambda key: dict(DETAIL_VIEW_OPTIONS)[key],
-        required=True,
-        label_visibility="collapsed",
-        width="stretch",
-        key=DETAIL_VIEW_WIDGET_KEY,
-    )
-    if view not in {key for key, _ in DETAIL_VIEW_OPTIONS}:
-        view = "overview"
-        st.session_state[DETAIL_VIEW_WIDGET_KEY] = view
-    with st.container(key="detail_view_content"):
-        if view == "overview":
-            render_overview(row, signal_context, database_path, pair_address)
-        elif view == "prediction":
-            render_prediction(row)
-        elif view == "explanation":
-            render_explanation(signal_context, row)
-        elif view == "features":
-            render_features(signal_context)
-        elif view == "trend":
-            render_trend(load_recent_snapshots_frame(database_path, revision, pair_address))
-        else:
-            render_history(load_recent_signals_frame(database_path, revision, pair_address))
+    with st.container(key="detail_decision_content"):
+        render_decision_detail_page(signal_context, row, database_path=database_path, revision=revision, pair_address=pair_address)
 
 
 def render_dashboard_content(config: Any, only_market: bool) -> None:

@@ -4,9 +4,12 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+from token_meme_monitor.database import MonitorRepository
 from token_meme_monitor.scheduled_backtest import (
     build_scheduled_backtest_report,
+    run_scheduled_backtest_cycle,
     render_scheduled_backtest_markdown,
     write_scheduled_backtest_outputs,
 )
@@ -85,6 +88,8 @@ class ScheduledBacktestTests(unittest.TestCase):
         )
 
         self.assertEqual(report["summary"]["top_gainer_count"], 3)
+        self.assertIn("strategy_feedback", report)
+        self.assertIn("recommendation_count", report["strategy_feedback"])
         self.assertEqual([item["token_symbol"] for item in report["top_gainers"]], ["GOOD", "MISS", "LATE"])
         self.assertEqual(report["top_gainers"][0]["token_symbol"], "GOOD")
         self.assertEqual(report["missed_strong_gainers"][0]["token_symbol"], "MISS")
@@ -118,6 +123,34 @@ class ScheduledBacktestTests(unittest.TestCase):
             self.assertTrue(json_path.exists())
             self.assertTrue(md_path.exists())
             self.assertIn("Scheduled Backtest Report", md_path.read_text(encoding="utf-8"))
+
+    def test_cycle_records_failure_state_before_reraising(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = Path(tmpdir) / "monitor.db"
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            repo.close()
+
+            with self.assertRaises(RuntimeError):
+                with patch(
+                    "token_meme_monitor.scheduled_backtest.build_scheduled_backtest_report",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    run_scheduled_backtest_cycle(
+                        database_path=str(database_path),
+                        chain_id="bsc",
+                        json_out=str(Path(tmpdir) / "scheduled.json"),
+                        md_out=str(Path(tmpdir) / "scheduled.md"),
+                        skip_refresh_outcomes=True,
+                    )
+
+            repo = MonitorRepository(str(database_path))
+            repo.initialize()
+            state = repo.get_external_json_cache("runtime:scheduled_backtest:last_run")
+            repo.close()
+            self.assertIsNotNone(state)
+            self.assertEqual(state["value"]["status"], "failure")
+            self.assertIn("RuntimeError: boom", state["value"]["error"])
 
 
 def _row(

@@ -3,3 +3,18 @@ web3>=7,<8
 streamlit>=1.44,<2
 pandas>=2.2,<3
 
+
+[Unit]
+Description=Frp Client Service
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Restart=on-failure
+RestartSec=5s
+ExecStart=/workspace/frp/frp_0.68.1_linux_amd64/frpc.toml
+WorkingDirectory=/你的/frpc/工作目录
+
+[Install]
+WantedBy=multi-user.target

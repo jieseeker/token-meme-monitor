@@ -1,327 +1,151 @@
 # 会话提示词模板
 
-这份文档用于在“新对话”里快速接续当前项目上下文。
+这份文档用于在新会话里快速接续当前项目上下文。源文档只保留少数入口，避免旧方案和当前代码脱节。
 
-用途：
+优先阅读：
 
-- 减少每次重新解释项目背景的成本
-- 保证新会话优先读取已有文档，而不是重新猜项目状态
-- 让后续任务在统一上下文下继续推进
-
-建议使用方式：
-
-1. 根据任务类型选择一个模板
-2. 复制到新对话
-3. 只替换末尾的任务描述
-
-关联文档：
-
-- 后端核心逻辑：
-  - [backend-core-logic.md](/Users/zjj/vs_code/token-meme-monitor/docs/backend-core-logic.md)
-- 信号指标基线：
-  - [signal-indicator-baseline.md](/Users/zjj/vs_code/token-meme-monitor/docs/signal-indicator-baseline.md)
-
----
+1. `README.md`
+2. `docs/backend-core-logic.md`
+3. `docs/frontend-dashboard-ui.md`，仅前端任务需要
 
 ## 1. 后端开发模板
 
-适合继续做：
-
-- 采集链路
-- 数据清洗
-- 评分逻辑
-- 数据库存储
-- worker 行为
-- 回测脚本
-
-模板：
-
 ```text
-请先阅读并以以下文档为当前项目上下文基线：
+项目路径：/Users/zjj/vs_code/token-meme-monitor
 
-1. docs/backend-core-logic.md
-2. docs/signal-indicator-baseline.md
+请先阅读：
+- README.md
+- docs/backend-core-logic.md
+
+当前项目是 Binance Alpha / BSC 监控器，不是全链新币监听器。
 
 工作要求：
-
-- 先理解当前后端链路，再开始改代码
-- 当前重点是后端逻辑，不优先处理 UI
-- 如果文档和代码不一致，以代码现状为准，并指出差异
-- 不要重新发明策略体系，先沿用当前文档里的基线
-- 新增指标、规则、数据源时，先更新文档，再改代码，再补测试
-
-当前背景：
-
-- 当前监控宇宙是 Binance Alpha / BSC
-- 当前评分逻辑是规则打分，不是模型打分
-- 候选指标已经实现为实时计算，但尚未接入正式评分：
-  - market_cap_bucket
-  - volume_impulse_vs_prev24h
-  - volume_impulse_vs_prev72h
-  - h1_return_live
-  - h4_return_live
-  - h24_return_live
-- 数据清洗链路已经接入
-- 旧库历史数据不是当前重点，后续切数据库时再统一清理
-- 历史验证脚本已保留，可复用：
-  python3 -m token_meme_monitor validate-token-list
-
-请在开始修改前，先用简短语言复述你理解的当前后端状态和你准备做的下一步。
+- 以当前代码行为为准；如果文档和代码不一致，指出差异并同步修正文档。
+- 后端任务优先关注采集、清洗、特征、评分、预测、outcome、SQLite 和 CLI。
+- 不要重新定义策略体系，沿用 backend-core-logic.md 中的当前基线。
+- 涉及采集、清洗、评分、风险、状态、告警、预测、outcome、表结构或 CLI 的改动，要同步更新 backend-core-logic.md。
+- 运行验证优先使用：./.venv/bin/python -m unittest discover -s tests
 
 我这次要做的任务是：
-[在这里补你的任务]
+[在这里补任务]
 ```
 
----
-
-## 2. 策略研究模板
-
-适合继续做：
-
-- 指标讨论
-- 上涨前信号研究
-- 风险过滤研究
-- 分层策略
-- 回测结果解读
-
-模板：
+## 2. 前端开发模板
 
 ```text
-请先阅读并以以下文档为策略上下文基线：
+项目路径：/Users/zjj/vs_code/token-meme-monitor
 
-1. docs/signal-indicator-baseline.md
-2. docs/backend-core-logic.md
+请先阅读：
+- README.md
+- docs/frontend-dashboard-ui.md
+- docs/backend-core-logic.md
 
-工作要求：
+这是 Streamlit dashboard 项目，主页面文件是：
+- dashboard/app.py
+- dashboard/view_models.py
 
-- 先基于当前文档理解已有指标、候选指标和数据限制
-- 当前重点是策略研究，不优先改 UI
-- 不要脱离现有数据源能力空谈指标
-- 如果提出新指标，请明确区分：
-  - 当前已生效
-  - 已实现但未纳入评分
-  - 仅为候选指标
-- 如果建议后续落地，请说明：
-  - 数据来源
-  - 是否可实时获取
-  - 是否可历史回测
-  - 是否适合不同市值分桶
+当前前端关键约束：
+- 左侧列表使用 st.radio，不要改回 href 跳转。
+- 通过 query sync key 区分外部深链接和用户点击。
+- 同 token 多交易池时，代表池选择先保留活跃池，再看机会分、信号分和流动性。
+- 详情区使用 st.segmented_control 做按需视图切换，不使用 st.tabs。
+- 预测视图展示 p4 概率、short_momentum_score、continuation_score、breakout_score 和中文解释。
+- 不要用 `or fallback` 判断数值缺失，尤其是 `liquidity_usd`、`volume_h1`、`price_usd`、`market_cap`。
+- 不要重新引入空的 markdown wrapper。
 
-当前背景：
+我这次要做的前端任务是：
+[在这里补任务]
+```
 
-- 当前监控宇宙是 Binance Alpha / BSC
-- 当前规则更偏确认型，不是最早期抄底型
-- 已回测并沉淀的候选方向包括：
-  - 相对放量倍数
-  - 市值分桶
-  - 预警型趋势指标
-  - 历史成交量分位/中位偏离
-- 历史验证脚本已保留，可复用：
-  python3 -m token_meme_monitor validate-token-list
-- 当前后端已经能实时计算候选指标，但还没有把它们正式纳入评分
+## 3. 策略研究模板
 
-请先用简短语言复述你理解的当前策略状态，再开始讨论。
+```text
+项目路径：/Users/zjj/vs_code/token-meme-monitor
+
+请先阅读：
+- README.md
+- docs/backend-core-logic.md
+
+当前策略状态：
+- 监控宇宙默认是 Binance Alpha / BSC。
+- 规则 signal 仍是 v1 固定打分。
+- 候选指标已经实时计算并写入 feature_json，但尚未正式进入规则评分。
+- p4 prediction 会输出 2h/6h/24h 概率、回撤风险、short/continuation/breakout 分数。
+- 强爆发判断应以真实 signal_prediction_outcomes 和事件级 walk-forward 为准，不只看 token list 事后锚点。
+
+讨论新指标时，请明确：
+- 当前是否已采集
+- 是否已实时计算
+- 是否已进入正式评分
+- 数据来源
+- 历史回测可用性
+- 对不同市值桶的适用性
 
 我这次要讨论的主题是：
-[在这里补你的主题]
+[在这里补主题]
 ```
 
----
-
-## 3. 数据库迁移模板
-
-适合继续做：
-
-- SQLite -> PostgreSQL / MySQL / 其他数据库
-- 数据保留策略
-- 迁移脚本
-- 新库重建
-
-模板：
+## 4. 数据库或存储模板
 
 ```text
-请先阅读并以以下文档为当前项目上下文基线：
+项目路径：/Users/zjj/vs_code/token-meme-monitor
 
-1. docs/backend-core-logic.md
-2. docs/signal-indicator-baseline.md
+请先阅读：
+- README.md
+- docs/backend-core-logic.md
 
-当前任务是数据库迁移，请优先关注后端，不处理 UI。
+当前数据库是 SQLite，核心表包括 tokens、pairs、snapshots、signals、signal_predictions、signal_prediction_outcomes、external_ohlcv、external_trend_metrics 和归档表。
 
-工作要求：
+当前已有 compact-history：
+- 旧 snapshots.raw_json 可压缩到 snapshot_raw_archives。
+- 旧 signals.feature_json 可压缩到 signal_feature_archives。
+- prediction dataset 只在 signal 仍是 compact 占位符时还原 archive，避免覆盖后续修复重写。
 
-- 先理解当前后端数据流、表结构、worker 行为，再设计迁移方案
-- 当前旧库是 SQLite，但旧历史数据不是绝对可信，不要默认全量原样迁移
-- 迁移目标应该优先保证“新库干净、可持续跑、可回放”，而不是机械复制旧库
-- 如果你建议保留旧数据，请明确说明哪些表值得迁，哪些不值得迁
-- 如果文档和代码不一致，以代码现状为准，并指出差异
-- 请把迁移方案拆成：
-  - 新库 schema
-  - 数据保留策略
-  - 初始化策略
-  - 回填策略
-  - 切换步骤
-  - 风险点
-- 如果需要新增脚本或命令，请一起说明
+迁移或存储方案请明确：
+- 哪些表值得迁移
+- 哪些数据可以重建
+- worker 如何无缝继续跑
+- 如何避免把旧脏数据带入新库
+- 是否需要重新 seed Alpha universe
 
-当前背景：
-
-- 当前监控宇宙是 Binance Alpha / BSC
-- 当前后端主链路已稳定：
-  - Alpha token list -> pair seed -> snapshot -> cleaning -> feature -> signal -> outcome
-- 候选指标已经实现为实时计算，但尚未纳入正式评分
-- 新数据清洗链路已经接入
-- 旧库里的历史数据不打算无条件信任
-- 后续迁库时，倾向于：
-  - 新库建空表
-  - 重新同步 Alpha universe
-  - 只保留清洗后的新数据
-  - 谨慎决定是否迁移旧 snapshots/signals
-- 历史验证脚本已保留，可复用：
-  python3 -m token_meme_monitor validate-token-list
-
-迁移时请重点考虑这些问题：
-
-1. 哪些表应该迁？
-2. 哪些表可以重建，不值得迁？
-3. 如何保证迁移后 worker 能无缝继续跑？
-4. 如何避免把旧脏数据带进新库？
-5. 如何处理候选指标、币安标签、Top10持仓占比这些元数据字段？
-6. 是否需要做一次全量 Alpha re-seed？
-
-请先用简短语言复述你理解的迁移背景，再开始给方案。
-
-我这次迁库的目标数据库是：
-[这里填写目标数据库]
-
-额外约束：
-[这里填写约束]
+我这次的数据库/存储任务是：
+[在这里补任务]
 ```
-
----
-
-## 4. 新增指标接入模板
-
-适合继续做：
-
-- 将候选指标正式接入评分
-- 接新数据源
-- 调整特征或风险标记
-
-模板：
-
-```text
-请先阅读并以以下文档为上下文基线：
-
-1. docs/signal-indicator-baseline.md
-2. docs/backend-core-logic.md
-
-当前任务是“新增或启用指标”，请优先关注后端逻辑和策略一致性，不处理 UI。
-
-工作要求：
-
-- 先确认当前指标是否已在文档中登记
-- 如果是候选指标，要先说明为什么现在值得进入正式评分
-- 如果是新指标，要先更新文档，再改代码，再补测试
-- 明确说明该指标属于：
-  - 原始输入
-  - 派生特征
-  - 风险标记
-  - 评分规则
-  - 状态/告警门槛
-- 说明：
-  - 数据来源
-  - 实时可用性
-  - 历史回测可用性
-  - 对不同市值桶的适用性
-
-当前背景：
-
-- 当前已有但未正式纳入评分的候选指标包括：
-  - market_cap_bucket
-  - volume_impulse_vs_prev24h
-  - volume_impulse_vs_prev72h
-  - h1_return_live
-  - h4_return_live
-  - h24_return_live
-- 当前正式评分仍是 v1 固定规则
-- 当前原则是：
-  - 先记录
-  - 再观察
-  - 最后再进入告警
-
-请先说明你建议接入哪个指标，以及为什么。
-
-我要接入/讨论的指标是：
-[在这里补指标名]
-```
-
----
 
 ## 5. 回测分析模板
 
-适合继续做：
-
-- token list 历史验证
-- 指标命中分析
-- 市值分层效果分析
-- 对“是否提前识别”做判断
-
-模板：
-
 ```text
-请先阅读并以以下文档为上下文基线：
+项目路径：/Users/zjj/vs_code/token-meme-monitor
 
-1. docs/signal-indicator-baseline.md
-2. docs/backend-core-logic.md
+请先阅读：
+- README.md
+- docs/backend-core-logic.md
 
-当前任务是做历史验证 / 回测分析，请优先关注后端和策略，不处理 UI。
+当前可用命令：
+- ./.venv/bin/python -m token_meme_monitor validate-token-list
+- ./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes --limit 10000
+- ./.venv/bin/python -m token_meme_monitor backtest-predictions --max-price-divergence-pct 0.10
+- ./.venv/bin/python -m token_meme_monitor scheduled-backtest-report --max-price-divergence-pct 0.10
 
-工作要求：
+分析时请区分：
+- token list 事后锚点验证
+- stored prediction dataset 的事件级 walk-forward
+- dashboard 外部趋势展示
+- p4 校准可用的 signal_prediction_outcomes
 
-- 先确认当前回测脚本是否适合这次任务
-- 不要假设所有实时指标都能被历史回放
-- 请明确区分：
-  - 可严格历史重建的指标
-  - 只能近似验证的指标
-  - 当前无法回测的指标
-- 输出结果时，请至少给出：
-  - 样本数
-  - 市值桶分布
-  - 结果分布
-  - 每个 token 的主要命中项与缺失项
-
-当前背景：
-
-- 当前历史验证命令：
-  python3 -m token_meme_monitor validate-token-list
-- 历史验证输出：
-  - data/backtests/token_list_validation.json
-  - data/backtests/token_list_validation.md
-- 当前回测主要使用：
-  - GeckoTerminal 历史 OHLCV
-  - Binance Alpha 当前参考值
-- 当前策略更偏确认型，不是最早期抄底型
-
-请先说明这次回测准备怎么定义“上涨前窗口”和“有效上涨”。
-
-我这次要分析的 token 集或问题是：
+我这次要分析的是：
 [在这里补内容]
 ```
 
----
-
 ## 6. 极简模板
 
-如果只想快速开一个新会话，可以直接用这个：
-
 ```text
-先看：
-- docs/backend-core-logic.md
-- docs/signal-indicator-baseline.md
+项目路径：/Users/zjj/vs_code/token-meme-monitor
 
-当前项目以后端逻辑为主，监控宇宙是 Binance Alpha / BSC。
-请沿用现有策略基线，不要重新定义背景。
-如果文档和代码不一致，以代码为准并指出差异。
+先看 README.md 和 docs/backend-core-logic.md。
+如果是前端任务，再看 docs/frontend-dashboard-ui.md。
+
+以当前代码行为为准；如果文档不一致，同步修正文档。
 
 我这次要你继续做的是：
 [任务]

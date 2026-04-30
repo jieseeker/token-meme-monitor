@@ -125,6 +125,16 @@ class DatabaseTests(unittest.TestCase):
             self.assertIn('"buy_sell_ratio_h1":4.0', restored_features)
             repo._conn.execute(
                 "UPDATE signals SET feature_json = ? WHERE id = ?",
+                ('{"price_usd":2.0,"repair_metric":9}', signal_id),
+            )
+            repo._conn.commit()
+            repaired_dataset_rows = repo.list_prediction_dataset_rows()
+            repaired_features = repaired_dataset_rows[0]["feature_json"]
+            self.assertIn('"repair_metric":9', repaired_features)
+            self.assertIn('"price_usd":2.0', repaired_features)
+            self.assertNotIn('"experimental_metric":123', repaired_features)
+            repo._conn.execute(
+                "UPDATE signals SET feature_json = ? WHERE id = ?",
                 ('{"_history_compacted":true,"buy_sell_ratio_h1":4.0,"price_usd":1.0}', signal_id),
             )
             repo._conn.commit()

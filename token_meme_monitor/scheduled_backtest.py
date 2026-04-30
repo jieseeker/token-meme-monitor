@@ -6,8 +6,11 @@ from typing import Any, Callable, Mapping
 from token_meme_monitor.database import MonitorRepository
 from token_meme_monitor.prediction_backtest import build_prediction_backtest_report
 from token_meme_monitor.prediction_outcomes import compute_prediction_outcome_with_hourly_ohlcv
-from token_meme_monitor.utils import json_dumps, json_loads, parse_datetime, safe_float, safe_int, utcnow
+from token_meme_monitor.strategy_feedback import build_strategy_feedback_report, compact_strategy_feedback_summary
+from token_meme_monitor.utils import isoformat_utc, json_dumps, json_loads, parse_datetime, safe_float, safe_int, utcnow
 
+
+SCHEDULED_BACKTEST_STATE_CACHE_KEY = "runtime:scheduled_backtest:last_run"
 
 OVEREXTENDED_REASONS = {
     "prediction_overextended_h1",
@@ -35,67 +38,131 @@ def run_scheduled_backtest_cycle(
     refresh_missing_quality: bool = False,
     skip_refresh_outcomes: bool = False,
 ) -> dict[str, Any]:
-    now = utcnow()
-    refreshed = 0
-    skipped = 0
+    try:
+        started_at = utcnow()
+        now = started_at
+        refreshed = 0
+        skipped = 0
+        repo = MonitorRepository(database_path)
+        repo.initialize()
+        try:
+            if not skip_refresh_outcomes:
+                outcome_rows = repo.list_predictions_needing_outcomes(
+                    now,
+                    limit=refresh_outcome_limit,
+                    include_missing_quality=refresh_missing_quality,
+                )
+                for row in outcome_rows:
+                    observed_at = parse_datetime(row.get("observed_at"))
+                    if observed_at is None:
+                        continue
+                    outcome = compute_prediction_outcome_with_hourly_ohlcv(
+                        repo,
+                        pair_address=row["pair_address"],
+                        observed_at=observed_at,
+                        feature_json=row.get("feature_json"),
+                        network=chain_id,
+                        now=now,
+                    )
+                    if outcome is None:
+                        skipped += 1
+                        continue
+                    repo.upsert_prediction_outcome(int(row["signal_id"]), outcome, evaluated_at=now)
+                    refreshed += 1
+            rows = repo.list_prediction_dataset_rows(limit=limit)
+        finally:
+            repo.close()
+
+        report = build_scheduled_backtest_report(
+            rows,
+            train_ratio=train_ratio,
+            max_price_divergence_pct=max_price_divergence_pct,
+            top_gainers_limit=top_gainers_limit,
+            strong_gainer_return_threshold=strong_gainer_return_threshold,
+            generated_at=now,
+        )
+        write_scheduled_backtest_outputs(report, json_path=json_out, markdown_path=md_out)
+        archive_json = None
+        archive_md = None
+        if archive:
+            archive_stamp = now.strftime("%Y%m%d-%H%M")
+            archive_path = Path(archive_dir)
+            archive_json = archive_path / f"{archive_stamp}.json"
+            archive_md = archive_path / f"{archive_stamp}.md"
+            write_scheduled_backtest_outputs(report, json_path=str(archive_json), markdown_path=str(archive_md))
+
+        result = {
+            "report": report,
+            "refreshed": refreshed,
+            "skipped": skipped,
+            "json_out": json_out,
+            "md_out": md_out,
+            "archive_json": str(archive_json) if archive_json else "",
+            "archive_md": str(archive_md) if archive_md else "",
+            "ran_at": now.isoformat(timespec="seconds"),
+        }
+        finished_at = utcnow()
+        record_scheduled_backtest_state(
+            database_path,
+            status="success",
+            started_at=started_at,
+            finished_at=finished_at,
+            summary={
+                **dict(report.get("summary") or {}),
+                "refreshed": refreshed,
+                "skipped": skipped,
+                "json_out": json_out,
+                "md_out": md_out,
+                "archive_json": result["archive_json"],
+                "archive_md": result["archive_md"],
+            },
+        )
+        return result
+    except Exception as exc:
+        finished_at = utcnow()
+        try:
+            record_scheduled_backtest_state(
+                database_path,
+                status="failure",
+                started_at=started_at if "started_at" in locals() else finished_at,
+                finished_at=finished_at,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:
+            pass
+        raise
+
+
+def record_scheduled_backtest_state(
+    database_path: str,
+    *,
+    status: str,
+    started_at: Any,
+    finished_at: Any,
+    summary: Mapping[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    started = parse_datetime(str(started_at)) if isinstance(started_at, str) else started_at
+    finished = parse_datetime(str(finished_at)) if isinstance(finished_at, str) else finished_at
+    duration_seconds = None
+    if started is not None and finished is not None:
+        duration_seconds = round((finished - started).total_seconds(), 3)
+    value: dict[str, Any] = {
+        "name": "scheduled_backtest",
+        "status": status,
+        "started_at": isoformat_utc(started),
+        "finished_at": isoformat_utc(finished),
+        "duration_seconds": duration_seconds,
+        "summary": dict(summary or {}),
+    }
+    if error:
+        value["error"] = error
     repo = MonitorRepository(database_path)
     repo.initialize()
     try:
-        if not skip_refresh_outcomes:
-            outcome_rows = repo.list_predictions_needing_outcomes(
-                now,
-                limit=refresh_outcome_limit,
-                include_missing_quality=refresh_missing_quality,
-            )
-            for row in outcome_rows:
-                observed_at = parse_datetime(row.get("observed_at"))
-                if observed_at is None:
-                    continue
-                outcome = compute_prediction_outcome_with_hourly_ohlcv(
-                    repo,
-                    pair_address=row["pair_address"],
-                    observed_at=observed_at,
-                    feature_json=row.get("feature_json"),
-                    network=chain_id,
-                    now=now,
-                )
-                if outcome is None:
-                    skipped += 1
-                    continue
-                repo.upsert_prediction_outcome(int(row["signal_id"]), outcome, evaluated_at=now)
-                refreshed += 1
-        rows = repo.list_prediction_dataset_rows(limit=limit)
+        repo.upsert_external_json_cache(SCHEDULED_BACKTEST_STATE_CACHE_KEY, value, fetched_at=finished)
     finally:
         repo.close()
-
-    report = build_scheduled_backtest_report(
-        rows,
-        train_ratio=train_ratio,
-        max_price_divergence_pct=max_price_divergence_pct,
-        top_gainers_limit=top_gainers_limit,
-        strong_gainer_return_threshold=strong_gainer_return_threshold,
-        generated_at=now,
-    )
-    write_scheduled_backtest_outputs(report, json_path=json_out, markdown_path=md_out)
-    archive_json = None
-    archive_md = None
-    if archive:
-        archive_stamp = now.strftime("%Y%m%d-%H%M")
-        archive_path = Path(archive_dir)
-        archive_json = archive_path / f"{archive_stamp}.json"
-        archive_md = archive_path / f"{archive_stamp}.md"
-        write_scheduled_backtest_outputs(report, json_path=str(archive_json), markdown_path=str(archive_md))
-
-    return {
-        "report": report,
-        "refreshed": refreshed,
-        "skipped": skipped,
-        "json_out": json_out,
-        "md_out": md_out,
-        "archive_json": str(archive_json) if archive_json else "",
-        "archive_md": str(archive_md) if archive_md else "",
-        "ran_at": now.isoformat(timespec="seconds"),
-    }
 
 
 def build_scheduled_backtest_report(
@@ -122,6 +189,14 @@ def build_scheduled_backtest_report(
     ]
     chase_signals = _chase_signals(rows, limit=top_gainers_limit, max_price_divergence_pct=max_price_divergence_pct)
     warnings = _calibration_warnings(backtest)
+    strategy_feedback = compact_strategy_feedback_summary(
+        build_strategy_feedback_report(
+            rows,
+            min_slice_events=30,
+            max_price_divergence_pct=max_price_divergence_pct,
+            generated_at=generated,
+        )
+    )
     return {
         "generated_at": generated_text,
         "mode": "scheduled_backtest_report",
@@ -139,9 +214,11 @@ def build_scheduled_backtest_report(
             "missed_strong_gainer_count": len(missed_strong_gainers),
             "chase_signal_count": len(chase_signals),
             "warning_count": len(warnings),
+            "strategy_recommendation_count": strategy_feedback.get("recommendation_count", 0),
         },
         "warnings": warnings,
         "backtest": backtest,
+        "strategy_feedback": strategy_feedback,
         "top_gainers": top_gainers,
         "missed_strong_gainers": missed_strong_gainers,
         "chase_signals": chase_signals,
@@ -166,6 +243,7 @@ def render_scheduled_backtest_markdown(report: Mapping[str, Any]) -> str:
         f"- 疑似漏抓: `{summary.get('missed_strong_gainer_count', 0)}`",
         f"- 疑似追高: `{summary.get('chase_signal_count', 0)}`",
         f"- 2h 预测/实际: `{_format_pct(aggregate.get('avg_prob_2h_up20'))}` / `{_format_pct(aggregate.get('actual_2h_up20_rate'))}`",
+        f"- 策略反馈建议数: `{(report.get('strategy_feedback') or {}).get('recommendation_count', 0)}`",
     ]
     warnings = report.get("warnings") or []
     if warnings:

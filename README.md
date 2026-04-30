@@ -1,172 +1,195 @@
 # Token Meme Monitor
 
-Long-lived BSC meme token monitoring stack with:
+Binance Alpha / BSC meme token monitoring stack.
 
-- PancakeSwap V2 `PairCreated` discovery via on-chain block scanning
-- DexScreener pair snapshots as an external market-data enhancer
-- Configurable rule engine with reasons, risk flags, and lifecycle states
-- Telegram alert deduplication with cooldowns
-- Streamlit dashboard reading from the same local database
+The current project is not a generic all-chain pair scanner. It monitors the Binance Alpha BSC universe, refreshes pair market data, writes local SQLite history, computes rule signals and p4 prediction scores, and exposes the result through a Streamlit dashboard plus scheduled backtest reports.
 
-This repository implements the first production-minded slice of the long-term plan:
-
-- `discovery pool`: minute-level discovery and tracking of newly created pairs
-- `focus pool`: higher-frequency refresh for stronger candidates
-- `signals`: score + reasons + risk flags + alert candidate output
-- dashboard history uses locally cached external interval returns for 2h / 24h review instead of local outcome labels
-- historical GeckoTerminal OHLCV used by validation is cached in SQLite after first fetch
-
-The default monitoring universe now targets `Binance Alpha` tokens on BSC instead of all newly created BSC pairs.
-
-## Project layout
+## Project Layout
 
 ```text
 token-meme-monitor/
 ├── dashboard/
-│   └── app.py
+│   ├── app.py
+│   └── view_models.py
+├── docs/
+│   ├── backend-core-logic.md
+│   ├── frontend-dashboard-ui.md
+│   └── session-prompt-templates.md
+├── openspec/
+│   └── changes/
 ├── tests/
 ├── token_meme_monitor/
 │   ├── clients/
-│   ├── alerts.py
 │   ├── cli.py
 │   ├── config.py
-│   ├── constants.py
 │   ├── database.py
-│   ├── features.py
-│   ├── logging_config.py
-│   ├── models.py
+│   ├── health.py
 │   ├── orchestrator.py
-│   ├── signals.py
-│   └── utils.py
+│   ├── prediction_backtest.py
+│   ├── prediction_outcomes.py
+│   ├── predictions.py
+│   ├── scheduled_backtest.py
+│   └── signals.py
 ├── .env.example
-├── main.py
-├── pyproject.toml
-└── requirements.txt
+├── restart.sh
+├── requirements.txt
+└── pyproject.toml
 ```
 
-## Quick start
+`data/` contains local SQLite data and generated reports. It is ignored by git and is not source documentation.
 
-1. Create a virtual environment and install dependencies.
-2. Copy `.env.example` to `.env` and fill in the values you want to override.
-3. Initialize the database.
-4. Run the worker.
-5. Run the scheduled backtest worker in a separate shell.
-6. Run the dashboard in a separate shell.
+## Quick Start
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python3 -m token_meme_monitor healthcheck
-python3 -m token_meme_monitor init-db
-python3 -m token_meme_monitor run-worker
-python3 -m token_meme_monitor run-scheduled-backtest-worker
-streamlit run dashboard/app.py
+./.venv/bin/python -m token_meme_monitor init-db
 ```
 
-Recommended local runtime uses three terminals:
-
-| Service | Command | Responsibility | Main dependencies | Output |
-| --- | --- | --- | --- | --- |
-| Realtime monitor worker | `./.venv/bin/python -m token_meme_monitor run-worker` | Discovers new pools, refreshes market data, computes signals, writes predictions | BSC RPC, Binance Alpha, DexScreener, GeckoTerminal | SQLite `pairs`, `snapshots`, `signals`, `signal_predictions` |
-| Scheduled backtest worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | Refreshes mature outcomes every 4 hours, runs backtests, writes missed/chase reports | Local SQLite, GeckoTerminal when outcome backfill is needed | `data/backtests/scheduled/latest.md`, `latest.json` |
-| Dashboard | `./.venv/bin/streamlit run dashboard/app.py` | Shows candidate list, token detail, prediction, history, and trend views | Local SQLite; detail trend reads local cache first and may call GeckoTerminal on misses | `http://127.0.0.1:8501` |
+Start or restart the local runtime:
 
 ```bash
-# Terminal 1: realtime monitor worker
+./restart.sh
+```
+
+Check runtime status:
+
+```bash
+./restart.sh status
+```
+
+Stop runtime services:
+
+```bash
+./restart.sh stop
+```
+
+The dashboard runs at:
+
+```text
+http://127.0.0.1:8501
+```
+
+## Runtime Services
+
+The local runtime has three processes:
+
+| Service | Command | Responsibility |
+| --- | --- | --- |
+| Realtime worker | `./.venv/bin/python -m token_meme_monitor run-worker` | Refreshes Alpha universe, pair snapshots, signals, predictions, outcomes, holder side job |
+| Scheduled backtest worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | Refreshes mature prediction outcomes and writes scheduled reports |
+| Dashboard | `./.venv/bin/streamlit run dashboard/app.py` | Reads local SQLite and renders candidate list, token detail, predictions, history, and trends |
+
+`restart.sh` starts all three in the background and writes logs/PIDs under `/tmp/token-meme-monitor/`. `./restart.sh status` uses the structured runtime status command and reports stale PID files, command mismatches, log paths, log sizes, and the dashboard URL. `./restart.sh rotate-logs` rotates local runtime logs when they exceed `LOG_MAX_BYTES` (default 10 MB).
+
+## CLI Commands
+
+```bash
+./.venv/bin/python -m token_meme_monitor init-db
+./.venv/bin/python -m token_meme_monitor print-config
+./.venv/bin/python -m token_meme_monitor healthcheck
+./.venv/bin/python -m token_meme_monitor health-report
+./.venv/bin/python -m token_meme_monitor health-report --json
+./.venv/bin/python -m token_meme_monitor runtime-status
+./.venv/bin/python -m token_meme_monitor runtime-status --json
+./.venv/bin/python -m token_meme_monitor lifecycle-inventory --json
+./.venv/bin/python -m token_meme_monitor lifecycle-integrity --json
+./.venv/bin/python -m token_meme_monitor retention-plan --older-than-days 14 --json
+./.venv/bin/python -m token_meme_monitor run-worker --once
 ./.venv/bin/python -m token_meme_monitor run-worker
+./.venv/bin/python -m token_meme_monitor cleanup-data
+./.venv/bin/python -m token_meme_monitor validate-token-list
+./.venv/bin/python -m token_meme_monitor export-prediction-dataset
+./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes
+./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes --refresh-missing-quality
+./.venv/bin/python -m token_meme_monitor refresh-risk-enrichment --fixture-json risk-fixture.json
+./.venv/bin/python -m token_meme_monitor rebuild-predictions
+./.venv/bin/python -m token_meme_monitor backtest-predictions
+./.venv/bin/python -m token_meme_monitor strategy-feedback-report
+./.venv/bin/python -m token_meme_monitor scheduled-backtest-report
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker --once
+./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --dry-run
+./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --execute
 ```
-
-```bash
-# Terminal 2: scheduled backtest worker, every 4 hours
-./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker \
-  --interval-seconds 14400 \
-  --max-price-divergence-pct 0.10 \
-  --refresh-outcome-limit 1000
-```
-
-```bash
-# Terminal 3: dashboard
-./.venv/bin/streamlit run dashboard/app.py
-```
-
-## Commands
-
-```bash
-python3 -m token_meme_monitor init-db
-python3 -m token_meme_monitor print-config
-python3 -m token_meme_monitor healthcheck
-python3 -m token_meme_monitor run-worker --once
-python3 -m token_meme_monitor run-worker
-python3 -m token_meme_monitor run-scheduled-backtest-worker --once
-python3 -m token_meme_monitor run-scheduled-backtest-worker
-python3 -m token_meme_monitor cleanup-data
-python3 -m token_meme_monitor validate-token-list
-```
-
-## Default behavior
-
-- Uses PancakeSwap V2 factory events on BNB Smart Chain.
-- Seeds and refreshes BSC tokens from the official Binance Alpha token list.
-- Tracks only pairs where one side is an allowlisted quote asset (`WBNB`, `USDT`, `USDC`, `BUSD` by default).
-- Stores all discovery, snapshot, signal, and alert data in SQLite.
-- Runs safely without Telegram if bot credentials are omitted.
 
 ## Configuration
 
-All runtime settings are environment-driven. Important variables:
+Runtime settings are environment-driven. Copy `.env.example` to `.env` and override as needed.
 
+Important variables:
+
+- `MONITOR_DATABASE_PATH`
+- `MONITOR_UNIVERSE`
 - `BSC_RPC_URL`
 - `BSC_RPC_URLS`
-- `MONITOR_DATABASE_PATH`
 - `DISCOVERY_START_BLOCK`
 - `DISCOVERY_INITIAL_BACKFILL_BLOCKS`
+- `DISCOVERY_BLOCK_CHUNK_SIZE`
+- `DISCOVERY_BLOCK_CONFIRMATIONS`
+- `WORKER_LOOP_SECONDS`
+- `MAX_PAIRS_PER_CYCLE`
 - `BASE_POLL_INTERVAL_SECONDS`
 - `FOCUS_POLL_INTERVAL_SECONDS`
-- `ALERT_SCORE_THRESHOLD`
+- `MIN_LIQUIDITY_USD`
+- `ARCHIVE_LIQUIDITY_USD`
+- `MIN_VOLUME_H1_USD`
 - `FOCUS_SCORE_THRESHOLD`
+- `ALERT_SCORE_THRESHOLD`
+- `BINANCE_ALPHA_REFRESH_MINUTES`
+- `BINANCE_ALPHA_PAIR_SEED_REFRESH_MINUTES`
+- `BINANCE_ALPHA_SEED_BATCH_SIZE`
+- `HOLDER_METRICS_JOB_INTERVAL_SECONDS`
+- `HOLDER_METRICS_REFRESH_HOURS`
+- `HOLDER_METRICS_BATCH_SIZE`
 - `BINANCE_FUTURES_REGISTRY_REFRESH_HOURS`
+- `RISK_ENRICHMENT_FIXTURE_PATH`
+- `RISK_ENRICHMENT_TTL_HOURS`
+- `RISK_ENRICHMENT_BATCH_SIZE`
+- `DASHBOARD_AUTO_REFRESH_SECONDS`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-See `.env.example` for the full list.
+`BSC_RPC_URLS` can contain a comma-separated endpoint pool. The worker cools down RPC endpoints that return provider-limit errors and switches discovery to another endpoint when available.
 
-`BSC_RPC_URL` / `BSC_RPC_URLS` matter more than any other setting. Public endpoints differ a lot on:
+## Current Behavior
 
-- `eth_getLogs` limits
-- rate limiting
-- DNS reliability
-- archival depth
+- Default universe is `MONITOR_UNIVERSE=binance_alpha`.
+- DexScreener pair snapshots are validated before being written.
+- Market data is sanitized before feature generation.
+- Signal scoring is rule-based strategy `v1`.
+- Prediction scoring is p4 and writes horizon-specific scores: `short_momentum_score`, `continuation_score`, and `breakout_score`.
+- Mature prediction outcomes are computed from GeckoTerminal hourly OHLCV and used for calibration/backtesting.
+- `strategy-feedback-report` writes versioned feedback runs that compare prediction outcomes by stable slices and emits review-only recommendations.
+- Risk enrichment is observation-only: optional providers can write `risk_snapshots`, and health/dashboard read models can display unknown/failure/high-risk state, but scoring and alert gating are unchanged.
+- Dashboard main sorting uses `short_momentum_score` with `opportunity_score` as a compatibility fallback.
+- Dashboard detail includes a decision workbench view that connects signal, prediction, outcome, and CSV case export; local review notes/watchlist are stored separately from scoring tables.
+- `compact-history` archives old raw payloads while keeping prediction dataset reads compatible with compacted rows.
+- Lifecycle commands are read-only by default: `lifecycle-inventory`, `lifecycle-integrity`, and `retention-plan` expose database growth, integrity findings, and dry-run cleanup candidates.
 
-The default `.env.example` value uses `https://bnb.rpc.subquery.network/public` because the official `dataseed` public endpoints were observed to reject `eth_getLogs` discovery traffic in live testing.
+## Documentation
 
-Set `BSC_RPC_URLS` to a comma-separated endpoint pool when you have multiple RPC providers. The worker cools down endpoints that return provider-limit errors such as `429` / `418`, then switches discovery to the next available endpoint. Binance futures registry labels are cached in SQLite and refreshed only every `BINANCE_FUTURES_REGISTRY_REFRESH_HOURS`; failed refreshes use the last cached registry when available.
+- [docs/backend-core-logic.md](docs/backend-core-logic.md): backend, signal, prediction, storage, worker, and CLI baseline
+- [docs/frontend-dashboard-ui.md](docs/frontend-dashboard-ui.md): dashboard structure, interaction rules, and UI constraints
+- [docs/session-prompt-templates.md](docs/session-prompt-templates.md): short context templates for new coding sessions
+- `openspec/changes/`: historical change artifacts and project memory
 
-Run `python3 -m token_meme_monitor healthcheck` before the worker. If discovery stalls or raises provider-limit errors, switch to a more reliable RPC before changing scoring logic.
+## Testing
 
-## Current scope and intentional gaps
+```bash
+./.venv/bin/python -m unittest discover -s tests
+```
 
-This version is meant to be a stable V1 base, not a finished trading-grade stack.
+## Intentional Gaps
 
-信号策略基线文档：
+The current baseline does not yet use observation-only risk enrichment for:
 
-- [docs/signal-indicator-baseline.md](/Users/zjj/vs_code/token-meme-monitor/docs/signal-indicator-baseline.md)
-- [docs/backend-core-logic.md](/Users/zjj/vs_code/token-meme-monitor/docs/backend-core-logic.md)
-- [docs/session-prompt-templates.md](/Users/zjj/vs_code/token-meme-monitor/docs/session-prompt-templates.md)
-- [docs/frontend-dashboard-ui.md](/Users/zjj/vs_code/token-meme-monitor/docs/frontend-dashboard-ui.md)
-
-- Included:
-  - block-cursor discovery
-  - persistent snapshots
-  - rule-based scoring
-  - alert cooldowns
-  - dashboard
-- Not yet included:
-  - contract-level honeypot and tax simulation
-  - owner privilege inspection
-  - LP lock / burn verification
-  - multi-chain support
-  - PostgreSQL migration path
-
-The data model and worker boundaries are set up so those pieces can be added later without rewriting the core pipeline.
+- tax / honeypot risk scoring
+- owner permission scoring
+- LP lock / burn scoring
+- real-time holder concentration scoring
+- multi-chain strategy abstraction
+- local GPU or deep learning models
+- multi-worker concurrent SQLite writes

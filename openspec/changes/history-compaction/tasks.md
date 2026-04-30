@@ -9,7 +9,7 @@
 
 - [x] 2.1 Add dry-run estimate method
 - [x] 2.2 Add actual compaction method
-- [x] 2.3 Restore archived full features for prediction dataset reads
+- [x] 2.3 Restore archived full features for prediction dataset reads only while the signal row remains compacted
 
 ## 3. CLI
 

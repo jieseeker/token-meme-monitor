@@ -1,19 +1,28 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from token_meme_monitor.data_lifecycle import build_lifecycle_integrity_report
 from token_meme_monitor.database import MonitorRepository
+from token_meme_monitor.scheduled_backtest import SCHEDULED_BACKTEST_STATE_CACHE_KEY
+from token_meme_monitor.utils import parse_datetime, utcnow
 
 
 def build_health_report(repo: MonitorRepository, *, database_path: str) -> dict[str, Any]:
-    return {
+    report = {
         "database": _database_stats(repo, database_path),
         "pairs": _pair_stats(repo),
         "alpha_seed": _alpha_seed_stats(repo),
         "predictions": _prediction_stats(repo),
         "outcomes": _outcome_stats(repo),
+        "risk_enrichment": _risk_enrichment_stats(repo),
+        "lifecycle": _lifecycle_stats(repo),
+        "scheduled_jobs": _scheduled_job_stats(repo),
     }
+    report["severity"] = _severity(report)
+    return report
 
 
 def render_health_report(report: dict[str, Any]) -> str:
@@ -21,14 +30,22 @@ def render_health_report(report: dict[str, Any]) -> str:
     pairs = report.get("pairs") or {}
     predictions = report.get("predictions") or {}
     outcomes = report.get("outcomes") or {}
+    risk = report.get("risk_enrichment") or {}
+    lifecycle = report.get("lifecycle") or {}
     alpha_seed = report.get("alpha_seed") or {}
+    scheduled = (report.get("scheduled_jobs") or {}).get("scheduled_backtest") or {}
+    severity = report.get("severity") or {}
     lines = [
         "Backend Health Report",
+        f"- Overall: {severity.get('status', 'unknown')}",
         f"- DB size: {database.get('size_mb')} MB",
         f"- Pairs: total={pairs.get('total')} active={pairs.get('active')} stale_active={pairs.get('stale_active_pairs')} no_snapshot_active={pairs.get('no_snapshot_active_pairs')}",
         f"- Alpha seed: total={alpha_seed.get('total')} seeded={alpha_seed.get('seeded')} seed_failed={alpha_seed.get('seed_failed')}",
         f"- Predictions: total={predictions.get('total')} mature_missing_outcomes={predictions.get('mature_missing_outcomes')}",
         f"- Outcomes: total={outcomes.get('total')} unknown_quality={outcomes.get('unknown_quality_rows')} price_divergence_gt10={outcomes.get('price_divergence_gt10')}",
+        f"- Risk enrichment: total={risk.get('total')} high={risk.get('high_risk')} failures={risk.get('failures')}",
+        f"- Lifecycle: status={lifecycle.get('status')} findings={lifecycle.get('finding_count')}",
+        f"- Scheduled backtest: status={scheduled.get('status')} finished_at={scheduled.get('finished_at')} error={scheduled.get('error') or ''}",
     ]
     return "\n".join(lines)
 
@@ -73,7 +90,7 @@ def _pair_stats(repo: MonitorRepository) -> dict[str, Any]:
             count(*) AS total,
             COALESCE(sum(active), 0) AS active,
             count(DISTINCT token_address) AS tokens,
-            COALESCE(sum(CASE WHEN active = 1 AND (last_snapshot_at IS NULL OR last_snapshot_at <= datetime('now', '-30 minutes')) THEN 1 ELSE 0 END), 0) AS stale_active_pairs,
+            COALESCE(sum(CASE WHEN active = 1 AND (last_snapshot_at IS NULL OR unixepoch(last_snapshot_at) <= unixepoch('now', '-30 minutes')) THEN 1 ELSE 0 END), 0) AS stale_active_pairs,
             COALESCE(sum(CASE WHEN active = 1 AND last_snapshot_at IS NULL THEN 1 ELSE 0 END), 0) AS no_snapshot_active_pairs
         FROM pairs
         """
@@ -133,7 +150,7 @@ def _prediction_stats(repo: MonitorRepository) -> dict[str, Any]:
         FROM signal_predictions pred
         LEFT JOIN signal_prediction_outcomes outcome ON outcome.signal_id = pred.signal_id
         WHERE outcome.signal_id IS NULL
-          AND pred.observed_at <= datetime('now', '-25 hours')
+          AND unixepoch(pred.observed_at) <= unixepoch('now', '-25 hours')
         """,
     )
     return {
@@ -178,6 +195,142 @@ def _outcome_stats(repo: MonitorRepository) -> dict[str, Any]:
         or 0,
         "quality": quality,
     }
+
+
+def _scheduled_job_stats(repo: MonitorRepository) -> dict[str, Any]:
+    cached = repo.get_external_json_cache(SCHEDULED_BACKTEST_STATE_CACHE_KEY)
+    if cached is None:
+        return {
+            "scheduled_backtest": {
+                "name": "scheduled_backtest",
+                "status": "unknown",
+                "started_at": None,
+                "finished_at": None,
+                "duration_seconds": None,
+                "summary": {},
+            }
+        }
+    value = cached.get("value") or {}
+    return {
+        "scheduled_backtest": {
+            "name": value.get("name") or "scheduled_backtest",
+            "status": value.get("status") or "unknown",
+            "started_at": value.get("started_at"),
+            "finished_at": value.get("finished_at"),
+            "duration_seconds": value.get("duration_seconds"),
+            "summary": value.get("summary") if isinstance(value.get("summary"), dict) else {},
+            "error": value.get("error"),
+            "recorded_at": cached.get("fetched_at"),
+        }
+    }
+
+
+def _risk_enrichment_stats(repo: MonitorRepository) -> dict[str, Any]:
+    snapshots = repo.list_latest_risk_snapshots()
+    provider_counts: dict[str, int] = {}
+    for item in snapshots:
+        provider = str(item.get("provider") or "unknown")
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+    return {
+        "total": len(snapshots),
+        "ok": sum(1 for item in snapshots if item.get("status") == "ok"),
+        "failures": sum(1 for item in snapshots if item.get("status") == "failure"),
+        "high_risk": sum(1 for item in snapshots if item.get("risk_level") == "high"),
+        "unknown_risk": sum(1 for item in snapshots if item.get("risk_level") == "unknown"),
+        "providers": provider_counts,
+    }
+
+
+def _lifecycle_stats(repo: MonitorRepository) -> dict[str, Any]:
+    report = build_lifecycle_integrity_report(repo)
+    return {
+        "status": report.get("status"),
+        "finding_count": report.get("finding_count", 0),
+        "findings": report.get("findings", {}),
+    }
+
+
+def _severity(report: dict[str, Any]) -> dict[str, Any]:
+    checks = {
+        "database_size": _database_size_severity(report.get("database") or {}),
+        "stale_active_pairs": _stale_pair_severity(report.get("pairs") or {}),
+        "mature_missing_outcomes": _missing_outcome_severity(report.get("predictions") or {}),
+        "lifecycle": _lifecycle_severity(report.get("lifecycle") or {}),
+        "scheduled_backtest": _scheduled_backtest_severity(
+            ((report.get("scheduled_jobs") or {}).get("scheduled_backtest") or {})
+        ),
+    }
+    overall = "ok"
+    for check in checks.values():
+        overall = _max_status(overall, str(check.get("status") or "ok"))
+    return {"status": overall, "checks": checks}
+
+
+def _database_size_severity(database: dict[str, Any]) -> dict[str, Any]:
+    size_mb = float(database.get("size_mb") or 0.0)
+    status = "ok"
+    if size_mb >= 2048:
+        status = "critical"
+    elif size_mb >= 512:
+        status = "warn"
+    return {"status": status, "size_mb": size_mb, "warn_at_mb": 512, "critical_at_mb": 2048}
+
+
+def _stale_pair_severity(pairs: dict[str, Any]) -> dict[str, Any]:
+    stale = int(pairs.get("stale_active_pairs") or 0)
+    active = int(pairs.get("active") or 0)
+    status = "ok"
+    if stale > 0:
+        status = "critical" if active > 0 and stale >= active else "warn"
+    return {"status": status, "stale_active_pairs": stale, "active": active}
+
+
+def _missing_outcome_severity(predictions: dict[str, Any]) -> dict[str, Any]:
+    missing = int(predictions.get("mature_missing_outcomes") or 0)
+    status = "ok"
+    if missing >= 100:
+        status = "critical"
+    elif missing > 0:
+        status = "warn"
+    return {"status": status, "mature_missing_outcomes": missing, "critical_at": 100}
+
+
+def _lifecycle_severity(lifecycle: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": lifecycle.get("status") or "ok",
+        "finding_count": lifecycle.get("finding_count", 0),
+    }
+
+
+def _scheduled_backtest_severity(job: dict[str, Any]) -> dict[str, Any]:
+    status = str(job.get("status") or "unknown")
+    finished_at = parse_datetime(str(job.get("finished_at"))) if job.get("finished_at") else None
+    if status == "failure":
+        return {"status": "critical", "job_status": status, "finished_at": job.get("finished_at"), "error": job.get("error")}
+    if status == "unknown":
+        return {"status": "warn", "job_status": status, "finished_at": None}
+    if status == "success" and finished_at is not None:
+        age = utcnow() - finished_at
+        if age >= timedelta(hours=24):
+            return {
+                "status": "critical",
+                "job_status": status,
+                "finished_at": job.get("finished_at"),
+                "age_seconds": round(age.total_seconds(), 3),
+            }
+        if age >= timedelta(hours=8):
+            return {
+                "status": "warn",
+                "job_status": status,
+                "finished_at": job.get("finished_at"),
+                "age_seconds": round(age.total_seconds(), 3),
+            }
+    return {"status": "ok", "job_status": status, "finished_at": job.get("finished_at")}
+
+
+def _max_status(left: str, right: str) -> str:
+    rank = {"ok": 0, "warn": 1, "critical": 2}
+    return left if rank.get(left, 0) >= rank.get(right, 0) else right
 
 
 def _scalar(repo: MonitorRepository, query: str) -> Any:

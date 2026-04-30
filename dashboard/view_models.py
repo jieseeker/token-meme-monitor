@@ -528,6 +528,93 @@ def build_prediction_confidence(row: Mapping[str, Any]) -> PredictionConfidence:
     )
 
 
+def build_strategy_feedback_view(report: Mapping[str, Any] | None, *, limit: int = 3) -> dict[str, Any]:
+    if not report:
+        return {
+            "generated_at": None,
+            "prediction_count": 0,
+            "outcome_count": 0,
+            "missing_outcome_rate": None,
+            "recommendation_count": 0,
+            "top_recommendations": [],
+        }
+    summary = report.get("summary") or {}
+    recommendations = []
+    for item in list(report.get("recommendations") or [])[:limit]:
+        if not isinstance(item, Mapping):
+            continue
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), Mapping) else {}
+        dimension = str(item.get("dimension") or "")
+        slice_key = str(item.get("slice_key") or "")
+        recommendations.append(
+            {
+                "label": f"{dimension}:{slice_key}".strip(":"),
+                "action": item.get("suggested_action"),
+                "events": evidence.get("events"),
+                "lift_2h": evidence.get("lift_2h"),
+                "win_rate_2h": evidence.get("win_rate_2h"),
+                "risk_note": item.get("risk_note"),
+            }
+        )
+    return {
+        "generated_at": report.get("generated_at"),
+        "prediction_count": summary.get("prediction_count", 0),
+        "outcome_count": summary.get("outcome_count", 0),
+        "missing_outcome_rate": summary.get("missing_outcome_rate"),
+        "recommendation_count": summary.get("recommendation_count", len(report.get("recommendations") or [])),
+        "top_recommendations": recommendations,
+    }
+
+
+def build_risk_observation_view(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not snapshot:
+        return {
+            "label": "unknown",
+            "tone": "neutral",
+            "provider": None,
+            "reason": "no current risk snapshot",
+            "observation_only": True,
+        }
+    status = str(snapshot.get("status") or "unknown")
+    risk_level = str(snapshot.get("risk_level") or "unknown")
+    if status == "failure":
+        return {
+            "label": "unknown",
+            "tone": "warn",
+            "provider": snapshot.get("provider"),
+            "reason": snapshot.get("failure_reason") or "provider failure",
+            "observation_only": True,
+        }
+    tone_by_level = {
+        "high": "danger",
+        "medium": "warn",
+        "low": "good",
+        "unknown": "neutral",
+    }
+    return {
+        "label": risk_level,
+        "tone": tone_by_level.get(risk_level, "neutral"),
+        "provider": snapshot.get("provider"),
+        "reason": None,
+        "observation_only": True,
+    }
+
+
+def build_decision_workbench_view(queues: Mapping[str, list[Mapping[str, Any]]]) -> dict[str, Any]:
+    queue_counts = {name: len(items) for name, items in queues.items()}
+    unique_cases = {
+        str(case.get("case_id"))
+        for cases in queues.values()
+        for case in cases
+        if case.get("case_id")
+    }
+    return {
+        "queue_counts": queue_counts,
+        "total_cases": len(unique_cases),
+        "has_backlog": any(count > 0 for count in queue_counts.values()),
+    }
+
+
 def _build_display_tier(row: Mapping[str, Any]) -> dict[str, Any]:
     features = _json_dict(_row_get(row, "last_feature_json"))
     reasons = set(_json_list(_row_get(row, "last_reasons")))
