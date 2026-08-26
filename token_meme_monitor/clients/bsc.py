@@ -10,10 +10,19 @@ from web3.middleware import ExtraDataToPOAMiddleware
 from token_meme_monitor.constants import PANCAKESWAP_V2_FACTORY_ABI
 from token_meme_monitor.models import DiscoveredPair
 
+DEFAULT_RPC_TIMEOUT_SECONDS = 10
+
 
 class BscPairDiscoveryClient:
-    def __init__(self, rpc_url: str, factory_address: str, quote_tokens: dict[str, str]) -> None:
-        self._w3 = Web3(HTTPProvider(rpc_url))
+    def __init__(
+        self,
+        rpc_url: str,
+        factory_address: str,
+        quote_tokens: dict[str, str],
+        *,
+        timeout_seconds: int = DEFAULT_RPC_TIMEOUT_SECONDS,
+    ) -> None:
+        self._w3 = Web3(HTTPProvider(rpc_url, request_kwargs={"timeout": timeout_seconds}))
         self._w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self._factory_address = Web3.to_checksum_address(factory_address)
         self._factory = self._w3.eth.contract(address=self._factory_address, abi=PANCAKESWAP_V2_FACTORY_ABI)
