@@ -237,7 +237,8 @@ fn risk_status(sample: &Sample, risks: &[String]) -> String {
         })
     {
         "BLOCK"
-    } else if sample.liquidity_usd.is_none()
+    } else if sample.price.is_none()
+        || sample.liquidity_usd.is_none()
         || risks.iter().any(|r| {
             matches!(
                 r.as_str(),
@@ -282,7 +283,7 @@ pub fn advance(
     if sample.pair_address != state.pair_address {
         state.data_status = "source_changed".into();
         state.b_pending = None;
-        state.b_rearmed = false;
+        state.b_rearmed = state.reference_upper.is_none();
         if state.b_at.is_some() {
             close_c(state, "source_changed");
         }
@@ -334,6 +335,7 @@ pub fn advance(
     if (state.terminated || state.stage == "inactive") && entry {
         let score_entry = state.score_entry;
         let volume_entry = state.volume_entry;
+        let data_status = std::mem::take(&mut state.data_status);
         *state = State::new(&state.token_address.clone(), sample);
         state.stage = "watch".into();
         state.score_entry = score_entry;
@@ -342,12 +344,7 @@ pub fn advance(
         state.last_sample = Some(sample.clone());
         state.last_price = Some(p);
         state.risk_status = risk_status(sample, risks);
-        state.data_status = if baseline.is_some() {
-            "current"
-        } else {
-            "warming_up"
-        }
-        .into();
+        state.data_status = data_status;
         return;
     }
     if state.terminated || state.stage == "inactive" {
@@ -433,6 +430,13 @@ fn advance_b(
 
 fn advance_c(state: &mut State, sample: &Sample, settings: &Settings) {
     let p = price(sample).unwrap();
+    let b_price = state.b_price.unwrap();
+    let high = state.first_wave_high.unwrap();
+    if high >= b_price * 1.08 && (high - p) / (high - b_price) > 0.60 {
+        state.terminated = true;
+        close_c(state, "retrace_exceeded");
+        return;
+    }
     if let Some(upper) = state.base_upper {
         let lower = state.base_lower.unwrap();
         if p < lower * 0.995 {
@@ -483,7 +487,6 @@ fn advance_c(state: &mut State, sample: &Sample, settings: &Settings) {
         }
         return;
     }
-    let b_price = state.b_price.unwrap();
     if state.base_window.is_none() {
         let high = state.first_wave_high.unwrap().max(p);
         state.first_wave_high = Some(high);
@@ -492,11 +495,6 @@ fn advance_c(state: &mut State, sample: &Sample, settings: &Settings) {
         }
         state.stage = "first_wave".into();
         let retrace = (high - p) / (high - b_price);
-        if retrace > 0.60 {
-            state.terminated = true;
-            close_c(state, "retrace_exceeded");
-            return;
-        }
         if p > high * 0.98 || retrace < 0.20 {
             return;
         }
@@ -505,11 +503,6 @@ fn advance_c(state: &mut State, sample: &Sample, settings: &Settings) {
         let high = state.first_wave_high.unwrap();
         if p > high {
             close_c(state, "first_wave_continuation");
-            return;
-        }
-        if (high - p) / (high - b_price) > 0.60 {
-            state.terminated = true;
-            close_c(state, "retrace_exceeded");
             return;
         }
     }
@@ -1136,5 +1129,133 @@ mod tests {
         tick(&mut s, end);
         assert!(s.c_closed);
         assert_eq!(s.c_reason.as_deref(), Some("window_expired"));
+    }
+    #[test]
+    fn pre_b_source_mismatch_recovers_on_the_frozen_reference_pool() {
+        let mut s = watch();
+        let mut wrong = sample(T + 60, 110.0);
+        wrong.pair_address = "other".into();
+        advance(&mut s, &wrong, &history(), 70, &[], &Settings::default());
+        assert_eq!(s.last_evidence_at, Some(T));
+        assert!(s.reference_upper.is_none());
+        feed(&mut s, T + 120, 100.1);
+        for (at, p) in [(T + 240, 101.0), (T + 360, 101.1), (T + 480, 101.2)] {
+            feed(&mut s, at, p);
+        }
+        assert_eq!(s.stage, "first_start");
+        assert_eq!(s.b_at, Some(T + 480));
+    }
+
+    #[test]
+    fn retrace_after_base_freeze_invalidates_before_a_rebound_can_confirm_c() {
+        let mut s = first_start();
+        for (at, p) in [
+            (T + 600, 112.0),
+            (T + 840, 105.6),
+            (T + 1080, 105.7),
+            (T + 1320, 105.6),
+            (T + 1560, 105.7),
+            (T + 1800, 105.6),
+        ] {
+            feed(&mut s, at, p);
+        }
+        assert_eq!(s.stage, "base");
+        assert_eq!(s.base_lower, Some(105.6));
+        feed(&mut s, T + 1920, 105.4);
+        assert!(s.terminated);
+        assert!(s.c_closed);
+        assert_eq!(s.c_reason.as_deref(), Some("retrace_exceeded"));
+        for (at, p) in [(T + 2040, 106.4), (T + 2160, 106.5)] {
+            let mut input = sample(at, p);
+            input.volume_m5 = Some(5_000.0);
+            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+        }
+        assert!(s.c_at.is_none());
+        assert_eq!(s.stage, "base");
+    }
+
+    #[test]
+    fn initial_and_retriggered_watch_preserve_missing_data_status() {
+        for missing_h1 in [true, false] {
+            let mut input = sample(T, 100.0);
+            if missing_h1 {
+                input.volume_h1 = None;
+            } else {
+                input.liquidity_usd = None;
+            }
+            let want = if missing_h1 {
+                "missing_h1"
+            } else {
+                "missing_liquidity"
+            };
+            let mut s = State::new("token", &input);
+            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            assert_eq!(s.stage, "watch");
+            assert_eq!(s.data_status, want);
+            let mut s = first_start();
+            feed(&mut s, T + 480, 99.4);
+            feed(&mut s, T + 600, 99.3);
+            assert!(s.terminated);
+            let mut reset = sample(T + 720, 99.2);
+            reset.volume_h1 = Some(10_000.0);
+            advance(&mut s, &reset, &history(), 0, &[], &Settings::default());
+            input.at = T + 840;
+            input.fingerprint = "retrigger".into();
+            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            assert_eq!(s.stage, "watch");
+            assert_eq!(s.first_seen_at, T + 840);
+            assert_eq!(s.data_status, want);
+        }
+    }
+
+    #[test]
+    fn missing_price_holds_risk_without_overriding_a_blocker() {
+        for (flags, want) in [
+            (vec![], "HOLD"),
+            (vec!["fdv_liquidity_stretched".into()], "BLOCK"),
+        ] {
+            let mut s = watch();
+            let mut input = sample(T + 120, 100.1);
+            input.price = None;
+            advance(&mut s, &input, &history(), 99, &flags, &Settings::default());
+            assert_eq!(s.risk_status, want);
+            assert_eq!(s.data_status, "invalid_input");
+            assert_eq!(s.last_evidence_at, Some(T));
+            assert_eq!(s.stage, "watch");
+        }
+    }
+
+    #[test]
+    fn future_prices_are_excluded_when_the_first_b_reference_is_frozen() {
+        let mut s = watch();
+        let mut h = history();
+        h.push(sample(T + 180, 200.0));
+        advance(
+            &mut s,
+            &sample(T + 120, 101.0),
+            &h,
+            70,
+            &[],
+            &Settings::default(),
+        );
+        assert_eq!(s.reference_upper, Some(100.0));
+        assert_eq!(s.b_crossed_at, Some(T + 120));
+        assert!(s.reference_samples.iter().all(|x| x.at < T + 120));
+        feed(&mut s, T + 240, 101.1);
+        feed(&mut s, T + 360, 101.2);
+        assert_eq!(s.stage, "first_start");
+    }
+
+    #[test]
+    fn future_price_samples_cannot_complete_missing_past_reference_coverage() {
+        let mut s = watch();
+        let mut h = history();
+        h.retain(|x| x.at != T - 2700);
+        h.push(sample(T + 180, 100.0));
+        for (at, p) in [(T + 120, 101.0), (T + 240, 101.1), (T + 360, 101.2)] {
+            advance(&mut s, &sample(at, p), &h, 70, &[], &Settings::default());
+        }
+        assert!(s.reference_upper.is_none());
+        assert_eq!(s.stage, "watch");
     }
 }
