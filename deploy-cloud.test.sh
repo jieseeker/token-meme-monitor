@@ -10,6 +10,12 @@ if [[ $plan == *"rust-dashboard/static .env"* ]]; then
 fi
 [[ $plan != *"data/monitor.db"* && $plan != *"rust-dashboard/target"* ]]
 [[ $plan == *"Cargo and runs with systemd"* && $plan != *"Docker"* ]]
+git_plan=$(bash "$root/deploy-cloud.sh" --dry-run --git-source https://github.com/jieseeker/token-meme-monitor.git deploy@example.com /srv/token-meme-monitor)
+[[ $git_plan == *"Cloud Git source: https://github.com/jieseeker/token-meme-monitor.git (main)"* && $git_plan != *"Files:"* ]]
+if bash "$root/deploy-cloud.sh" --dry-run --git-source 'https://github.com/user/repo.git?token=secret' deploy@example.com /srv/token-meme-monitor >/dev/null 2>&1; then
+  echo "Git URL with credentials was accepted" >&2
+  exit 1
+fi
 if bash "$root/deploy-cloud.sh" --dry-run 'deploy@example.com;false' /srv/token-meme-monitor >/dev/null 2>&1; then
   echo "Unsafe SSH target was accepted" >&2
   exit 1
@@ -35,6 +41,11 @@ SSH_CALLS="$fake_bin/calls" PATH="$fake_bin:$PATH" bash "$root/deploy-cloud.sh" 
 control_paths=$(rg -o 'ControlPath=[^ ]+' "$fake_bin/calls" | sort -u)
 [[ -n $control_paths && $control_paths != *$'\n'* ]]
 [[ $(rg -c 'ControlMaster=auto' "$fake_bin/calls") == 4 ]]
+SSH_CALLS="$fake_bin/git-calls" SSH_INPUT="$fake_bin/git-input" PATH="$fake_bin:$PATH" \
+  bash "$root/deploy-cloud.sh" --git-source https://github.com/jieseeker/token-meme-monitor.git deploy@example.com /srv/token-meme-monitor >/dev/null
+rg -q 'git clone --depth 1 --branch main' "$fake_bin/git-input"
+rg -q 'pull --ff-only origin main' "$fake_bin/git-input"
+rg -q 'source_dir/rust-dashboard/Cargo.toml' "$fake_bin/git-input"
 
 printf 'BSC_DEPTH_RPC_URLS=https://rpc.example.test/private-key\n' >"$fake_bin/rpc.env"
 SSH_CALLS="$fake_bin/calls" SSH_INPUT="$fake_bin/input" TMM_RPC_SOURCE="$fake_bin/rpc.env" \

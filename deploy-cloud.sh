@@ -3,17 +3,19 @@ set -euo pipefail
 
 dry_run=0
 proxy_source=
+git_source=
 observe_minutes=0
 while (($#)); do
   case $1 in
     --dry-run) dry_run=1; shift ;;
     --proxy-config) proxy_source=${2:?missing proxy config path}; shift 2 ;;
+    --git-source) git_source=${2:?missing Git repository URL}; shift 2 ;;
     --observe-minutes) observe_minutes=${2:?missing observation duration}; shift 2 ;;
     *) break ;;
   esac
 done
 if [[ $# != 2 ]]; then
-  echo "Usage: $0 [--dry-run] [--proxy-config YAML] [--observe-minutes N] user@host /absolute/server/path" >&2
+  echo "Usage: $0 [--dry-run] [--git-source HTTPS_URL] [--proxy-config YAML] [--observe-minutes N] user@host /absolute/server/path" >&2
   exit 2
 fi
 
@@ -50,13 +52,20 @@ if [[ -n $identity_file && ! -r $identity_file ]]; then
   echo 'SSH identity file is not readable' >&2
   exit 2
 fi
+if [[ -n $git_source && ! $git_source =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$ ]]; then
+  echo 'Git source must be a GitHub HTTPS repository URL without credentials' >&2
+  exit 2
+fi
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 files=(.env.example rust-dashboard/Cargo.toml rust-dashboard/Cargo.lock
   rust-dashboard/src rust-dashboard/static)
+source_dir=$remote_dir
+if [[ -n $git_source ]]; then source_dir=$remote_dir/.source; fi
 
 if (( dry_run )); then
-  printf 'Target: %s:%s (SSH port %s)\nFiles: %s\n' "$target" "$remote_dir" "$port" "${files[*]}"
+  printf 'Target: %s:%s (SSH port %s)\n' "$target" "$remote_dir" "$port"
+  if [[ -n $git_source ]]; then printf 'Cloud Git source: %s (main)\n' "$git_source"; else printf 'Files: %s\n' "${files[*]}"; fi
   echo "Server builds with Cargo and runs with systemd; data/ stays on the server."
   if [[ -n $proxy_source ]]; then echo 'Proxy nodes: local YAML converts to sing-box, then cloud probes unique exit IPs.'; fi
   if (( observe_minutes )); then echo "Observation: $observe_minutes minutes after deployment."; fi
@@ -94,15 +103,35 @@ if [[ $(id -u) != 0 ]] && ! sudo -n true; then
 fi
 REMOTE
 
-tar --no-xattrs -C "$root" -czf - "${files[@]}" |
-  ssh "${ssh_opts[@]}" "$target" "mkdir -p '$remote_dir' && tar -xzf - -C '$remote_dir'"
+if [[ -n $git_source ]]; then
+  ssh "${ssh_opts[@]}" "$target" bash -s -- "$remote_dir" "$git_source" <<'REMOTE'
+set -euo pipefail
+remote_dir=$1
+git_source=$2
+source_dir=$remote_dir/.source
+command -v git >/dev/null || { echo 'Git is required on the server.' >&2; exit 1; }
+mkdir -p "$remote_dir"
+if [[ -d $source_dir/.git ]]; then
+  [[ $(git -C "$source_dir" remote get-url origin) == "$git_source" ]] || { echo 'Cloud Git origin differs from requested repository.' >&2; exit 1; }
+  git -C "$source_dir" pull --ff-only origin main
+else
+  [[ ! -e $source_dir ]] || { echo 'Cloud source directory exists without Git metadata.' >&2; exit 1; }
+  git clone --depth 1 --branch main "$git_source" "$source_dir"
+fi
+printf 'Cloud source: %s\n' "$(git -C "$source_dir" rev-parse --short HEAD)"
+REMOTE
+else
+  tar --no-xattrs -C "$root" -czf - "${files[@]}" |
+    ssh "${ssh_opts[@]}" "$target" "mkdir -p '$remote_dir' && tar -xzf - -C '$remote_dir'"
+fi
 
 if (( proxy_count )); then
   ssh "${ssh_opts[@]}" "$target" "umask 077; mkdir -p '$remote_dir/.private'; chmod 700 '$remote_dir/.private'; cat > '$remote_dir/.private/sing-box.json.next'" <"$control_dir/sing-box.json"
-  ssh "${ssh_opts[@]}" "$target" bash -s -- "$remote_dir" "$proxy_count" <<'REMOTE'
+  ssh "${ssh_opts[@]}" "$target" bash -s -- "$remote_dir" "$proxy_count" "$source_dir" <<'REMOTE'
 set -euo pipefail
 remote_dir=$1
 proxy_count=$2
+source_dir=$3
 cd "$remote_dir"
 sudo_cmd=()
 if [[ $(id -u) != 0 ]]; then sudo_cmd=(sudo -n); fi
@@ -187,7 +216,7 @@ if (( ${#proxy_urls[@]} == 0 )); then
   echo 'No proxy node passed the cloud egress check; deployment stopped.' >&2
   exit 1
 fi
-if [[ ! -f .env ]]; then cp .env.example .env; fi
+if [[ ! -f .env ]]; then cp "$source_dir/.env.example" .env; fi
 env_next=$(mktemp "$remote_dir/.env.XXXXXX")
 grep -v '^GECKOTERMINAL_PROXY_URLS=' .env >"$env_next" || true
 joined=$(IFS=,; echo "${proxy_urls[*]}")
@@ -198,16 +227,17 @@ printf 'Proxy endpoints: %s configured, %s healthy unique exits on cloud\n' "$pr
 REMOTE
 fi
 
-ssh "${ssh_opts[@]}" "$target" bash -s -- "$remote_dir" "$proxy_count" <<'REMOTE'
+ssh "${ssh_opts[@]}" "$target" bash -s -- "$remote_dir" "$proxy_count" "$source_dir" <<'REMOTE'
 set -euo pipefail
 if [[ -f "$HOME/.cargo/env" ]]; then source "$HOME/.cargo/env"; fi
 remote_dir=$1
 proxy_count=$2
+source_dir=$3
 cd "$remote_dir"
-if [[ ! -f .env ]]; then cp .env.example .env; fi
+if [[ ! -f .env ]]; then cp "$source_dir/.env.example" .env; fi
 chmod 600 .env
 mkdir -p data
-cargo build --release --locked --jobs 1 --manifest-path rust-dashboard/Cargo.toml
+cargo build --release --locked --jobs 1 --manifest-path "$source_dir/rust-dashboard/Cargo.toml" --target-dir "$remote_dir/rust-dashboard/target"
 
 sudo_cmd=()
 if [[ $(id -u) != 0 ]]; then sudo_cmd=(sudo -n); fi
@@ -236,7 +266,7 @@ WantedBy=multi-user.target
 UNIT
 
 if [[ -f tmm ]]; then cp -p tmm tmm.previous; fi
-install -m 755 rust-dashboard/target/release/tmm tmm.next
+install -m 755 "$remote_dir/rust-dashboard/target/release/tmm" tmm.next
 mv -f tmm.next tmm
 "${sudo_cmd[@]}" install -m 644 "$unit_file" /etc/systemd/system/tmm.service
 "${sudo_cmd[@]}" systemctl daemon-reload

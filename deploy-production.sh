@@ -23,4 +23,4 @@ if [[ ${1:-} != --dry-run ]]; then
   echo 'BSC RPC endpoints synchronized from local .env.'
 fi
 if [[ ${1:-} == --sync-rpc-only ]]; then exit 0; fi
-exec "$(dirname "$0")/deploy-cloud.sh" --proxy-config "$proxy_source" --observe-minutes "${TMM_OBSERVE_MINUTES:-30}" "$@" ubuntu@43.133.91.45 /home/ubuntu/token-meme-monitor
+exec "$(dirname "$0")/deploy-cloud.sh" --git-source https://github.com/jieseeker/token-meme-monitor.git --proxy-config "$proxy_source" --observe-minutes "${TMM_OBSERVE_MINUTES:-30}" "$@" ubuntu@43.133.91.45 /home/ubuntu/token-meme-monitor
