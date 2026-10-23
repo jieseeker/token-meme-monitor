@@ -202,34 +202,6 @@ pub fn init_schema(path: &str) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_signals_pair ON signals(pair_address, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_signals_observed_at ON signals(observed_at);
 
-        CREATE TABLE IF NOT EXISTS simulated_trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            signal_id INTEGER NOT NULL,
-            pair_address TEXT NOT NULL,
-            token_address TEXT NOT NULL,
-            token_symbol TEXT,
-            entry_at TEXT NOT NULL,
-            entry_price_usd REAL,
-            target_return_1 REAL NOT NULL DEFAULT 0.20,
-            target_return_2 REAL NOT NULL DEFAULT 0.50,
-            horizon_1_hours INTEGER NOT NULL DEFAULT 2,
-            horizon_2_hours INTEGER NOT NULL DEFAULT 6,
-            signal_score INTEGER,
-            short_momentum_score INTEGER,
-            status TEXT NOT NULL DEFAULT 'open',
-            exit_at TEXT,
-            exit_price_usd REAL,
-            max_price_usd REAL,
-            max_return_pct REAL,
-            outcome_1 TEXT,
-            outcome_2 TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (signal_id) REFERENCES signals(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_trades_status ON simulated_trades(status, entry_at);
-        CREATE INDEX IF NOT EXISTS idx_trades_signal ON simulated_trades(signal_id);
-
         CREATE TABLE IF NOT EXISTS signal_predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             signal_id INTEGER NOT NULL,
@@ -366,103 +338,6 @@ pub fn load_detail_cache(
 
 use crate::engine::features::PairSnapshot;
 use crate::engine::signals::SignalDecision;
-
-pub fn write_snapshot_and_signal(
-    path: &str,
-    snapshot: &PairSnapshot,
-    decision: &SignalDecision,
-) -> Result<(), rusqlite::Error> {
-    let mut conn = connect(path)?;
-    let tx = conn.transaction()?;
-
-    // Insert snapshot
-    tx.execute(
-        "INSERT OR IGNORE INTO snapshots
-         (pair_address, token_address, observed_at, price_usd, price_native,
-          liquidity_usd, fdv, market_cap, volume_m5, volume_h1, volume_h24,
-          buys_m5, sells_m5, buys_h1, sells_h1,
-          price_change_m5, price_change_h1, price_change_h24,
-          website_count, social_count, boosts_active, age_minutes, risk_flags, raw_json)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![
-            snapshot.pair_address,
-            snapshot.token_address,
-            snapshot.observed_at,
-            snapshot.price_usd,
-            snapshot.price_native,
-            snapshot.liquidity_usd,
-            snapshot.fdv,
-            snapshot.market_cap,
-            snapshot.volume_m5,
-            snapshot.volume_h1,
-            snapshot.volume_h24,
-            snapshot.buys_m5,
-            snapshot.sells_m5,
-            snapshot.buys_h1,
-            snapshot.sells_h1,
-            snapshot.price_change_m5,
-            snapshot.price_change_h1,
-            snapshot.price_change_h24,
-            snapshot.website_count,
-            snapshot.social_count,
-            snapshot.boosts_active,
-            0.0, // age_minutes computed separately
-            serde_json::to_string(&decision.risk_flags).unwrap_or_default(),
-            "{}",
-        ],
-    )?;
-
-    // Insert signal
-    tx.execute(
-        "INSERT OR IGNORE INTO signals
-         (pair_address, token_address, observed_at, strategy_version,
-          score, pair_state, should_alert, reasons, risk_flags, feature_json)
-         VALUES (?,?,?,?,?,?,?,?,?,?)",
-        params![
-            snapshot.pair_address,
-            snapshot.token_address,
-            decision.observed_at,
-            decision.strategy_version,
-            decision.score,
-            decision.pair_state,
-            decision.should_alert as i32,
-            serde_json::to_string(&decision.reasons).unwrap_or_default(),
-            serde_json::to_string(&decision.risk_flags).unwrap_or_default(),
-            "{}",
-        ],
-    )?;
-
-    // Get signal_id for prediction
-    let signal_id: i64 = tx.last_insert_rowid();
-
-    // Update pair's last_snapshot_at
-    tx.execute(
-        "UPDATE pairs SET last_snapshot_at = ?, next_refresh_at = ?, updated_at = ? WHERE pair_address = ?",
-        params![
-            snapshot.observed_at,
-            chrono::Utc::now().to_rfc3339(),
-            chrono::Utc::now().to_rfc3339(),
-            snapshot.pair_address,
-        ],
-    )?;
-
-    tx.commit()?;
-    let _ = signal_id; // used later for predictions
-    Ok(())
-}
-
-pub fn schedule_pair_retry(path: &str, pair_address: &str) -> Result<(), rusqlite::Error> {
-    let conn = connect(path)?;
-    conn.execute(
-        "UPDATE pairs SET next_refresh_at = ?, updated_at = ? WHERE pair_address = ?",
-        params![
-            (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
-            chrono::Utc::now().to_rfc3339(),
-            pair_address,
-        ],
-    )?;
-    Ok(())
-}
 
 /// Upsert a pair from Binance Alpha + write snapshot and signal.
 pub fn upsert_pair_and_write(
@@ -663,40 +538,6 @@ fn query_to_json(
         results.push(row_to_json(row, &col_names)?);
     }
     Ok(results)
-}
-
-pub fn list_due_pairs(path: &str, limit: usize) -> Result<Vec<Value>, rusqlite::Error> {
-    let conn = connect(path)?;
-    let now = chrono::Utc::now().to_rfc3339();
-    query_to_json(
-        &conn,
-        "SELECT p.*, t.metadata_json as token_metadata_json
-         FROM pairs p
-         LEFT JOIN tokens t ON t.token_address = p.token_address
-         WHERE p.active = 1
-           AND (p.next_refresh_at IS NULL OR p.next_refresh_at <= ?)
-         ORDER BY COALESCE(p.next_refresh_at, '') ASC
-         LIMIT ?",
-        &[&now, &limit],
-    )
-}
-
-pub fn trade_summary_api(path: &str) -> Result<Value, rusqlite::Error> {
-    let conn = connect(path)?;
-    crate::engine::trades::trade_summary(&conn)
-}
-
-pub fn recent_trades(path: &str, limit: usize) -> Result<Vec<Value>, rusqlite::Error> {
-    let conn = connect(path)?;
-    query_to_json(
-        &conn,
-        "SELECT t.*, p.token_symbol, p.token_name
-         FROM simulated_trades t
-         LEFT JOIN pairs p ON p.pair_address = t.pair_address
-         ORDER BY t.entry_at DESC
-         LIMIT ?",
-        &[&limit],
-    )
 }
 
 // ============ Dashboard queries ============
@@ -1022,10 +863,10 @@ mod pool_tests {
             )
             .unwrap();
         }
-        conn.execute("INSERT INTO simulated_trades(signal_id,pair_address,token_address,entry_at,created_at,updated_at)
-            VALUES (1,'pair','token',?1,?1,?1)", [&old]).unwrap();
         conn.execute_batch(
-            "CREATE TABLE signal_prediction_outcomes(signal_id INTEGER PRIMARY KEY);
+            "CREATE TABLE simulated_trades(signal_id INTEGER);
+            INSERT INTO simulated_trades VALUES (1);
+            CREATE TABLE signal_prediction_outcomes(signal_id INTEGER PRIMARY KEY);
             INSERT INTO signal_prediction_outcomes VALUES (1);",
         )
         .unwrap();

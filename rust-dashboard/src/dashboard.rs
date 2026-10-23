@@ -233,8 +233,6 @@ pub async fn serve(db_path: &str) {
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/health", get(health_check))
-        .route("/api/trades", get(trades_list))
-        .route("/api/trades/summary", get(trades_summary))
         .route("/api/token/{pair}/snapshots", get(token_snapshots))
         .route("/api/token/{pair}/signals", get(token_signals))
         .route("/api/token/{pair}/oi", get(token_oi))
@@ -3197,44 +3195,6 @@ async fn health_check() -> Json<serde_json::Value> {
     }
 
     Json(result)
-}
-
-async fn trades_list(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let limit = params
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
-        .min(200);
-    let db_path = state.db_path.as_ref().clone();
-    let result = tokio::task::spawn_blocking(move || crate::db::recent_trades(&db_path, limit))
-        .await
-        .map_err(axum_error)?;
-    match result {
-        Ok(rows) => Ok(Json(serde_json::Value::Array(rows))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )),
-    }
-}
-
-async fn trades_summary(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let db_path = state.db_path.as_ref().clone();
-    let result = tokio::task::spawn_blocking(move || crate::db::trade_summary_api(&db_path))
-        .await
-        .map_err(axum_error)?;
-    match result {
-        Ok(v) => Ok(Json(v)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )),
-    }
 }
 
 fn oi_upstream_error(e: reqwest::Error) -> (StatusCode, Json<serde_json::Value>) {
