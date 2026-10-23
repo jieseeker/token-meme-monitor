@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alpha 雷达</title>
+<style>
+:root {
+  --bg: #f5f7f4; --panel: #fffefa;
+  --line: rgba(23,32,51,.10); --line-strong: rgba(15,118,110,.22);
+  --text: #111827; --muted: #6b7280; --subtle: #8b98a3;
+  --accent: #0f766e; --accent-strong: #0b5f59; --accent-soft: #e6f4f1;
+  --accent-wash: rgba(15,118,110,.08); --risk: #b45309; --danger: #ef4444;
+  --shadow-card: 0 1px 2px rgba(17,24,39,.035);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Segoe UI',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+
+.top-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 28px; border-bottom:1px solid var(--line); }
+.toolbar-title { font-size:22px; font-weight:850; letter-spacing:-.3px; }
+.toolbar-subtitle { margin-top:3px; font-size:11px; color:var(--muted); }
+.top-right { display:flex; align-items:center; gap:14px; white-space:nowrap; }
+.token-count { padding-right:14px; border-right:1px solid var(--line); font-size:12px; color:var(--muted); }
+.refresh-badge { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.refresh-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); animation:pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+@media(max-width:600px){ .top-bar { align-items:flex-start; flex-direction:column; gap:10px; padding:12px 14px; } .toolbar-subtitle { line-height:1.5; } }
+
+.main { display:grid; grid-template-columns:minmax(260px,300px) minmax(0,1fr); gap:20px; padding:20px 24px 40px; max-width:118rem; margin:auto; }
+
+/* ============ LEFT: Token List ============ */
+.list-panel { display:flex; flex-direction:column; gap:12px; position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); padding:16px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+.section-title { font-size:20px; font-weight:750; letter-spacing:-.2px; }
+.search-input { width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
+.search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
+.list-summary { font-size:12px; color:var(--subtle); }
+.list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
+@media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
+.token-btn { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
+.token-btn:hover { position:relative; z-index:1; border-color:var(--accent); background:var(--accent-soft); }
+.token-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.token-btn.selected { border-color:var(--accent-strong); background:var(--accent-soft); box-shadow:var(--shadow-card); }
+.token-main { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.token-age { font-size:10px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
+.token-btn .score-tag { position:relative; flex:none; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; padding:5px 9px; border-radius:6px; cursor:help; }
+.score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:11px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
+.score-tooltip[hidden] { display:none; }
+.tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
+.tag-mid { background:rgba(180,83,9,.12); color:var(--risk); }
+.tag-low { background:rgba(239,68,68,.10); color:var(--danger); }
+
+/* ============ RIGHT: Detail ============ */
+.detail-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
+.detail-section.oi-empty { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 16px; padding:12px 20px; }
+.oi-empty .section-header { margin-bottom:0; }
+.oi-empty .section-copy { display:none; }
+.section-header { display:flex; align-items:baseline; gap:12px; margin-bottom:12px; }
+.section-heading { font-size:16px; font-weight:750; }
+.detail-section:first-child .section-heading { font-size:20px; }
+.section-copy { font-size:13px; color:var(--muted); margin-left:auto; }
+.identity { font-size:12px; color:var(--muted); overflow-wrap:anywhere; margin:-6px 0 12px; }
+.triage-strip { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(170px,1.6fr) minmax(115px,.8fr); border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-bottom:14px; }
+.triage-item { min-width:0; padding:12px 14px; border-right:1px solid var(--line); }
+.triage-item:first-child { padding-left:0; }
+.triage-item:last-child { border-right:0; padding-right:0; }
+.triage-label { display:block; color:var(--muted); font-size:11px; font-weight:650; }
+.triage-value { display:block; margin-top:3px; font-size:17px; font-weight:750; line-height:1.25; overflow-wrap:anywhere; }
+.triage-score .triage-value { color:var(--accent); font-size:24px; font-variant-numeric:tabular-nums; }
+.triage-risk .triage-value { color:var(--risk); }
+.triage-risk.clear .triage-value { color:var(--accent-strong); }
+.triage-note { display:block; margin-top:4px; color:var(--muted); font-size:10px; }
+.detail-section .hint { font-size:11px; line-height:1.45; color:#64748b; }
+.secondary-metrics { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); }
+.secondary-metrics b { color:var(--text); }
+.detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
+.detail-panel summary { cursor:pointer; }
+
+/* Metric cards */
+.metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); padding:0 0 12px; margin-bottom:12px; border-bottom:1px solid var(--line); }
+.metric-card { min-width:0; padding:0 14px; border-right:1px solid var(--line); }
+.metric-grid .metric-card:first-child,.oi-main .metric-card:first-child { padding-left:0; }
+.metric-grid .metric-card:last-child,.oi-main .metric-card:last-child { border-right:0; }
+.metric-card .label { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
+.metric-card .value { font-size:20px; font-weight:800; margin-top:4px; letter-spacing:-.3px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.metric-card .note { font-size:10px; color:#64748b; margin-top:4px; }
+.metric-card.tone-accent .value { color:var(--accent); }
+.metric-card.tone-risk .value { color:var(--risk); }
+.metric-card.tone-danger .value { color:var(--danger); }
+.oi-main { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin:8px 0 12px; }
+.oi-meta { display:flex; flex-wrap:wrap; gap:10px 28px; padding-top:10px; border-top:1px solid var(--line); font-size:11px; color:var(--muted); }
+.oi-meta b { display:block; margin-top:3px; font-size:15px; color:var(--text); }
+.oi-footnote { margin-top:10px; }
+@media(max-width:700px){ .metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:14px; } .metric-grid .metric-card:nth-child(2) { border-right:0; } .metric-grid .metric-card:nth-child(3) { padding-left:0; } }
+@media(max-width:600px){ .oi-main { grid-template-columns:1fr; row-gap:12px; } .oi-main .metric-card { padding-left:0; border-right:0; } .main { padding:16px 14px 32px; } .detail-section { padding:14px; } .triage-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } .triage-risk { grid-column:1/-1; grid-row:2; padding:10px 0; border-top:1px solid var(--line); border-right:0; } .triage-item:nth-child(3) { border-right:0; } }
+
+
+/* Charts */
+.chart-card { padding:8px 0 0; }
+.chart-card h4 { font-size:13px; font-weight:700; margin-bottom:6px; }
+svg.chart { width:100%; height:96px; display:block; }
+.price-legend { display:flex; flex-wrap:wrap; gap:6px 18px; margin-bottom:8px; font-size:12px; }
+.price-legend span { color:var(--muted); }
+.price-legend b { color:var(--text); }
+svg.chart.price-chart { height:104px; }
+.price-plot { display:grid; grid-template-columns:minmax(0,1fr) max-content; gap:10px; }
+.price-visual { min-width:0; }
+.price-scale { display:flex; flex-direction:column; justify-content:space-between; padding-bottom:18px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; text-align:right; }
+.chart-axis { display:flex; justify-content:space-between; margin-top:4px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.volume-mini { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; }
+.volume-mini svg.chart { height:50px; }
+.depth-scroll { overflow-x:auto; }
+.depth-grid { display:grid; grid-template-columns:minmax(76px,.45fr) repeat(2,minmax(0,1fr)); min-width:560px; gap:0; font-size:12px; }
+.depth-grid > div { padding:7px 5px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+.depth-grid > div:nth-child(3n+2) { color:var(--accent); }
+.depth-grid > div:nth-child(3n) { color:var(--risk); }
+.depth-grid strong { display:block; font-size:14px; font-variant-numeric:tabular-nums; }
+.depth-grid small { display:block; margin-top:2px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.whale-row { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:12px; }
+.whale-row a { color:var(--accent); text-decoration:none; }
+.whale-row .whale-time { margin-left:auto; color:var(--muted); }
+.trade-buy { color:var(--accent); }
+.trade-sell { color:#b91c1c; }
+.secondary-metrics .trade-buy b, .secondary-metrics .trade-sell b { color:inherit; }
+.activity-empty { padding:4px 0; font-size:12px; color:var(--muted); }
+.detail-panel details.data-note { margin-top:4px; }
+.transfer-panel { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.transfer-row { flex-wrap:wrap; }
+
+.empty-state { text-align:center; padding:60px; color:var(--subtle); }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <div class="toolbar-title">Alpha 雷达</div>
+    <div class="toolbar-subtitle">BSC 代币 · 池子深度 · 合约持仓 · 链上动向</div>
+  </div>
+  <div class="top-right">
+    <div class="token-count" id="tokenCount">统计中...</div>
+    <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="list-panel">
+    <div class="section-title">代币列表</div>
+    <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
+    <div class="list-summary" id="listSummary">正在获取最新名单</div>
+    <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
+  </div>
+  <div class="detail-panel" id="detailPanel">
+    <div class="empty-state">名单加载完成后将显示代币详情</div>
+  </div>
+</div>
+<div id="scoreTooltip" class="score-tooltip" role="tooltip" hidden></div>
+
+<script>
+const REFRESH_MS = 15000;
+const OVERVIEW_CACHE_KEY = 'tmm-tokens-v1';
+let allData = [];
+let tokenData = [];
+let selectedDetail = null;
+let selectedToken = null;
+let renderedKey = '';
+let searchTerm = '';
+const oiCache = new Map();
+const depthCache = new Map();
+const whaleCache = new Map();
+const transferCache = new Map();
+const detailCache = new Map();
+
+function fmtMoney(v) {
+  if (v==null||isNaN(v)) return '--';
+  const a=Math.abs(v);
+  if(a>=1e9)return '$'+(v/1e9).toFixed(1)+'B';
+  if(a>=1e6)return '$'+(v/1e6).toFixed(1)+'M';
+  if(a>=1e3)return '$'+(v/1e3).toFixed(1)+'K';
+  return '$'+v.toFixed(0);
+}
+function fmtPrice(v) {
+  if(v==null||isNaN(v))return'--';
+  if(v>=1)return'$'+v.toFixed(4);
+  if(v>=0.01)return'$'+v.toFixed(6);
+  return'$'+new Intl.NumberFormat('en-US',{useGrouping:false,maximumSignificantDigits:4,notation:'standard'}).format(v);
+}
+function fmtOiPct(v){if(v==null||isNaN(v))return'--';return`${v>0?'+':''}${v.toFixed(1)}%`;}
+function timeAgo(iso){const at=Date.parse(iso);if(!Number.isFinite(at))return'时间未知';if(at>Date.now()+60000)return'时间异常';const s=Math.max(0,(Date.now()-at)/1000);if(s<60)return Math.floor(s)+'秒前';if(s<3600)return Math.floor(s/60)+'分钟前';if(s<86400)return Math.floor(s/3600)+'小时前';return Math.floor(s/86400)+'天前';}
+function updatedAt(iso){return Number.isFinite(Date.parse(iso))?`更新于 ${timeAgo(iso)}`:'更新时间未知';}
+function poolUpdatedAt(items){const times=items.map(x=>Date.parse(x.calculated_at));return times.some(x=>!Number.isFinite(x))?'部分池子更新时间未知':updatedAt(new Date(Math.min(...times)).toISOString());}
+
+async function fetchJSON(url){const r=await fetch(url);if(!r.ok)throw new Error(r.statusText);return r.json();}
+async function fetchReady(url){
+  for(let i=0;i<60;i++){
+    const value=await fetchJSON(url);
+    if(!value.pending)return value;
+    await new Promise(resolve=>setTimeout(resolve,1000));
+  }
+  return {available:false,reason:'后台计算超时'};
+}
+
+function fmtChange(v){return v==null||isNaN(v)?'--':`${v>0?'+':''}${v.toFixed(1)}%`;}
+const scoreOf=p=>p.short_momentum_score??p.signal_score??0;
+const reasonLabels={early_age_window:'新池早期',tradable_age_window:'活跃时段',healthy_liquidity_band:'流动性适中',ample_liquidity:'流动性充足',h1_volume_support:'1小时成交额达标',m5_volume_impulse:'5分钟成交放量',m5_buy_dominance:'5分钟买入笔数占优',h1_buy_dominance:'1小时买入笔数占优',volume_to_liquidity_breakout:'成交额/流动性突破',volume_to_liquidity_support:'成交额/流动性支撑',balanced_liquidity_to_fdv:'流动性/估值均衡',positive_price_trend:'价格上行',alpha_hot_score:'Alpha 热度高',alpha_score_support:'Alpha 热度支撑',alpha_activity_support:'Alpha 成交与流动性佐证',binance_futures_listed:'上线 Binance 合约'};
+const retiredReasons=new Set(['project_metadata_present','partial_metadata_present','active_dex_boost','holder_depth','speculative_pool_activity']);
+function scoreTags(raw){
+  try { const tags=typeof raw==='string'?JSON.parse(raw):raw;const live=Array.isArray(tags)?tags.filter(x=>!retiredReasons.has(x)):[];return live.length?live.map(x=>reasonLabels[x]||String(x)).join('、'):'暂无命中标签'; }
+  catch { return '暂无命中标签'; }
+}
+const riskLabels={low_liquidity:'流动性偏低',liquidity_near_zero:'流动性极低',stale_pair:'池龄偏长',thin_m5_activity:'近期成交稀少',sell_pressure:'卖出笔数偏多',fdv_liquidity_stretched:'估值与流动性失衡',liquidity_withdrawal:'约20分钟内池子流动性下降≥25%',thin_downside_depth:'跌1%所需卖出额偏低',upside_depth_heavy:'涨1%所需买入额约为跌1%卖出额的3倍以上'};
+function marketRisks(raw){
+  try{const flags=typeof raw==='string'?JSON.parse(raw):raw;return Array.isArray(flags)?flags.filter(x=>!['missing_project_metadata','missing_price','fdv_missing'].includes(x)).filter(x=>x!=='low_liquidity'||!flags.includes('liquidity_near_zero')).map(x=>riskLabels[x]||String(x)):null;}
+  catch{return null;}
+}
+function escapeAttr(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+function mergeTokens(rows) {
+  const groups=new Map();
+  for(const row of rows){
+    const key=(row.token_address||'').toLowerCase();
+    if(!key)continue;
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(row);
+  }
+  return [...groups].map(([key,rows])=>{
+    rows.sort((a,b)=>(b.liquidity_usd||0)-(a.liquidity_usd||0));
+    const pools=rows;
+    const main=pools[0], weight=pools.reduce((n,p)=>n+(p.liquidity_usd||0),0);
+    const scored=pools.reduce((best,p)=>scoreOf(p)>scoreOf(best)?p:best,main);
+    const weighted=field=>weight? pools.reduce((n,p)=>n+(p[field]||0)*(p.liquidity_usd||0),0)/weight:main[field];
+    const sum=field=>pools.reduce((n,p)=>n+(p[field]||0),0);
+    return {...main, token_address:key, pools, indicator_score:scoreOf(scored), indicator_reasons:scored.short_momentum_score!=null?(scored.prediction_reasons||scored.signal_reasons):scored.signal_reasons, short_signal_stale:scored.short_signal_stale,
+      price_usd:weighted('price_usd'), price_change_m5:weighted('price_change_m5'),
+      price_change_h1:weighted('price_change_h1'), price_change_h24:weighted('price_change_h24'),
+      liquidity_usd:weight, volume_m5:sum('volume_m5'), volume_h1:sum('volume_h1'),
+      buys_h1:sum('buys_h1'), sells_h1:sum('sells_h1')};
+  }).sort((a,b)=>b.indicator_score-a.indicator_score);
+}
+
+function renderTokenList() {
+  const filtered = tokenData.filter(t => {
+    if(!searchTerm)return true;
+    const s=searchTerm.toLowerCase();
+    return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
+  });
+  document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币`;
+  document.getElementById('listSummary').textContent = searchTerm ? `匹配 ${filtered.length} 个代币` : `显示前 ${Math.min(filtered.length,50)} 条`;
+
+  const html=filtered.slice(0,50).map(t=>{
+      const score=t.indicator_score;
+      const cls=score>=60?'tag-high':score>=40?'tag-mid':'tag-low';
+      const sel=t.token_address===selectedToken?' selected':'';
+      return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}</span></span>
+        <span class="score-tag ${cls}" data-tip="活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${escapeAttr(scoreTags(t.indicator_reasons))}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}">${score}</span>
+      </button>`;
+    }).join('');
+  hideScoreTooltip();
+  document.getElementById('tokenList').innerHTML=html||'<div class="empty-state">没有匹配结果</div>';
+}
+
+function selectToken(token){selectedToken=token;renderTokenList();loadSelectedDetail(token);}
+
+function makeChart(points,color='#0f766e') {
+  const h=96,w=400;
+  const vals=points.map(p=>p.v).filter(v=>v!=null&&!isNaN(v));
+  if(vals.length<2)return'<div class="hint">数据不足</div>';
+  const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;
+  const step=w/(points.length-1);
+  const path=points.map((p,i)=>{const x=i*step,y=h-10-((p.v-min)/range)*(h-20);return`${x.toFixed(1)},${y.toFixed(1)}`}).join(' ');
+  return`<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polygon points="0,${h} ${path} ${w},${h}" fill="${color}" opacity="0.06"/>
+    <polyline points="${path}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function makeMarketChart(pool, markets) {
+  if(pool.length<2)return '<div class="hint">价格历史不足</div>';
+  const start=pool[0].at,end=pool[pool.length-1].at,span=end-start||1;
+  const lines=[
+    {name:'池子',color:'#0f766e',points:pool},
+    {name:'合约标记价',color:'#b45309',points:markets?.futures||[]}
+  ].map(line=>({...line,points:line.points.filter(p=>p.at>=start&&p.at<=end&&Number.isFinite(p.price)&&p.price>0)}))
+    .filter(line=>line.name==='池子'||line.points.length>=2);
+  const values=lines.flatMap(line=>line.points.map(p=>p.price));
+  if(values.length<2)return '<div class="hint">价格历史不足</div>';
+  const min=Math.min(...values),max=Math.max(...values),range=max-min||min*.001;
+  const paths=lines.filter(line=>line.points.length>=2).map(line=>{
+    const points=line.points.map(p=>`${((p.at-start)/span*400).toFixed(1)},${(102-((p.price-min)/range)*92).toFixed(1)}`).join(' ');
+    return `<polyline points="${points}" fill="none" stroke="${line.color}" stroke-width="2" stroke-linejoin="round"/>`;
+  }).join('');
+  const legend=lines.map(line=>`<span><span style="color:${line.color}">●</span> <b>${line.name}</b> ${line.points.length?fmtPrice(line.points.at(-1).price):'暂无匹配'}</span>`).join('');
+  const time=at=>new Date(at).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  return `<div class="price-legend">${legend}</div><div class="price-plot"><div class="price-visual"><svg class="chart price-chart" viewBox="0 0 400 112" preserveAspectRatio="none">${paths}</svg><div class="chart-axis"><span>${time(start)}</span><span>${time(end)}</span></div></div><div class="price-scale"><span>${fmtPrice(max)}</span><span>${fmtPrice(min)}</span></div></div>`;
+}
+
+function renderDetail() {
+  const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
+  if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale;
+  if(key===renderedKey)return;
+  const sameToken=renderedKey.startsWith(t.token_address+'|');
+  const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
+  const oiExpanded=document.querySelector('#oiBody details')?.open;
+  const risks=marketRisks(t.signal_risk_flags);
+  document.getElementById('detailPanel').innerHTML=`
+  <div class="detail-section">
+    <div class="section-header">
+      <span class="section-heading">${escapeAttr(t.token_symbol)}</span>
+      <span class="section-copy">已收录 ${t.pools.length} 个池子</span>
+    </div>
+    <div class="identity">合约 ${escapeAttr(t.token_address||'--')}</div>
+    <div class="triage-strip">
+      <div class="triage-item triage-score"><span class="triage-label">活跃度分</span><strong class="triage-value">${t.indicator_score}</strong><span class="triage-note">${t.short_signal_stale?'短周期信号过期，保守估算':'按现有规则排序'}</span></div>
+      <div class="triage-item triage-risk${risks?.length===0?' clear':''}"><span class="triage-label">代币风险观察</span><strong class="triage-value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong><span class="triage-note">合并池子口径 · ${t.signal_at?'信号 '+timeAgo(t.signal_at):'信号时间未知'}</span></div>
+      <div class="triage-item"><span class="triage-label">行情快照</span><strong class="triage-value">${timeAgo(t.observed_at)}</strong><span class="triage-note">主要池</span></div>
+    </div>
+    <div class="metric-grid">
+      <div class="metric-card"><div class="label">参考价格</div><div class="value">${fmtPrice(t.price_usd)}</div><div class="note">5m ${fmtChange(t.price_change_m5)} · 1h ${fmtChange(t.price_change_h1)}</div></div>
+      <div class="metric-card"><div class="label">池内资产估值</div><div class="value">${fmtMoney(t.liquidity_usd)}</div></div>
+      <div class="metric-card"><div class="label">1h 成交额</div><div class="value">${fmtMoney(t.volume_h1)}</div><div class="note">5m ${fmtMoney(t.volume_m5)}</div></div>
+      <div class="metric-card"><div class="label">1h 买 / 卖笔数</div><div class="value">${t.buys_h1??'--'} / ${t.sells_h1??'--'}</div></div>
+    </div>
+    <div class="secondary-metrics"><span>24h 涨跌 <b>${fmtChange(t.price_change_h24)}</b></span><span>市值 <b>${fmtMoney(t.market_cap)}</b></span></div>
+    <div class="hint" style="margin-top:10px">未接入卖出限制、税率与持仓集中度校验；以上行情数据不代表代币安全。</div>
+  </div>
+
+  <div class="detail-section" id="oiSection">
+    <div class="section-header">
+      <span class="section-heading">合约持仓 · OI</span>
+      <span class="section-copy">合约市场</span>
+    </div>
+    <div id="oiBody">${previous[1]||'<div class="hint">后台获取 OI 数据...</div>'}</div>
+  </div>
+
+  <div class="detail-section" id="trendSection">
+    <div class="section-header">
+      <span class="section-heading">市场价格对比</span>
+      <span class="section-copy">最近快照</span>
+    </div>
+    <div id="trendBody">${previous[2]||'<div class="hint">加载走势数据...</div>'}</div>
+  </div>
+
+  <div class="detail-section">
+    <div class="section-header">
+      <span class="section-heading">价格区间深度</span>
+      <span class="section-copy">估算</span>
+    </div>
+    <div id="depthBody">${previous[0]||'<div class="hint">后台计算池子深度...</div>'}</div>
+  </div>
+
+  <div class="detail-section">
+    <div class="section-header">
+      <span class="section-heading">链上大额动向</span>
+      <span class="section-copy">单笔 &gt; $10K</span>
+    </div>
+    <div id="whaleBody">${previous[3]||'<div class="hint">后台获取大额交易...</div>'}</div>
+    <div class="transfer-panel" id="transferBody">${previous[4]||'<div class="hint">后台获取大额转账...</div>'}</div>
+  </div>
+
+  `;
+
+  renderedKey=key;
+  loadTrend(t);
+  loadOI(t.pair_address, t.price_change_h1, oiExpanded);
+  loadDepth(t);
+  loadWhales(t);
+  loadTransfers(t);
+}
+
+async function loadTransfers(token) {
+  const pair=token.pair_address;
+  let cached=transferCache.get(pair);
+  if(!cached||Date.now()>=cached.expires){
+    cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/transfers`).catch(e=>({available:false,reason:e.message})).then(value=>{
+      cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+      return value;
+    })};
+    transferCache.set(pair,cached);
+  }
+  const result=await cached.promise;
+  if(selectedToken!==token.token_address)return;
+  const body=document.getElementById('transferBody');
+  if(!result.available){body.textContent=`大额转账暂不可用：${result.reason||'数据源请求失败'}`;return;}
+  const poolAddresses=new Set(token.pools.map(p=>p.pair_address.toLowerCase()));
+  const transfers=(result.transfers||[]).filter(x=>!poolAddresses.has(x.from.toLowerCase())&&!poolAddresses.has(x.to.toLowerCase()));
+  if(!transfers.length){
+    body.innerHTML=`<div class="activity-empty">大额转账 0 笔 · 最近 ${result.sample_count||0} 笔样本未发现单笔超过 100 万 ${escapeAttr(token.token_symbol)}</div>
+      <details class="data-note"><summary>转账样本与统计口径</summary><div class="hint">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；仅显示近 24 小时记录；可能包含合约地址，高频代币可能遗漏更早记录。</div></details>`;
+    return;
+  }
+  const short=address=>`${address.slice(0,6)}…${address.slice(-4)}`;
+  const wasOpen=body.querySelector?.('details')?.open;
+  body.innerHTML=`<div class="secondary-metrics"><span>大额转账 <b>${transfers.length} 笔</b></span><span>单笔 &gt; 100 万 ${escapeAttr(token.token_symbol)}</span></div>
+    <details><summary>查看 A → B 转账</summary>${transfers.slice(0,8).map(x=>`<div class="whale-row transfer-row"><b>${Number(x.amount).toLocaleString('en-US',{maximumFractionDigits:2})}</b><span>${short(x.from)} → ${short(x.to)}</span><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">交易</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
+    <div class="hint" style="margin-top:8px">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；最近 ${result.sample_count||0} 笔链上转账中仅显示近 24 小时记录；可能包含合约地址，高频代币可能遗漏更早记录。</div>`;
+  if(wasOpen)body.querySelector('details').open=true;
+}
+
+async function loadWhales(token) {
+  const results=Array(token.pools.length);
+  const key=renderedKey;
+  const show=()=>{
+    if(selectedToken!==token.token_address||renderedKey!==key)return;
+    const body=document.getElementById('whaleBody');
+    const done=results.filter(Boolean).length, pending=done<token.pools.length;
+    const available=results.filter(x=>x?.available);
+    const totalLiquidity=token.pools.reduce((sum,pool)=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
+    const coveredLiquidity=token.pools.reduce((sum,pool,i)=>sum+(results[i]?.available?Math.max(0,Number(pool.liquidity_usd)||0):0),0);
+    const coverage=totalLiquidity>0?`覆盖流动性 ${Math.round(coveredLiquidity/totalLiquidity*100)}%`:'覆盖流动性未知';
+    if(!available.length){
+      body.textContent=pending?`已查询 ${done}/${token.pools.length} 个池子 · ${coverage} · 其余获取中...`
+        :results.some(x=>String(x.reason||'').includes('限流'))?'交易数据源限流，稍后自动重试'
+        :'大额交易数据暂不可用，稍后自动重试';
+      return;
+    }
+    const old=available.some(x=>{const at=Date.parse(x.calculated_at);return !Number.isFinite(at)||Date.now()-at>300000;});
+    const partial=pending||available.length<token.pools.length||old;
+    const note=`池子 ${available.length}/${token.pools.length} · ${coverage} · ${poolUpdatedAt(available)}${old?' · 数据已过期':''}${available.some(x=>x.stale)?' · 部分池子刷新失败，沿用上次结果':''}${pending?` · 已查询 ${done}/${token.pools.length} 个池子，其余获取中`:available.length<token.pools.length?' · 部分池子暂不可用':''}${partial?' · 部分样本：仅代表已覆盖池子及所示时间':''} · `;
+    const byHash=new Map();
+    for(const result of available)for(const trade of result.trades||[]){
+      const previous=byHash.get(trade.hash);
+      if(!previous||trade.usd>previous.usd)byHash.set(trade.hash,trade);
+    }
+    const trades=[...byHash.values()].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
+    const buys=trades.filter(x=>x.side==='buy'),sells=trades.filter(x=>x.side==='sell');
+    const sum=rows=>rows.reduce((n,x)=>n+x.usd,0);
+    if(!trades.length){
+      body.innerHTML=`<div class="activity-empty">${note}已查询的池子近 24 小时未查到单笔超过 $10K 的买卖</div>
+        <details class="data-note"><summary>交易样本与统计口径</summary><div class="hint">各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div></details>`;
+      return;
+    }
+    const wasOpen=body.querySelector?.('details')?.open;
+    body.innerHTML=`<div class="secondary-metrics"><span class="trade-buy">买入 <b>${buys.length} 笔 · ${fmtMoney(sum(buys))}</b></span><span class="trade-sell">卖出 <b>${sells.length} 笔 · ${fmtMoney(sum(sells))}</b></span></div>
+      <details><summary>最近大额交易</summary>${trades.slice(0,8).map(x=>`<div class="whale-row"><span class="trade-${x.side}">${x.side==='buy'?'买入':'卖出'}</span><b class="trade-${x.side}">${fmtMoney(x.usd)}</b><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">${x.wallet.slice(0,6)}…${x.wallet.slice(-4)}</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
+      <div class="hint" style="margin-top:8px">${note}近 24 小时各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div>`;
+    if(wasOpen)body.querySelector('details').open=true;
+  };
+  await Promise.all(token.pools.map(async (pool,i)=>{
+    if(selectedToken!==token.token_address)return;
+    const pair=pool.pair_address;
+    let cached=whaleCache.get(pair);
+    if(!cached||Date.now()>=cached.expires){
+      cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/whales`).catch(e=>({available:false,reason:e.message})).then(value=>{
+        cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+        return value;
+      })};
+      whaleCache.set(pair,cached);
+    }
+    results[i]=await cached.promise;
+    show();
+  }));
+}
+
+function poolDepthAtTarget(pool,depth,target,field){
+  const spot=Number(pool.price_usd);
+  if(!Number.isFinite(spot)||spot<=0||!Number.isFinite(target)||target<=0)return null;
+  const pct=(field==='support_usd'?1-target/spot:target/spot-1)*100;
+  if(pct<=0)return 0;
+  const bands=depth.bands_pct||[],amounts=depth[field]||[];
+  let prevPct=0,prevAmount=0;
+  for(let i=0;i<bands.length;i++){
+    const band=Number(bands[i]),amount=amounts[i];
+    if(!Number.isFinite(band)||band<=prevPct||!Number.isFinite(amount)||amount<prevAmount)return null;
+    if(pct<=band+1e-8)return prevAmount+(amount-prevAmount)*Math.min(1,(pct-prevPct)/(band-prevPct));
+    prevPct=band;prevAmount=amount;
+  }
+  return null;
+}
+
+async function loadDepth(token) {
+  const pools=token.pools.filter(pool=>Number(pool.liquidity_usd)>=10&&Number(pool.price_usd)>0);
+  const results=Array(pools.length);
+  const key=renderedKey;
+  const show=()=>{
+  if(selectedToken!==token.token_address||renderedKey!==key)return;
+  const body=document.getElementById('depthBody');
+  const done=results.filter(Boolean).length, pending=done<pools.length;
+  const available=results.filter(x=>x?.depth.available);
+  if(!available.length){body.textContent=!pools.length?'暂无有价格及流动性的池子':pending?`已查询 ${done}/${pools.length} 个池子，其余获取中...`:'区间深度暂不可用：池子报价失败';return;}
+  const totalLiquidity=pools.reduce((sum,pool)=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
+  const recent=available.filter(({depth})=>{const age=Date.now()-Date.parse(depth.calculated_at);return !depth.stale&&Number.isFinite(age)&&age>=0&&age<=300000;});
+  const recentLiquidity=recent.reduce((sum,{pool})=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
+  const freshCoverage=totalLiquidity>0?`近5分钟覆盖流动性 ${Math.round(recentLiquidity/totalLiquidity*100)}%`:'近5分钟覆盖流动性未知';
+  const bands=[1,2,5,10,15,20], price=token.price_usd;
+  const sumDepth=(field,target)=>{
+    const values=available.map(({pool,depth})=>poolDepthAtTarget(pool,depth,target,field));
+    return values.some(v=>v==null)?null:values.reduce((n,v)=>n+v,0);
+  };
+  const rows=(start,end)=>bands.slice(start,end).map(pct=>{const down=price*(1-pct/100),up=price*(1+pct/100);return `<div>${pct}%</div><div><strong>${fmtMoney(sumDepth('support_usd',down))}</strong><small>目标价 ${fmtPrice(down)}</small></div><div><strong>${fmtMoney(sumDepth('pressure_usd',up))}</strong><small>目标价 ${fmtPrice(up)}</small></div>`;}).join('');
+  const wasOpen=body.querySelector?.('details')?.open;
+  body.innerHTML=`<div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(0,3)}</div></div>
+    <details><summary>更多深度 · 10% / 15% / 20%</summary><div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(3,6)}</div></div></details>
+    <div class="hint" style="margin-top:8px">池子 ${available.length}/${pools.length} · ${freshCoverage} · ${poolUpdatedAt(available.map(x=>x.depth))}${recent.length<available.length?' · 合计含旧数据':''} · ${available.some(x=>x.depth.stale)?'部分池子刷新失败，沿用上次结果 · ':''}各池按同一目标价插值估算后合计；跌 5% 的金额已包含跌 1% 的金额。仅反映当前池内报价，不含跨池最优路由或套利${pending?'；其余获取中':available.length<pools.length?'；部分池子不可用，合计不完整':''}；-- 表示报价不足或待刷新</div>`;
+  if(wasOpen)body.querySelector('details').open=true;
+  };
+  if(!pools.length){show();return;}
+  await Promise.all(pools.map(async (pool,i)=>{
+    const pair=pool.pair_address;
+    let cached=depthCache.get(pair);
+    if(!cached||Date.now()>=cached.expires){
+      cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/depth`).catch(e=>({available:false,reason:e.message})).then(value=>{
+        cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+        return value;
+      })};
+      depthCache.set(pair,cached);
+    }
+    results[i]={pool,depth:await cached.promise};
+    show();
+  }));
+}
+
+async function loadOI(pair, priceChangeH1, expanded) {
+  let cached=oiCache.get(pair);
+  if(!cached||Date.now()-cached.at>300000){
+    cached={at:Date.now(),promise:fetchReady(`/api/token/${pair}/oi`).catch(e=>({available:false,reason:e.message}))};
+    oiCache.set(pair,cached);
+  }
+  const oi=await cached.promise;
+  if(selectedToken!==allData.find(x=>x.pair_address===pair)?.token_address?.toLowerCase())return;
+  const body=document.getElementById('oiBody');
+  const global=oi.global;
+  document.getElementById('oiSection').className=!oi.available&&!global?'detail-section oi-empty':'detail-section';
+  const globalHtml=global?`<div><span>多交易所 OI</span><b>${fmtMoney(global.oi_usd)}</b></div>`:'';
+  if(!oi.available){
+    body.innerHTML=global?`<div class="oi-meta">${globalHtml}</div>`:'';
+    const note=document.createElement('div');note.className='hint';note.textContent=`Binance OI：${oi.reason||'暂不可用'}`;body.append(note);
+    if(global){const caveat=document.createElement('div');caveat.className='hint';caveat.textContent='仅统计已收录且近期成交的永续合约；同名符号不保证是同一资产。';body.append(caveat);}
+    return;
+  }
+  const delta=oi.change_1h_pct;
+  const state=delta==null||!priceChangeH1||!delta?'方向未定':
+    priceChangeH1>0?(delta>0?'价涨 / OI 增':'价涨 / OI 减'):
+    (delta>0?'价跌 / OI 增':'价跌 / OI 减');
+  body.innerHTML=`
+    <div class="oi-main">
+      <div class="metric-card"><div class="label">1小时 OI 变化</div><div class="value">${fmtOiPct(oi.change_1h_pct)}</div></div>
+      <div class="metric-card"><div class="label">价格 × OI</div><div class="value">${state}</div></div>
+    </div>
+    ${globalHtml||oi.long_short?.ratio!=null?`<div class="oi-meta">${globalHtml}${oi.long_short?.ratio!=null?`<div><span>大户多空比</span><b>${oi.long_short.ratio.toFixed(2)}</b></div>`:''}</div>`:''}
+    <details><summary>OI 规模、24h 变化与历史走势</summary>
+      <div class="secondary-metrics"><span>Binance OI <b>${fmtMoney(oi.oi_usd)}</b></span><span>24h 数量变化 <b>${fmtOiPct(oi.change_24h_pct)}</b></span></div>
+      <div class="chart-card"><h4>Binance OI 美元价值 · 近 24 小时</h4>${makeChart(oi.history.map(x=>({v:x.oi_usd})),'#b45309')}</div>
+    </details>
+    <div class="hint oi-footnote">${oi.stale?'刷新失败，沿用上次结果 · ':''}${escapeAttr(oi.symbol||'未知合约')} · 小时采样 ${oi.timestamp&&Number.isFinite(new Date(oi.timestamp).getTime())?new Date(oi.timestamp).toLocaleString('zh-CN'):'时间未知'} · ${Number.isFinite(Date.parse(oi.calculated_at))?'抓取于 '+new Date(oi.calculated_at).toLocaleString('zh-CN'):'抓取时间未知'}。按同名合约匹配；跨平台 OI 仅含已收录且近期成交的永续合约，OI 增减不能单独判断方向。</div>`;
+  if(expanded)body.querySelector('details').open=true;
+}
+
+async function loadTrend(token) {
+  const key=renderedKey;
+  try {
+    const histories=(await Promise.all(token.pools.map(p=>fetchJSON(`/api/token/${p.pair_address}/snapshots?limit=36`)))).filter(h=>h.length>=2);
+    if(selectedToken!==token.token_address||renderedKey!==key)return;
+    // shortcut: worker samples pools sequentially, so same-index recent snapshots approximate the same time; align by timestamp if sampling becomes uneven.
+    const count=histories.length?Math.min(...histories.map(h=>h.length)):0;
+    const merged=Array.from({length:count},(_,i)=>{
+      const samples=histories.map(h=>h[count-1-i]);
+      const weight=samples.reduce((n,s)=>n+(s.liquidity_usd||0),0);
+      return {at:Date.parse(samples[0].observed_at),price:weight?samples.reduce((n,s)=>n+(s.price_usd||0)*(s.liquidity_usd||0),0)/weight:null,
+        volume:samples.reduce((n,s)=>n+(s.volume_h1||0),0)};
+    });
+    const show=markets=>{if(selectedToken===token.token_address&&renderedKey===key){
+      document.getElementById('trendBody').innerHTML=`<div class="chart-card">${makeMarketChart(merged,markets)}
+        <div class="volume-mini"><h4>1 小时成交额走势 · ${fmtMoney(merged.at(-1)?.volume)}</h4>${makeChart(merged.map(x=>({v:x.volume})),'#64748b')}</div></div>
+        <div class="hint" style="margin-top:8px">池子按流动性加权；合约来自 Binance 同名 USDT 市场，按符号和价格近似匹配，仍可能误配。各池快照时间略有偏差。</div>`;
+    }};
+    show(null);
+    show(await fetchReady(`/api/token/${token.pools[0].pair_address}/prices`).catch(()=>({})));
+  }catch(e){
+    if(selectedToken!==token.token_address||renderedKey!==key)return;
+    document.getElementById('trendBody').innerHTML=`<div class="hint">走势加载失败: ${e.message}</div>`;
+  }
+}
+
+document.getElementById('search').addEventListener('input',e=>{searchTerm=e.target.value;renderTokenList();});
+const tokenList=document.getElementById('tokenList'), scoreTooltip=document.getElementById('scoreTooltip');
+function showScoreTooltip(score){
+  scoreTooltip.textContent=score.dataset.tip;
+  scoreTooltip.hidden=false;
+  const rect=score.getBoundingClientRect(), width=scoreTooltip.offsetWidth, height=scoreTooltip.offsetHeight;
+  scoreTooltip.style.left=`${rect.right+width+16<=innerWidth?rect.right+8:Math.max(8,rect.left-width-8)}px`;
+  scoreTooltip.style.top=`${Math.max(8,Math.min(rect.top,innerHeight-height-8))}px`;
+}
+function hideScoreTooltip(){scoreTooltip.hidden=true;}
+tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
+tokenList.addEventListener('pointerover',e=>{const score=e.target.closest('.score-tag');if(score)showScoreTooltip(score);});
+tokenList.addEventListener('pointerout',e=>{const score=e.target.closest('.score-tag');if(score&&!score.contains(e.relatedTarget))hideScoreTooltip();});
+tokenList.addEventListener('focusin',e=>{const score=e.target.closest('.token-btn')?.querySelector('.score-tag');if(score)showScoreTooltip(score);});
+tokenList.addEventListener('focusout',hideScoreTooltip);
+tokenList.addEventListener('scroll',hideScoreTooltip);
+window.addEventListener('scroll',hideScoreTooltip);
+window.addEventListener('resize',hideScoreTooltip);
+
+function showOverview(rows, cachedAt){
+  tokenData=rows.filter(t=>t.indicator_score>0);
+  if(!tokenData.some(t=>t.token_address===selectedToken))selectedToken=tokenData[0]?.token_address||null;
+  renderTokenList();
+  if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
+  const times=tokenData.map(t=>Date.parse(t.observed_at)).filter(Number.isFinite);
+  const snapshot=times.some(at=>at>Date.now()+60000)?'行情快照时间异常':times.length===tokenData.length&&times.length?`行情快照最早 ${timeAgo(new Date(Math.min(...times)).toISOString())}`:'行情快照时间未知';
+  document.getElementById('refreshInfo').textContent=cachedAt?`显示上次名单 · ${snapshot} · 正在更新...`:snapshot;
+}
+
+async function loadSelectedDetail(address){
+  const cached=detailCache.get(address);
+  if(cached?.rows){
+    allData=cached.rows;
+    selectedDetail=mergeTokens(cached.rows)[0]||null;
+    renderDetail();
+  }
+  if(cached?.promise)return cached.promise;
+  if(cached?.rows&&Date.now()-cached.at<15000){
+    if(selectedDetail){loadDepth(selectedDetail);loadWhales(selectedDetail);loadTransfers(selectedDetail);}
+    return;
+  }
+  if(!cached?.rows){selectedDetail=null;renderDetail();}
+  const promise=fetchJSON(`/api/token/${address}/summary`).then(rows=>{
+    detailCache.set(address,{at:Date.now(),rows});
+    if(selectedToken!==address)return;
+    allData=rows;
+    selectedDetail=mergeTokens(rows)[0]||null;
+    renderDetail();
+    if(selectedDetail){loadDepth(selectedDetail);loadWhales(selectedDetail);loadTransfers(selectedDetail);}
+  }).catch(e=>{
+    detailCache.set(address,cached?.rows?cached:{at:0,rows:null});
+    if(selectedToken===address&&!cached?.rows)document.getElementById('detailPanel').innerHTML=`<div class="empty-state">详情加载失败：${escapeAttr(e.message)}</div>`;
+  });
+  detailCache.set(address,{at:cached?.at||0,rows:cached?.rows||null,promise});
+  return promise;
+}
+
+try{
+  const cached=JSON.parse(localStorage.getItem(OVERVIEW_CACHE_KEY)||'null');
+  if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
+}catch{}
+
+async function refresh(){
+  try{
+    const rows=await fetchJSON('/api/tokens');
+    showOverview(rows);
+    try{localStorage.setItem(OVERVIEW_CACHE_KEY,JSON.stringify({at:Date.now(),rows}));}catch{}
+  }catch(e){
+    document.getElementById('refreshInfo').textContent=`更新失败: ${e.message}`;
+    if(!tokenData.length){
+      document.getElementById('listSummary').textContent='数据暂时不可用';
+      document.getElementById('tokenList').innerHTML='<div class="empty-state">加载失败，稍后自动重试</div>';
+    }
+  }
+}
+refresh();
+setInterval(refresh,REFRESH_MS);
+</script>
+</body>
+</html>

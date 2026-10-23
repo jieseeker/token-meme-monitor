@@ -1,195 +1,155 @@
-# Token Meme Monitor
+# Token Meme Monitor (Rust)
 
-Binance Alpha / BSC meme token monitoring stack.
+Binance Alpha / BSC meme token monitoring stack, fully rewritten in Rust.
 
-The current project is not a generic all-chain pair scanner. It monitors the Binance Alpha BSC universe, refreshes pair market data, writes local SQLite history, computes rule signals and p4 prediction scores, and exposes the result through a Streamlit dashboard plus scheduled backtest reports.
+Single ~2.5MB binary that monitors the Binance Alpha BSC universe, refreshes pair market data, writes local SQLite history, computes rule signals, and serves a decision-focused dashboard.
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────┐
+│              tmm binary (~2.5MB)               │
+├────────────────┬───────────────────────────────┤
+│   Worker       │   Dashboard (axum)            │
+│   - Binance α  │   - Token list + detail       │
+│   - DexScreener│   - Decision summary          │
+│   - Signals    │   - Probability predictions   │
+│   - SQLite WAL │   - Price/volume charts       │
+├────────────────┴───────────────────────────────┤
+│         SQLite (data/monitor.db)               │
+└────────────────────────────────────────────────┘
+```
 
 ## Project Layout
 
-```text
-token-meme-monitor/
-├── dashboard/
-│   ├── app.py
-│   └── view_models.py
-├── docs/
-│   ├── backend-core-logic.md
-│   ├── frontend-dashboard-ui.md
-│   └── session-prompt-templates.md
-├── openspec/
-│   └── changes/
-├── tests/
-├── token_meme_monitor/
-│   ├── clients/
-│   ├── cli.py
-│   ├── config.py
-│   ├── database.py
-│   ├── health.py
-│   ├── orchestrator.py
-│   ├── prediction_backtest.py
-│   ├── prediction_outcomes.py
-│   ├── predictions.py
-│   ├── scheduled_backtest.py
-│   └── signals.py
-├── .env.example
-├── restart.sh
-├── requirements.txt
-└── pyproject.toml
 ```
-
-`data/` contains local SQLite data and generated reports. It is ignored by git and is not source documentation.
+token-meme-monitor/
+├── rust-dashboard/
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs           # Entry: all / worker / dashboard / init-db
+│   │   ├── config.rs         # Environment-driven configuration
+│   │   ├── db.rs             # SQLite schema + CRUD + queries
+│   │   ├── dashboard.rs      # Axum HTTP server + JSON API
+│   │   ├── engine/
+│   │   │   ├── features.rs   # Feature vector construction
+│   │   │   ├── signals.rs    # Rule-based signal scoring (v1)
+│   │   │   └── worker.rs     # Main monitoring loop
+│   │   └── clients/
+│   │       ├── binance_alpha.rs
+│   │       └── dexscreener.rs
+│   └── static/index.html     # Embedded frontend (decision workbench)
+├── data/                      # SQLite (git-ignored)
+├── docs/
+├── openspec/                  # Historical change archive
+├── .env.example
+├── Dockerfile
+└── docker-compose.yml
+```
 
 ## Quick Start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-./.venv/bin/python -m token_meme_monitor init-db
+# Build
+cd rust-dashboard
+cargo build --release
+
+# Initialize database
+MONITOR_DATABASE_PATH=../data/monitor.db ./target/release/tmm init-db
+
+# Run dashboard only
+MONITOR_DATABASE_PATH=../data/monitor.db ./target/release/tmm dashboard
+
+# Run worker only
+MONITOR_DATABASE_PATH=../data/monitor.db ./target/release/tmm worker
+
+# Run everything (worker + dashboard in one process)
+MONITOR_DATABASE_PATH=../data/monitor.db ./target/release/tmm all
 ```
 
-Start or restart the local runtime:
+Dashboard runs at `http://127.0.0.1:8501`.
+If a managed `tmm all` service already owns that port, restart that service after a rebuild instead of starting a second process. Use the same `MONITOR_DATABASE_PATH` for every run; otherwise the page and worker can read different databases.
+
+## Docker Deployment
 
 ```bash
-./restart.sh
+docker compose up -d
 ```
 
-Check runtime status:
+See [docs/deploy-fnos-docker.md](docs/deploy-fnos-docker.md) for fnOS NAS deployment.
+
+## Cloud deployment without Docker
+
+The cloud server needs Linux with systemd, Rust/Cargo, a C compiler and the OpenSSL development headers (for example, `build-essential pkg-config libssl-dev` on Debian/Ubuntu). The SSH user needs passwordless `sudo` to install the system service. Cargo builds on the server, so its CPU architecture can differ from this Mac.
 
 ```bash
-./restart.sh status
+cp .env.example .env                 # set any required runtime values locally
+./deploy-cloud.sh --dry-run deploy@example.com /home/deploy/token-meme-monitor
+./deploy-cloud.sh deploy@example.com /home/deploy/token-meme-monitor
 ```
 
-Stop runtime services:
+Use `SSH_PORT=2222 ./deploy-cloud.sh ...` for a nondefault SSH port. The script builds the binary remotely, installs a `tmm.service` systemd unit, and leaves the server's `.env` and `data/` directory untouched. On first deployment it creates `.env` from `.env.example`. SQLite defaults to `data/monitor.db` under the server deployment directory.
+
+For the production server, run `./deploy-production.sh`. It uses `~/.ssh/tencent_ed25519` for passwordless SSH (override with `SSH_IDENTITY_FILE=/path/to/key`). It copies only `BSC_DEPTH_RPC_URLS` from the local `.env` (override the source with `TMM_RPC_SOURCE=/path/to/env`); the RPC key stays out of Git. It reads the local `Basic-763618` subscription (override with `TMM_PROXY_SOURCE=/path/to/file`), installs one headless sing-box process on the server, probes each node, and puts only reachable, distinct exit IPs into `GECKOTERMINAL_PROXY_URLS`. The subscription credentials stay in a private server config; the proxy endpoints listen only on `127.0.0.1`. This production command updates those two `.env` entries and observes both services for 30 minutes after deployment. Set `TMM_OBSERVE_MINUTES=0` to skip observation.
 
 ```bash
-./restart.sh stop
+ssh deploy@example.com 'sudo journalctl -u tmm.service -f -n 100'
 ```
 
-The dashboard runs at:
-
-```text
-http://127.0.0.1:8501
-```
-
-## Runtime Services
-
-The local runtime has three processes:
-
-| Service | Command | Responsibility |
-| --- | --- | --- |
-| Realtime worker | `./.venv/bin/python -m token_meme_monitor run-worker` | Refreshes Alpha universe, pair snapshots, signals, predictions, outcomes, holder side job |
-| Scheduled backtest worker | `./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker` | Refreshes mature prediction outcomes and writes scheduled reports |
-| Dashboard | `./.venv/bin/streamlit run dashboard/app.py` | Reads local SQLite and renders candidate list, token detail, predictions, history, and trends |
-
-`restart.sh` starts all three in the background and writes logs/PIDs under `/tmp/token-meme-monitor/`. `./restart.sh status` uses the structured runtime status command and reports stale PID files, command mismatches, log paths, log sizes, and the dashboard URL. `./restart.sh rotate-logs` rotates local runtime logs when they exceed `LOG_MAX_BYTES` (default 10 MB).
-
-## CLI Commands
-
-```bash
-./.venv/bin/python -m token_meme_monitor init-db
-./.venv/bin/python -m token_meme_monitor print-config
-./.venv/bin/python -m token_meme_monitor healthcheck
-./.venv/bin/python -m token_meme_monitor health-report
-./.venv/bin/python -m token_meme_monitor health-report --json
-./.venv/bin/python -m token_meme_monitor runtime-status
-./.venv/bin/python -m token_meme_monitor runtime-status --json
-./.venv/bin/python -m token_meme_monitor lifecycle-inventory --json
-./.venv/bin/python -m token_meme_monitor lifecycle-integrity --json
-./.venv/bin/python -m token_meme_monitor retention-plan --older-than-days 14 --json
-./.venv/bin/python -m token_meme_monitor run-worker --once
-./.venv/bin/python -m token_meme_monitor run-worker
-./.venv/bin/python -m token_meme_monitor cleanup-data
-./.venv/bin/python -m token_meme_monitor validate-token-list
-./.venv/bin/python -m token_meme_monitor export-prediction-dataset
-./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes
-./.venv/bin/python -m token_meme_monitor refresh-prediction-outcomes --refresh-missing-quality
-./.venv/bin/python -m token_meme_monitor refresh-risk-enrichment --fixture-json risk-fixture.json
-./.venv/bin/python -m token_meme_monitor rebuild-predictions
-./.venv/bin/python -m token_meme_monitor backtest-predictions
-./.venv/bin/python -m token_meme_monitor strategy-feedback-report
-./.venv/bin/python -m token_meme_monitor scheduled-backtest-report
-./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker --once
-./.venv/bin/python -m token_meme_monitor run-scheduled-backtest-worker
-./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --dry-run
-./.venv/bin/python -m token_meme_monitor compact-history --older-than-days 14 --execute
-```
+Logs are JSON lines with UTC timestamps, event names and context. systemd captures them in journald; retention follows the server's journald settings. `LOG_LEVEL` defaults to `INFO` and supports `ERROR`, `WARN`, `INFO` and `DEBUG`.
 
 ## Configuration
 
 Runtime settings are environment-driven. Copy `.env.example` to `.env` and override as needed.
 
-Important variables:
+Key variables:
+- `MONITOR_DATABASE_PATH` — SQLite path (default: `data/monitor.db`)
+- `WORKER_LOOP_SECONDS` — Worker cycle interval (default: 15)
+- `DASHBOARD_PORT` — Dashboard port (default: 8501)
+- `BSC_DEPTH_RPC_URLS` — Optional comma separated BSC HTTPS RPC URLs for pool depth; public backups are built in. Keep provider keys in the server's private `.env`.
+- `MIN_LIQUIDITY_USD` — Minimum liquidity threshold
+- `MIN_VOLUME_H1_USD` — Minimum 1h volume
+- `FOCUS_SCORE_THRESHOLD` — Focus state threshold (default: 65)
+- `ALERT_SCORE_THRESHOLD` — Alert state threshold (default: 78)
 
-- `MONITOR_DATABASE_PATH`
-- `MONITOR_UNIVERSE`
-- `BSC_RPC_URL`
-- `BSC_RPC_URLS`
-- `DISCOVERY_START_BLOCK`
-- `DISCOVERY_INITIAL_BACKFILL_BLOCKS`
-- `DISCOVERY_BLOCK_CHUNK_SIZE`
-- `DISCOVERY_BLOCK_CONFIRMATIONS`
-- `WORKER_LOOP_SECONDS`
-- `MAX_PAIRS_PER_CYCLE`
-- `BASE_POLL_INTERVAL_SECONDS`
-- `FOCUS_POLL_INTERVAL_SECONDS`
-- `MIN_LIQUIDITY_USD`
-- `ARCHIVE_LIQUIDITY_USD`
-- `MIN_VOLUME_H1_USD`
-- `FOCUS_SCORE_THRESHOLD`
-- `ALERT_SCORE_THRESHOLD`
-- `BINANCE_ALPHA_REFRESH_MINUTES`
-- `BINANCE_ALPHA_PAIR_SEED_REFRESH_MINUTES`
-- `BINANCE_ALPHA_SEED_BATCH_SIZE`
-- `HOLDER_METRICS_JOB_INTERVAL_SECONDS`
-- `HOLDER_METRICS_REFRESH_HOURS`
-- `HOLDER_METRICS_BATCH_SIZE`
-- `BINANCE_FUTURES_REGISTRY_REFRESH_HOURS`
-- `RISK_ENRICHMENT_FIXTURE_PATH`
-- `RISK_ENRICHMENT_TTL_HOURS`
-- `RISK_ENRICHMENT_BATCH_SIZE`
-- `DASHBOARD_AUTO_REFRESH_SECONDS`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+## Signal Engine
 
-`BSC_RPC_URLS` can contain a comma-separated endpoint pool. The worker cools down RPC endpoints that return provider-limit errors and switches discovery to another endpoint when available.
+Rule-based scoring (strategy v1), ported exactly from Python. Rules include:
+- Liquidity band scoring (healthy/ample/insufficient)
+- Volume support (1h and 5m impulse)
+- Buy dominance (5m and 1h)
+- Volume-to-liquidity breakout
+- Liquidity-to-FDV balance
+- Project metadata presence
+- Price trend confirmation
+- Binance Alpha specific: alpha score, holder depth, futures listing
+- Risk penalties: sell pressure, FDV stretch, missing price
 
-## Current Behavior
+## Performance
 
-- Default universe is `MONITOR_UNIVERSE=binance_alpha`.
-- DexScreener pair snapshots are validated before being written.
-- Market data is sanitized before feature generation.
-- Signal scoring is rule-based strategy `v1`.
-- Prediction scoring is p4 and writes horizon-specific scores: `short_momentum_score`, `continuation_score`, and `breakout_score`.
-- Mature prediction outcomes are computed from GeckoTerminal hourly OHLCV and used for calibration/backtesting.
-- `strategy-feedback-report` writes versioned feedback runs that compare prediction outcomes by stable slices and emits review-only recommendations.
-- Risk enrichment is observation-only: optional providers can write `risk_snapshots`, and health/dashboard read models can display unknown/failure/high-risk state, but scoring and alert gating are unchanged.
-- Dashboard main sorting uses `short_momentum_score` with `opportunity_score` as a compatibility fallback.
-- Dashboard detail includes a decision workbench view that connects signal, prediction, outcome, and CSV case export; local review notes/watchlist are stored separately from scoring tables.
-- `compact-history` archives old raw payloads while keeping prediction dataset reads compatible with compacted rows.
-- Lifecycle commands are read-only by default: `lifecycle-inventory`, `lifecycle-integrity`, and `retention-plan` expose database growth, integrity findings, and dry-run cleanup candidates.
-
-## Documentation
-
-- [docs/backend-core-logic.md](docs/backend-core-logic.md): backend, signal, prediction, storage, worker, and CLI baseline
-- [docs/frontend-dashboard-ui.md](docs/frontend-dashboard-ui.md): dashboard structure, interaction rules, and UI constraints
-- [docs/session-prompt-templates.md](docs/session-prompt-templates.md): short context templates for new coding sessions
-- `openspec/changes/`: historical change artifacts and project memory
+| Metric | Python (previous) | Rust (current) |
+| --- | --- | --- |
+| Dashboard memory | ~450MB (Streamlit) | ~15MB |
+| Worker memory | ~350MB (web3) | ~20MB |
+| Binary size | ~400MB (image) | ~2.5MB |
+| Page response | 200-800ms | <1ms |
+| Startup time | 5-15s | <100ms |
 
 ## Testing
 
 ```bash
-./.venv/bin/python -m unittest discover -s tests
+cd rust-dashboard
+cargo test
 ```
 
-## Intentional Gaps
+## Migration from Python
 
-The current baseline does not yet use observation-only risk enrichment for:
+The Rust version reads/writes the same SQLite schema as the Python version. To migrate:
+1. Keep your existing `data/monitor.db`
+2. Build and run the Rust binary with the same `MONITOR_DATABASE_PATH`
+3. Historical data is preserved
 
-- tax / honeypot risk scoring
-- owner permission scoring
-- LP lock / burn scoring
-- real-time holder concentration scoring
-- multi-chain strategy abstraction
-- local GPU or deep learning models
-- multi-worker concurrent SQLite writes
+## Documentation
+
+- [docs/deploy-fnos-docker.md](docs/deploy-fnos-docker.md): NAS deployment guide
+- `openspec/changes/`: Historical change archive and project memory

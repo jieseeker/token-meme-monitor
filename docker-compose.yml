@@ -1,0 +1,32 @@
+# Token Meme Monitor — Rust edition. Single binary, ~15MB memory.
+#
+# One container runs both worker and dashboard.
+# Data persists via bind mount to NAS local filesystem.
+
+services:
+  tmm:
+    build:
+      context: .
+    image: token-meme-monitor:latest
+    container_name: tmm
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONITOR_DATABASE_PATH: /app/data/monitor.db
+      DASHBOARD_PORT: "8501"
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+    volumes:
+      - ${TMM_DATA_DIR:-./data}:/app/data
+    ports:
+      - "8501:8501"
+    deploy:
+      resources:
+        limits:
+          memory: ${TMM_MEMORY_LIMIT:-512M}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
