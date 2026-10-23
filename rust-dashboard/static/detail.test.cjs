@@ -113,6 +113,10 @@ setImmediate(async () => {
   await vm.runInContext(`loadDepth({...selectedDetail,pools:[...selectedDetail.pools,{pair_address:'0xempty',price_usd:null,liquidity_usd:0}]})`,context);
   assert.ok(document.getElementById('depthBody').innerHTML.includes('池子 2/2'), 'empty pools do not dilute depth coverage');
   assert.ok(!calls.slice(beforeEmptyPool).some(url=>url.includes('0xempty/depth')), 'empty pools need no depth request');
+  const beforeTinyPool=calls.length;
+  await vm.runInContext(`loadDepth({...selectedDetail,pools:[...selectedDetail.pools,{pair_address:'0xtiny',price_usd:${row.price_usd},liquidity_usd:100}]})`,context);
+  assert.ok(!calls.slice(beforeTinyPool).some(url=>url.includes('0xtiny/depth')), 'pools beyond 95% liquidity coverage need no detail request');
+  assert.ok(document.getElementById('depthBody').innerHTML.includes('纳入流动性约 99%'), 'omitted pool liquidity must be disclosed');
   const offsetPool=vm.runInContext(`poolDepthAtTarget(
     {price_usd:1.02},
     {bands_pct:[1,2,5],support_usd:[100,200,500]},
