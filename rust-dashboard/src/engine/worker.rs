@@ -2,9 +2,10 @@
 
 use super::features::{build_feature_vector, FeatureThresholds, PairSnapshot};
 use super::signals::{evaluate, SignalConfig};
+use super::{signal_v2, signal_v2_store};
 use crate::clients::binance_alpha::BinanceAlphaClient;
 use crate::clients::dexscreener::DexScreenerClient;
-use crate::config::Config;
+use crate::config::{Config, SignalV2Mode};
 use crate::db;
 use serde_json::Value;
 use std::time::Duration;
@@ -18,6 +19,7 @@ pub async fn run_worker(db_path: &str) {
     // ponytail: retry queue is process-local; persist it if failed tokens must survive restart without a full scan.
     let mut dex_failures = std::collections::HashMap::new();
     let mut dex_successes = std::collections::HashMap::new();
+    let mut shadow_retry_at = std::time::Instant::now();
 
     if let Err(e) = db::init_schema(db_path) {
         crate::logging::event(
@@ -31,7 +33,7 @@ pub async fn run_worker(db_path: &str) {
     crate::logging::event(
         "info",
         "worker_started",
-        serde_json::json!({"loop_seconds":config.worker_loop_seconds,"batch_size":config.max_pairs_per_cycle}),
+        serde_json::json!({"loop_seconds":config.worker_loop_seconds,"batch_size":config.max_pairs_per_cycle,"signal_v2_mode":config.signal_v2_mode.as_str(),"source_time_unverified":true}),
     );
 
     let cleanup_path = db_path.to_string();
@@ -104,6 +106,7 @@ pub async fn run_worker(db_path: &str) {
             tokens,
             &mut dex_failures,
             &mut dex_successes,
+            &mut shadow_retry_at,
         )
         .await
         {
@@ -135,6 +138,7 @@ async fn run_cycle(
     tokens: &[crate::clients::binance_alpha::AlphaToken],
     failures: &mut std::collections::HashMap<String, (u8, std::time::Instant)>,
     successes: &mut std::collections::HashMap<String, std::time::Instant>,
+    shadow_retry_at: &mut std::time::Instant,
 ) -> Result<(usize, usize, usize), Box<dyn std::error::Error + Send + Sync>> {
     // Continue from the previous batch, wrapping to the start of the Alpha list.
     const CURSOR: &str = "binance_alpha_bsc_last_token";
@@ -273,6 +277,28 @@ async fn run_cycle(
                 });
                 let mut current = Vec::new();
                 let mut failed = false;
+                let shadow_samples: Vec<_> = if config.signal_v2_mode == SignalV2Mode::Shadow {
+                    selected
+                        .iter()
+                        .map(|(pair, snapshot)| {
+                            signal_v2_store::sample(
+                                snapshot,
+                                &signal_v2_store::metadata(pair, &snapshot.observed_at),
+                            )
+                            .unwrap_or_else(|| signal_v2::Sample {
+                                at: now.timestamp(),
+                                pair_address: snapshot.pair_address.clone(),
+                                price: None,
+                                volume_h1: None,
+                                volume_m5: None,
+                                liquidity_usd: None,
+                                fingerprint: String::new(),
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 for (pair_data, snapshot) in selected {
                     let db2 = db_path.to_string();
                     let Some(decision) = decision.clone() else {
@@ -313,6 +339,41 @@ async fn run_cycle(
                 }
                 if !failed {
                     successes.insert(token.address.clone(), std::time::Instant::now());
+                    if config.signal_v2_mode == SignalV2Mode::Shadow
+                        && std::time::Instant::now() >= *shadow_retry_at
+                    {
+                        let path = db_path.to_string();
+                        let address = token.address.clone();
+                        let at = now.to_rfc3339();
+                        let settings = signal_v2::Settings {
+                            min_volume_h1_usd: config.min_volume_h1_usd,
+                            focus_score_threshold: config.focus_score_threshold,
+                        };
+                        let score = decision.as_ref().map_or(0, |d| d.score);
+                        let risks = decision
+                            .as_ref()
+                            .map_or_else(Vec::new, |d| d.risk_flags.clone());
+                        let result = tokio::task::spawn_blocking(move || {
+                            signal_v2_store::observe(
+                                &path,
+                                &address,
+                                &shadow_samples,
+                                &at,
+                                score,
+                                &risks,
+                                &settings,
+                            )
+                        })
+                        .await;
+                        if !matches!(result, Ok(Ok(_))) {
+                            *shadow_retry_at = std::time::Instant::now() + Duration::from_secs(60);
+                            crate::logging::event(
+                                "warn",
+                                "signal_v2_shadow_failed",
+                                serde_json::json!({"token":token.address,"error":format!("{result:?}"),"retry_seconds":60}),
+                            );
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -650,6 +711,7 @@ fn write_scored_pair(
             .unwrap_or_default(),
         snapshot,
         decision,
+        &signal_v2_store::metadata(pair_data, &snapshot.observed_at),
     )?;
 
     Ok(())
@@ -758,6 +820,36 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["signal_score"], rows[1]["signal_score"]);
         assert_eq!(rows[0]["signal_reasons"], rows[1]["signal_reasons"]);
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let mut query = conn.prepare("SELECT raw_json FROM snapshots").unwrap();
+        for raw in query.query_map([], |r| r.get::<_, String>(0)).unwrap() {
+            let raw: Value = serde_json::from_str(&raw.unwrap()).unwrap();
+            assert_eq!(raw["signal_v2"]["presence"]["volume_h1"], true);
+            assert_eq!(raw["signal_v2"]["presence"]["volume_m5"], false);
+        }
+        let before = db::overview(path, 10).unwrap();
+        conn.execute("DROP TABLE signal_v2_changes", []).unwrap();
+        // Use a valid sample so the independent transaction actually reaches its missing table.
+        let sample = super::super::signal_v2::Sample {
+            at: chrono::Utc::now().timestamp(),
+            pair_address: "0xpan".into(),
+            price: Some(1.0),
+            liquidity_usd: Some(20000.0),
+            volume_h1: Some(10000.0),
+            volume_m5: None,
+            fingerprint: "request".into(),
+        };
+        assert!(super::super::signal_v2_store::observe(
+            path,
+            &token.address,
+            &[sample],
+            &now,
+            65,
+            &[],
+            &super::super::signal_v2::Settings::default()
+        )
+        .is_err());
+        assert_eq!(db::overview(path, 10).unwrap(), before);
         std::fs::remove_file(path).unwrap();
     }
 

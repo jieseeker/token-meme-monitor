@@ -1,7 +1,37 @@
 use std::env;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalV2Mode {
+    Legacy,
+    Shadow,
+}
+
+impl SignalV2Mode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("shadow") => Self::Shadow,
+            None | Some("legacy") => Self::Legacy,
+            Some(_) => {
+                crate::logging::event(
+                    "warn",
+                    "signal_v2_invalid_mode",
+                    serde_json::json!({"fallback":"legacy"}),
+                );
+                Self::Legacy
+            }
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Shadow => "shadow",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub signal_v2_mode: SignalV2Mode,
     pub worker_loop_seconds: u64,
     pub max_pairs_per_cycle: usize,
     pub binance_alpha_url: String,
@@ -19,6 +49,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Self {
         Self {
+            signal_v2_mode: SignalV2Mode::parse(env::var("SIGNAL_V2_MODE").ok().as_deref()),
             worker_loop_seconds: env::var("WORKER_LOOP_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -67,6 +98,24 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.25),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SignalV2Mode;
+    #[test]
+    fn signal_v2_mode_accepts_only_explicit_shadow() {
+        for (input, expected) in [
+            (None, "legacy"),
+            (Some("legacy"), "legacy"),
+            (Some("shadow"), "shadow"),
+            (Some("SHADOW"), "legacy"),
+            (Some(""), "legacy"),
+            (Some("enabled"), "legacy"),
+        ] {
+            assert_eq!(SignalV2Mode::parse(input).as_str(), expected);
         }
     }
 }

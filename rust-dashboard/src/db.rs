@@ -185,6 +185,27 @@ pub fn init_schema(path: &str) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_snapshots_pair ON snapshots(pair_address, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at ON snapshots(observed_at);
+        CREATE TABLE IF NOT EXISTS signal_v2_state (
+            token_address TEXT PRIMARY KEY,
+            pair_address TEXT NOT NULL,
+            first_seen_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_consumed_at TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            summary_json TEXT NOT NULL,
+            settings_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signal_v2_state_first_seen ON signal_v2_state(first_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_signal_v2_state_updated ON signal_v2_state(updated_at DESC);
+        CREATE TABLE IF NOT EXISTS signal_v2_changes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_address TEXT NOT NULL,
+            pair_address TEXT NOT NULL,
+            recorded_at INTEGER NOT NULL,
+            summary_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signal_v2_changes_token_time ON signal_v2_changes(token_address,recorded_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_signal_v2_changes_time ON signal_v2_changes(recorded_at);
         CREATE TABLE IF NOT EXISTS signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pair_address TEXT NOT NULL,
@@ -228,6 +249,9 @@ pub fn prune_history(path: &str) -> Result<bool, rusqlite::Error> {
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
     let mut conn = connect(path)?;
     let tx = conn.transaction()?;
+    let signal_cutoff = chrono::Utc::now().timestamp() - 7 * 86_400;
+    tx.execute("DELETE FROM signal_v2_state WHERE token_address IN (SELECT token_address FROM signal_v2_state WHERE first_seen_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
+    tx.execute("DELETE FROM signal_v2_changes WHERE id IN (SELECT id FROM signal_v2_changes WHERE recorded_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
     tx.execute("DELETE FROM detail_cache WHERE updated_at < ?1", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_signals AS SELECT id FROM signals WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_snapshots AS SELECT id FROM snapshots WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
@@ -269,8 +293,10 @@ pub fn prune_history(path: &str) -> Result<bool, rusqlite::Error> {
     )?;
     let more: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM signals WHERE observed_at < ?1)
-        OR EXISTS(SELECT 1 FROM snapshots WHERE observed_at < ?1)",
-        [&cutoff],
+        OR EXISTS(SELECT 1 FROM snapshots WHERE observed_at < ?1)
+        OR EXISTS(SELECT 1 FROM signal_v2_state WHERE first_seen_at <= ?2)
+        OR EXISTS(SELECT 1 FROM signal_v2_changes WHERE recorded_at <= ?2)",
+        params![&cutoff, signal_cutoff],
         |row| row.get(0),
     )?;
     tx.commit()?;
@@ -347,6 +373,7 @@ pub fn upsert_pair_and_write(
     dex_id: &str,
     snapshot: &PairSnapshot,
     decision: &SignalDecision,
+    raw_json: &Value,
 ) -> Result<(), rusqlite::Error> {
     let mut conn = connect(path)?;
     let tx = conn.transaction()?;
@@ -429,7 +456,7 @@ pub fn upsert_pair_and_write(
             snapshot.boosts_active,
             0.0,
             serde_json::to_string(&decision.risk_flags).unwrap_or_default(),
-            "{}",
+            raw_json.to_string(),
         ],
     )?;
 

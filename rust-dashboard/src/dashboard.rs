@@ -129,6 +129,8 @@ const DEPTH_TTL: std::time::Duration = std::time::Duration::from_secs(240);
 #[derive(Clone)]
 struct AppState {
     db_path: Arc<String>,
+    signal_v2_mode: crate::config::SignalV2Mode,
+    signal_v2_settings: crate::engine::signal_v2::Settings,
     http_client: reqwest::Client,
     futures_catalog: Arc<tokio::sync::Mutex<Option<(std::time::Instant, Option<HashSet<String>>)>>>,
     global_oi:
@@ -152,7 +154,147 @@ struct OverviewParams {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct SignalV2Params {
+    token: Option<String>,
+    limit: Option<usize>,
+}
+
+fn signal_v2_diagnostic(
+    path: &str,
+    params: SignalV2Params,
+    mode: crate::config::SignalV2Mode,
+    settings: &crate::engine::signal_v2::Settings,
+    now: i64,
+) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
+    let limit = params.limit.unwrap_or(100);
+    if !(1..=500).contains(&limit)
+        || params
+            .token
+            .as_ref()
+            .is_some_and(|token| !valid_hex(token, 42))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Invalid token or limit (1..500)"})),
+        ));
+    }
+    if !crate::engine::signal_v2_store::settings_valid(settings) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":"Invalid shadow parameters"})),
+        ));
+    }
+    let token = params.token.map(|token| token.to_ascii_lowercase());
+    let rows = crate::engine::signal_v2_store::summaries(path, token.as_deref(), limit, now)
+        .map_err(|_| {
+            crate::logging::event(
+                "warn",
+                "signal_v2_diagnostic_failed",
+                serde_json::json!({"reason":"state_read_failed"}),
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"Signal diagnostics unavailable"})),
+            )
+        })?;
+    Ok(
+        serde_json::json!({"mode":mode.as_str(),"source_time_unverified":true,"experiment_version":crate::engine::signal_v2_store::EXPERIMENT_VERSION,"settings":settings,"summaries":rows}),
+    )
+}
+
+async fn signal_v2_diagnostics(
+    State(state): State<AppState>,
+    Query(params): Query<SignalV2Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let path = state.db_path.as_ref().clone();
+    let mode = state.signal_v2_mode;
+    let settings = state.signal_v2_settings.clone();
+    tokio::task::spawn_blocking(move || {
+        signal_v2_diagnostic(
+            &path,
+            params,
+            mode,
+            &settings,
+            chrono::Utc::now().timestamp(),
+        )
+    })
+    .await
+    .map_err(axum_error)?
+    .map(Json)
+}
+
+#[cfg(test)]
+mod signal_v2_tests {
+    use super::*;
+    #[test]
+    fn signal_v2_diagnostic_rejects_invalid_query_before_database_access() {
+        for (token, limit) in [
+            (Some("bad".into()), Some(1)),
+            (None, Some(0)),
+            (None, Some(501)),
+        ] {
+            let result = signal_v2_diagnostic(
+                "/no-such-database",
+                SignalV2Params { token, limit },
+                crate::config::SignalV2Mode::Legacy,
+                &crate::engine::signal_v2::Settings::default(),
+                100,
+            );
+            assert_eq!(result.unwrap_err().0, StatusCode::BAD_REQUEST);
+        }
+    }
+    #[test]
+    fn signal_v2_diagnostic_rejects_invalid_current_parameters() {
+        let settings = crate::engine::signal_v2::Settings {
+            min_volume_h1_usd: f64::NAN,
+            ..Default::default()
+        };
+        let result = signal_v2_diagnostic(
+            "/no-such-database",
+            SignalV2Params {
+                token: None,
+                limit: Some(1),
+            },
+            crate::config::SignalV2Mode::Shadow,
+            &settings,
+            100,
+        );
+        assert_eq!(
+            result.unwrap_err().1 .0["error"],
+            "Invalid shadow parameters"
+        );
+    }
+    #[test]
+    fn signal_v2_diagnostic_reports_mode_and_unverified_source() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-diagnostic-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let path = path.to_str().unwrap();
+        crate::db::init_schema(path).unwrap();
+        let value = signal_v2_diagnostic(
+            path,
+            SignalV2Params {
+                token: Some(format!("0x{}", "a".repeat(40))),
+                limit: Some(1),
+            },
+            crate::config::SignalV2Mode::Shadow,
+            &crate::engine::signal_v2::Settings::default(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(value["settings"]["min_volume_h1_usd"], 15000.0);
+        assert_eq!(value["experiment_version"], "signal_v2_shadow_v1");
+        assert_eq!(value["mode"], "shadow");
+        assert_eq!(value["source_time_unverified"], true);
+        assert_eq!(value["summaries"], serde_json::json!([]));
+    }
+}
+
 pub async fn serve(db_path: &str) {
+    let config = crate::config::Config::from_env();
     let proxies = gecko_proxies();
     crate::logging::event(
         "info",
@@ -161,6 +303,11 @@ pub async fn serve(db_path: &str) {
     );
     let state = AppState {
         db_path: Arc::new(db_path.to_string()),
+        signal_v2_mode: config.signal_v2_mode,
+        signal_v2_settings: crate::engine::signal_v2::Settings {
+            min_volume_h1_usd: config.min_volume_h1_usd,
+            focus_score_threshold: config.focus_score_threshold,
+        },
         http_client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(8))
             .user_agent("TokenMemeMonitor/0.1")
@@ -232,6 +379,7 @@ pub async fn serve(db_path: &str) {
         .route("/api/tokens", get(tokens))
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
+        .route("/api/signal-v2", get(signal_v2_diagnostics))
         .route("/api/health", get(health_check))
         .route("/api/token/{pair}/snapshots", get(token_snapshots))
         .route("/api/token/{pair}/signals", get(token_signals))
