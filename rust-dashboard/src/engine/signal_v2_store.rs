@@ -181,19 +181,7 @@ pub fn load(conn: &Connection, token: &str) -> Result<Option<(State, String, Val
     let row: Option<(String,String,String)> = conn.query_row("SELECT state_json,last_consumed_at,settings_json FROM signal_v2_state WHERE token_address=?1", [token], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     row.map(|(raw, consumed, parameters)| {
         let state: State = serde_json::from_str(&raw)?;
-        if state.token_address != token
-            || state.pair_address.is_empty()
-            || state.first_seen_at > state.updated_at
-            || state
-                .last_evidence_at
-                .is_some_and(|at| at > state.updated_at)
-            || (state.b_at.is_some()
-                && [state.reference_upper, state.b_price, state.first_wave_high]
-                    .iter()
-                    .any(|p| !p.is_some_and(|p| p.is_finite() && p > 0.0)))
-            || (state.base_upper.is_some()
-                && !state.base_lower.is_some_and(|p| p.is_finite() && p > 0.0))
-        {
+        if state.token_address != token || !state.is_valid_for_restore() {
             return Err("invalid shadow state".into());
         }
         chrono::DateTime::parse_from_rfc3339(&consumed)?;
@@ -366,6 +354,9 @@ pub fn summaries(path: &str, token: Option<&str>, limit: usize, now: i64) -> Res
     raw.into_iter()
         .map(|(raw, parameters)| {
             let mut state: State = serde_json::from_str(&raw)?;
+            if !state.is_valid_for_restore() {
+                return Err("invalid shadow state".into());
+            }
             let parameters: Value = serde_json::from_str(&parameters)?;
             let settings: Settings = serde_json::from_value(parameters["settings"].clone())?;
             signal_v2::tick(&mut state, now);
@@ -736,5 +727,90 @@ mod tests {
         assert!(state["b_pending"].is_null());
         assert_eq!(state["data_status"], "config_changed");
         assert_eq!(state["stage"], "inactive");
+    }
+    #[test]
+    fn signal_v2_restored_b_pending_without_reference_resets_before_advancement() {
+        let path = database();
+        let mut conn = Connection::open(&path).unwrap();
+        let first = observation(1000, 100.0);
+        let mut state = State::new("token", &first);
+        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        let mut serialized = serde_json::to_value(state).unwrap();
+        serialized["b_pending"] = json!({"at":1000,"count":1});
+        let malformed: State = serde_json::from_value(serialized).unwrap();
+        save(&mut conn, &malformed, &at(1000), &Settings::default()).unwrap();
+        assert!(load(&conn, "token").is_err());
+        let result = observe(
+            &path,
+            "token",
+            &[observation(1060, 102.0)],
+            &at(1060),
+            65,
+            &[],
+            &Settings::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["stage"], "watch");
+        assert!(result["b_at"].is_null());
+        let restored = serde_json::to_value(load(&conn, "token").unwrap().unwrap().0).unwrap();
+        assert!(restored["b_pending"].is_null());
+        assert_eq!(restored["last_evidence_at"], 1060);
+    }
+    #[test]
+    fn signal_v2_restored_c_pending_requires_established_b_and_frozen_base() {
+        for missing in [
+            "b_at",
+            "base_upper",
+            "base_lower",
+            "base_volume_m5",
+            "base_frozen_at",
+        ] {
+            let path = database();
+            let mut conn = Connection::open(&path).unwrap();
+            let first = observation(1000, 100.0);
+            let mut state = State::new("token", &first);
+            signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+            let mut serialized = serde_json::to_value(state).unwrap();
+            serialized["b_at"] = json!(1000);
+            serialized["b_price"] = json!(100.0);
+            serialized["reference_upper"] = json!(99.0);
+            serialized["first_wave_high"] = json!(112.0);
+            serialized["base_upper"] = json!(106.0);
+            serialized["base_lower"] = json!(105.0);
+            serialized["base_volume_m5"] = json!(1000.0);
+            serialized["base_frozen_at"] = json!(1000);
+            serialized["c_pending"] = json!({"at":1000,"count":1});
+            serialized["stage"] = json!("base");
+            let complete: State = serde_json::from_value(serialized.clone()).unwrap();
+            save(&mut conn, &complete, &at(1000), &Settings::default()).unwrap();
+            assert!(load(&conn, "token").is_ok());
+            serialized[missing] = Value::Null;
+            save(
+                &mut conn,
+                &serde_json::from_value(serialized).unwrap(),
+                &at(1000),
+                &Settings::default(),
+            )
+            .unwrap();
+            assert!(
+                load(&conn, "token").is_err(),
+                "accepted C pending without {missing}"
+            );
+            let result = observe(
+                &path,
+                "token",
+                &[observation(1060, 107.0)],
+                &at(1060),
+                65,
+                &[],
+                &Settings::default(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(result["stage"], "watch");
+            assert!(result["b_at"].is_null());
+            assert!(result["c_at"].is_null());
+        }
     }
 }

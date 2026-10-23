@@ -84,6 +84,40 @@ struct BaseWindow {
 }
 
 impl State {
+    /// Validate restored public and private prerequisites before accepting persisted evidence.
+    pub fn is_valid_for_restore(&self) -> bool {
+        let positive = |value| nonnegative(value).is_some_and(|value| value > 0.0);
+        !self.token_address.is_empty()
+            && !self.pair_address.is_empty()
+            && self.first_seen_at <= self.updated_at
+            && self.last_evidence_at.is_none_or(|at| at <= self.updated_at)
+            && (self.b_at.is_none()
+                || [self.reference_upper, self.b_price, self.first_wave_high]
+                    .into_iter()
+                    .all(positive))
+            && (self.base_upper.is_none()
+                || (positive(self.base_upper) && positive(self.base_lower)))
+            && self.b_pending.as_ref().is_none_or(|pending| {
+                self.b_at.is_none()
+                    && positive(self.reference_upper)
+                    && pending.count > 0
+                    && pending.at >= self.first_seen_at
+                    && pending.at <= self.updated_at
+            })
+            && self.c_pending.as_ref().is_none_or(|pending| {
+                self.b_at.is_some()
+                    && !self.c_closed
+                    && self.c_at.is_none()
+                    && positive(self.base_upper)
+                    && positive(self.base_lower)
+                    && nonnegative(self.base_volume_m5).is_some()
+                    && self.base_frozen_at.is_some_and(|at| at <= pending.at)
+                    && pending.count > 0
+                    && pending.at >= self.first_seen_at
+                    && pending.at <= self.updated_at
+            })
+    }
+
     pub fn new(token: &str, sample: &Sample) -> Self {
         Self {
             token_address: token.into(),
