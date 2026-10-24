@@ -16,6 +16,17 @@ fn counters(keys: &[&str]) -> Counts {
     keys.iter().map(|key| ((*key).into(), 0)).collect()
 }
 const HORIZONS: [(&str, i64); 3] = [("15m", 900), ("1h", 3600), ("4h", 14400)];
+const B_COHORTS: [&str; 9] = [
+    "all",
+    "pass",
+    "pass_recent_volume",
+    "pass_near_breakout",
+    "pass_both",
+    "pass_distance_0_3pct",
+    "pass_distance_3_5pct",
+    "pass_distance_5_8pct",
+    "pass_distance_gt8pct",
+];
 
 #[derive(Default, Serialize)]
 struct Outcome {
@@ -23,6 +34,10 @@ struct Outcome {
     eligible: u64,
     endpoint_missing: u64,
     right_censored: u64,
+    positive: u64,
+    negative: u64,
+    flat: u64,
+    positive_sampled_return_rate_pct: Option<f64>,
     mean_sampled_return_pct: Option<f64>,
     min_sampled_return_pct: Option<f64>,
     max_sampled_return_pct: Option<f64>,
@@ -30,6 +45,15 @@ struct Outcome {
 impl Outcome {
     fn record(&mut self, value: f64) {
         self.eligible += 1;
+        if value > 0.0 {
+            self.positive += 1;
+        } else if value < 0.0 {
+            self.negative += 1;
+        } else {
+            self.flat += 1;
+        }
+        self.positive_sampled_return_rate_pct =
+            Some(self.positive as f64 / self.eligible as f64 * 100.0);
         let mean = self.mean_sampled_return_pct.unwrap_or(0.0);
         self.mean_sampled_return_pct = Some(mean + (value - mean) / self.eligible as f64);
         self.min_sampled_return_pct = Some(self.min_sampled_return_pct.unwrap_or(value).min(value));
@@ -69,7 +93,7 @@ struct Row {
     risks: Option<Vec<String>>,
 }
 struct Pending {
-    stage: String,
+    keys: Vec<String>,
     at: DateTime<Utc>,
     pair: String,
     price: f64,
@@ -131,6 +155,9 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         .into_iter()
         .map(|stage| (stage.into(), Hits::default()))
         .collect();
+    for name in B_COHORTS {
+        hits.insert(format!("B/{name}"), Hits::default());
+    }
     let mut first: Option<DateTime<Utc>> = None;
     let mut last: Option<DateTime<Utc>> = None;
     let mut times = conn.prepare("SELECT observed_at,julianday(observed_at) FROM snapshots")?;
@@ -262,6 +289,42 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         &mut hits,
     )?;
     replay.finish(last.unwrap_or_else(Utc::now), &mut hits);
+    let mut cohorts = BTreeMap::new();
+    let mut by_date: BTreeMap<String, BTreeMap<String, Hits>> = BTreeMap::new();
+    let keys: Vec<_> = hits
+        .keys()
+        .filter(|key| key.starts_with("B/"))
+        .cloned()
+        .collect();
+    for key in keys {
+        let hit = hits.remove(&key).unwrap();
+        if let Some(date_key) = key.strip_prefix("B/date/") {
+            let (date, name) = date_key.split_once('/').unwrap();
+            by_date
+                .entry(date.into())
+                .or_insert_with(|| {
+                    B_COHORTS
+                        .into_iter()
+                        .map(|name| (name.into(), Hits::default()))
+                        .collect()
+                })
+                .insert(name.into(), hit);
+        } else {
+            cohorts.insert(key[2..].to_string(), hit);
+        }
+    }
+    let recent_evidence: Counts = ["pass", "fail", "unknown"]
+        .into_iter()
+        .map(|name| {
+            (
+                name.into(),
+                coverage
+                    .get(&format!("b_recent_volume:{name}"))
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect();
     Ok(json!({
         "mode":if proxy {"legacy_proxy_exploratory"} else {"strict"},
         "experiment_identity":{"experiment_version":EXPERIMENT_VERSION,"settings":settings},
@@ -269,6 +332,19 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         "frame_completeness_verified":false,"runtime_execution_trace_reproduced":false,
         "window":{"available_from":first,"available_until":last,"replay_from":from,"replay_until":last,"max_days":7},
         "input":input,"coverage":coverage,"structural_hits":hits,
+        "b_filter_comparison":{
+            "experiment_version":"b_quality_v1",
+            "cohorts":cohorts,"by_utc_date":by_date,"recent_volume_evidence":recent_evidence,
+            "methods":{
+                "baseline":"all includes every structural B; pass and all filtered/distance cohorts require contemporaneous risk PASS; all remain source-time-unverified and opportunity-ineligible",
+                "recent_volume":"current m5 >= current h1/12 and >= 0.8 * positive crossing m5; current m5/h1 must be positive; prior same-pool samples at b_crossed_at must all agree on known positive crossing m5; otherwise unknown",
+                "near_breakout":"confirmation price <= frozen reference_upper * 1.005 * 1.03; distance buckets have inclusive upper boundaries 3/5/8 percent",
+                "membership":"fixed at original B confirmation using then-known inputs; one event shares unchanged forward labels across matching cohorts; no engine changes or re-confirmation",
+                "chronology":"UTC event-date cohorts; supports chronological comparison, not a certified untouched holdout or statistical significance",
+                "outcomes":"positive/negative/flat count eligible sampled endpoints only; positive rate = positive / eligible, missing and censored are separate; not trade win rate or net return",
+                "calibration":"fixed exploratory constants 1/12, 80%, 3%; no parameter search or automatic production promotion"
+            }
+        },
         "methods":{
             "ordering":"stream by token and SQLite millisecond time, exact RFC3339 sort within ties; independent stored request groups; engine clock is Unix seconds",
             "reference":"first eligible stored response group, highest liquidity then lowest pool address, frozen prospectively",
@@ -371,6 +447,57 @@ fn initial_history(
     samples.sort_by_key(|s| s.at);
     times.sort_unstable();
     Ok((samples.into(), times.into()))
+}
+
+fn b_cohorts(
+    state: &State,
+    current: &Sample,
+    history: &[Sample],
+) -> (Vec<&'static str>, Option<bool>) {
+    let mut names = vec!["all"];
+    if state.risk_status != "PASS" {
+        return (names, None);
+    }
+    names.push("pass");
+    let recent = (|| {
+        let m5 = current.volume_m5?;
+        let h1 = current.volume_h1?;
+        let crossed_at = state.b_crossed_at?;
+        let mut crossing = history
+            .iter()
+            .filter(|s| s.pair_address == state.pair_address && s.at == crossed_at);
+        let baseline = crossing.next()?.volume_m5.filter(|v| *v > 0.0)?;
+        if crossing.any(|s| s.volume_m5 != Some(baseline)) {
+            return None;
+        }
+        Some(m5 > 0.0 && h1 > 0.0 && m5 >= h1 / 12.0 && m5 >= baseline * 0.8)
+    })();
+    let distance = current.price.zip(state.reference_upper).map(|(p, upper)| {
+        let line = upper * 1.005;
+        if p <= line * 1.03 {
+            "pass_distance_0_3pct"
+        } else if p <= line * 1.05 {
+            "pass_distance_3_5pct"
+        } else if p <= line * 1.08 {
+            "pass_distance_5_8pct"
+        } else {
+            "pass_distance_gt8pct"
+        }
+    });
+    let near = distance == Some("pass_distance_0_3pct");
+    if recent == Some(true) {
+        names.push("pass_recent_volume");
+    }
+    if near {
+        names.push("pass_near_breakout");
+    }
+    if recent == Some(true) && near {
+        names.push("pass_both");
+    }
+    if let Some(bucket) = distance {
+        names.push(bucket);
+    }
+    (names, recent)
 }
 
 #[derive(Default)]
@@ -588,17 +715,37 @@ impl TokenReplay {
             if !trigger {
                 continue;
             }
-            let hit = hits.get_mut(stage).unwrap();
-            hit.events += 1;
-            hit.first_at = Some(hit.first_at.unwrap_or(current.at).min(current.at));
-            hit.last_at = Some(hit.last_at.unwrap_or(current.at).max(current.at));
-            count(&mut hit.risk_status, &state.risk_status);
-            count(&mut hit.data_status, &state.data_status);
-            for outcome in hit.forward.values_mut() {
-                outcome.denominator += 1;
+            let mut keys = vec![stage.to_string()];
+            if stage == "B" {
+                let (names, recent) = b_cohorts(state, current, history.make_contiguous());
+                if state.risk_status == "PASS" {
+                    count(
+                        coverage,
+                        match recent {
+                            Some(true) => "b_recent_volume:pass",
+                            Some(false) => "b_recent_volume:fail",
+                            None => "b_recent_volume:unknown",
+                        },
+                    );
+                }
+                for name in names {
+                    keys.push(format!("B/{name}"));
+                    keys.push(format!("B/date/{}/{name}", at.date_naive()));
+                }
+            }
+            for key in &keys {
+                let hit = hits.entry(key.clone()).or_default();
+                hit.events += 1;
+                hit.first_at = Some(hit.first_at.unwrap_or(current.at).min(current.at));
+                hit.last_at = Some(hit.last_at.unwrap_or(current.at).max(current.at));
+                count(&mut hit.risk_status, &state.risk_status);
+                count(&mut hit.data_status, &state.data_status);
+                for outcome in hit.forward.values_mut() {
+                    outcome.denominator += 1;
+                }
             }
             pending.push(Pending {
-                stage: stage.into(),
+                keys,
                 at,
                 pair: state.pair_address.clone(),
                 price: current.price.unwrap(),
@@ -615,16 +762,13 @@ impl TokenReplay {
     fn finish(&mut self, end: DateTime<Utc>, hits: &mut BTreeMap<String, Hits>) {
         for pending in self.pending.drain(..) {
             for (name, horizon) in pending.remaining {
-                let outcome = hits
-                    .get_mut(&pending.stage)
-                    .unwrap()
-                    .forward
-                    .get_mut(name)
-                    .unwrap();
-                if end < pending.at + Duration::seconds(horizon + 300) {
-                    outcome.right_censored += 1;
-                } else {
-                    outcome.endpoint_missing += 1;
+                for key in &pending.keys {
+                    let outcome = hits.get_mut(key).unwrap().forward.get_mut(name).unwrap();
+                    if end < pending.at + Duration::seconds(horizon + 300) {
+                        outcome.right_censored += 1;
+                    } else {
+                        outcome.endpoint_missing += 1;
+                    }
                 }
             }
         }
@@ -649,30 +793,29 @@ fn labels(
             if now < target {
                 return true;
             }
-            let outcome = hits
-                .get_mut(&event.stage)
-                .unwrap()
-                .forward
-                .get_mut(*name)
-                .unwrap();
-            if now > target + Duration::seconds(300) {
-                outcome.endpoint_missing += 1;
-                return false;
-            }
-            if let Some(price) = current {
+            let resolved = if now > target + Duration::seconds(300) {
+                Some(None)
+            } else if let Some(price) = current {
                 if event.previous.0 <= target && now - event.previous.0 <= Duration::seconds(300) {
                     let value = (price / event.price - 1.0) * 100.0;
-                    if value.is_finite() {
+                    Some(value.is_finite().then_some(value))
+                } else {
+                    Some(None)
+                }
+            } else {
+                None
+            };
+            if let Some(value) = resolved {
+                for key in &event.keys {
+                    let outcome = hits.get_mut(key).unwrap().forward.get_mut(*name).unwrap();
+                    if let Some(value) = value {
                         outcome.record(value);
                     } else {
                         outcome.endpoint_missing += 1;
                     }
-                } else {
-                    outcome.endpoint_missing += 1;
                 }
-                return false;
             }
-            true
+            resolved.is_none()
         });
         if let Some(price) = current {
             event.previous = (now, price);
@@ -752,6 +895,222 @@ mod tests {
         // The three confirmation observations span four minutes, each gap <= five minutes.
         db.insert(T + 120, "a", 101.3, 30000.0, 70001.0, true);
         db.insert(T + 240, "a", 101.4, 30000.0, 70002.0, true);
+    }
+    #[test]
+    fn replay_direction_rate_excludes_missing_endpoints_and_counts_flat_separately() {
+        let db = Database::new();
+        for (pair, end) in [
+            ("up", 110.0),
+            ("down", 90.0),
+            ("flat", 100.0),
+            ("missing", 120.0),
+        ] {
+            db.insert(T, pair, 100.0, 30000.0, 50000.0, true);
+            db.insert(T + 840, pair, 100.1, 30000.0, 50000.0, true);
+            db.insert(
+                T + if pair == "missing" { 1500 } else { 960 },
+                pair,
+                end,
+                30000.0,
+                50000.0,
+                true,
+            );
+        }
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET token_address=pair_address", [])
+            .unwrap();
+        conn.execute("UPDATE signals SET token_address=pair_address", [])
+            .unwrap();
+        let report = db.replay(false);
+        let out = &report["structural_hits"]["A"]["forward"]["15m"];
+        assert_eq!(out["denominator"], 4);
+        assert_eq!(out["eligible"], 3);
+        assert_eq!(out["endpoint_missing"], 1);
+        assert_eq!(out["positive"], 1);
+        assert_eq!(out["negative"], 1);
+        assert_eq!(out["flat"], 1);
+        assert!(
+            (out["positive_sampled_return_rate_pct"].as_f64().unwrap() - 33.333333333333336).abs()
+                < 1e-10
+        );
+        assert!(report["structural_hits"]["A"]["forward"]["4h"]
+            ["positive_sampled_return_rate_pct"]
+            .is_null());
+    }
+    #[test]
+    fn replay_b_cohorts_use_trigger_evidence_and_preserve_original_events() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        let before = db.replay(false);
+        assert_eq!(before["structural_hits"].as_object().unwrap().len(), 3);
+        assert_eq!(before["structural_hits"]["B"]["events"], 1);
+        for cohort in [
+            "all",
+            "pass",
+            "pass_recent_volume",
+            "pass_near_breakout",
+            "pass_both",
+            "pass_distance_0_3pct",
+        ] {
+            assert_eq!(
+                before["b_filter_comparison"]["cohorts"][cohort]["events"], 1,
+                "{cohort}"
+            );
+            assert_eq!(
+                before["b_filter_comparison"]["by_utc_date"]["1970-04-11"][cohort]["events"],
+                1
+            );
+        }
+        // Later data changes volume/liquidity and supplies a covered +10% label.
+        for (time, price) in [(T + 1080, 101.5), (T + 1200, 111.54)] {
+            db.insert(time, "a", price, 1.0, 1.0, true);
+        }
+        let after = db.replay(false);
+        assert_eq!(after["structural_hits"]["B"]["events"], 1);
+        assert_eq!(
+            after["b_filter_comparison"]["cohorts"]["pass_both"]["events"],
+            1
+        );
+        let out = &after["b_filter_comparison"]["cohorts"]["pass_both"]["forward"]["15m"];
+        assert_eq!(out["eligible"], 1);
+        assert_eq!(out["positive"], 1);
+        assert_eq!(out["positive_sampled_return_rate_pct"], 100.0);
+        assert!((out["mean_sampled_return_pct"].as_f64().unwrap() - 10.0).abs() < 1e-10);
+        assert_eq!(after["opportunity_eligible_events"], 0);
+    }
+    #[test]
+    fn replay_b_recent_volume_tests_share_retention_and_missing_separately() {
+        for (cross, current, absent, want, recent_count) in [
+            (3000.0, 2500.0, false, "pass", 1),
+            (3000.0, 2499.0, false, "fail", 0),
+            (4000.0, 3000.0, false, "fail", 0),
+            (4000.0, 3200.0, false, "pass", 1),
+            (3000.0, 3000.0, true, "unknown", 0),
+        ] {
+            let db = Database::new();
+            breakout(&db);
+            let conn = Connection::open(&db.0).unwrap();
+            conn.execute("UPDATE snapshots SET volume_m5=?1", [cross])
+                .unwrap();
+            let at = DateTime::from_timestamp(T + 240, 0).unwrap().to_rfc3339();
+            conn.execute(
+                "UPDATE snapshots SET volume_m5=?1 WHERE observed_at=?2",
+                params![current, at],
+            )
+            .unwrap();
+            if absent {
+                conn.execute("UPDATE snapshots SET raw_json=json_set(raw_json,'$.signal_v2.presence.volume_m5',json('false')) WHERE observed_at=?1", [&at]).unwrap();
+            }
+            let report = db.replay(false);
+            let c = &report["b_filter_comparison"];
+            assert_eq!(report["structural_hits"]["B"]["events"], 1);
+            assert_eq!(
+                c["recent_volume_evidence"][want], 1,
+                "{cross}/{current}/{absent}"
+            );
+            assert_eq!(c["cohorts"]["pass"]["events"], 1);
+            assert_eq!(c["cohorts"]["pass_recent_volume"]["events"], recent_count);
+        }
+    }
+    #[test]
+    fn replay_b_risk_block_does_not_enter_pass_or_distance_cohorts() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        conn.execute("UPDATE signals SET risk_flags='[\"BLOCK\"]'", [])
+            .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["B"]["events"], 1);
+        assert_eq!(report["b_filter_comparison"]["cohorts"]["all"]["events"], 1);
+        for (name, cohort) in report["b_filter_comparison"]["cohorts"]
+            .as_object()
+            .unwrap()
+        {
+            if name != "all" {
+                assert_eq!(cohort["events"], 0, "{name}");
+            }
+        }
+    }
+    #[test]
+    fn replay_b_same_second_conflicting_crossing_volume_is_unknown() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        db.insert(T + 1, "a", 101.0, 30000.0, 60000.0, true);
+        let at = DateTime::from_timestamp(T, 100_000_000)
+            .unwrap()
+            .to_rfc3339();
+        conn.execute("UPDATE snapshots SET volume_m5=9000, observed_at=?1,raw_json=json_set(raw_json,'$.signal_v2.request_completed_at',?1,'$.signal_v2.request_id','conflicting-cross') WHERE id=(SELECT MAX(id) FROM snapshots)", [&at]).unwrap();
+        conn.execute(
+            "UPDATE signals SET observed_at=?1 WHERE id=(SELECT MAX(id) FROM signals)",
+            [&at],
+        )
+        .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["B"]["events"], 1);
+        assert_eq!(
+            report["b_filter_comparison"]["cohorts"]["pass_recent_volume"]["events"],
+            0
+        );
+        assert_eq!(
+            report["b_filter_comparison"]["recent_volume_evidence"]["unknown"],
+            1
+        );
+    }
+    #[test]
+    fn replay_b_distance_buckets_keep_inclusive_upper_boundaries() {
+        for (multiplier, bucket, near) in [
+            (1.03, "pass_distance_0_3pct", 1),
+            (1.030001, "pass_distance_3_5pct", 0),
+            (1.05, "pass_distance_3_5pct", 0),
+            (1.050001, "pass_distance_5_8pct", 0),
+            (1.08, "pass_distance_5_8pct", 0),
+            (1.080001, "pass_distance_gt8pct", 0),
+        ] {
+            let db = Database::new();
+            breakout(&db);
+            let at = DateTime::from_timestamp(T + 240, 0).unwrap().to_rfc3339();
+            Connection::open(&db.0)
+                .unwrap()
+                .execute(
+                    "UPDATE snapshots SET price_usd=?1 WHERE observed_at=?2",
+                    params![100.3 * 1.005 * multiplier, at],
+                )
+                .unwrap();
+            let report = db.replay(false);
+            let cohorts = &report["b_filter_comparison"]["cohorts"];
+            assert_eq!(cohorts[bucket]["events"], 1, "{multiplier}");
+            assert_eq!(
+                cohorts["pass_near_breakout"]["events"], near,
+                "{multiplier}"
+            );
+        }
+    }
+    #[test]
+    fn replay_empty_comparison_has_zero_cohorts_without_inventing_rates() {
+        let report = Database::new().replay(false);
+        assert!(report["b_filter_comparison"]["by_utc_date"]
+            .as_object()
+            .unwrap()
+            .is_empty());
+        for cohort in [
+            "all",
+            "pass",
+            "pass_recent_volume",
+            "pass_near_breakout",
+            "pass_both",
+        ] {
+            let c = &report["b_filter_comparison"]["cohorts"][cohort];
+            assert_eq!(c["events"], 0);
+            assert!(c["forward"]["1h"]["positive_sampled_return_rate_pct"].is_null());
+        }
     }
     #[test]
     fn replay_strict_excludes_legacy_and_proxy_keeps_zero_volume_unknown() {
