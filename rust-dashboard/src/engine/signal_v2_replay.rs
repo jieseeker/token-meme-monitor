@@ -84,7 +84,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         [arg] if arg == "--legacy-proxy" => true,
         _ => return Err("usage: signal-v2-replay [--legacy-proxy]".into()),
     };
-    if !signal_v2_store::settings_valid(settings) {
+    if !signal_v2_store::settings_valid(settings) || settings.focus_score_threshold < 1 {
         return Err("invalid shadow settings".into());
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -688,10 +688,13 @@ mod tests {
     struct Database(String);
     impl Database {
         fn new() -> Self {
+            static NEXT_DATABASE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
-                "tmm-replay-{}-{}.db",
+                "tmm-replay-{}-{}-{}.db",
                 std::process::id(),
-                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+                chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+                NEXT_DATABASE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             let path = path.to_str().unwrap().to_string();
             crate::db::init_schema(&path).unwrap();
@@ -927,6 +930,65 @@ mod tests {
         assert_eq!(report["input"]["window_rows"], 0);
         assert_eq!(report["structural_hits"]["A"]["events"], 0);
         assert!(report["window"]["replay_from"].is_null());
+    }
+    #[test]
+    fn replay_rejects_nonpositive_focus_thresholds_before_missing_scores_can_enter_a() {
+        let db = Database::new();
+        db.insert(T, "a", 100.0, 30000.0, 50000.0, true);
+        Connection::open(&db.0)
+            .unwrap()
+            .execute("DELETE FROM signals", [])
+            .unwrap();
+        for threshold in [0, -1, i32::MIN] {
+            let settings = Settings {
+                focus_score_threshold: threshold,
+                ..Settings::default()
+            };
+            assert!(
+                run(&db.0, &[], &settings).is_err(),
+                "accepted unsupported threshold {threshold}"
+            );
+        }
+    }
+    #[test]
+    fn replay_lowest_focus_threshold_suppresses_unknown_scores_without_disabling_volume_entry() {
+        let settings = Settings {
+            focus_score_threshold: 1,
+            ..Settings::default()
+        };
+        let db = Database::new();
+        db.insert(T, "a", 100.0, 30000.0, 50000.0, true);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("DELETE FROM signals", []).unwrap();
+        let missing = run(&db.0, &[], &settings).unwrap();
+        assert_eq!(missing["coverage"]["signal_missing_groups"], 1);
+        assert_eq!(missing["structural_hits"]["A"]["events"], 0);
+
+        let db = Database::new();
+        db.insert(T, "a", 100.0, 30000.0, 50000.0, true);
+        db.insert(T, "b", 100.0, 30000.0, 40000.0, true);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE signals SET score=0 WHERE pair_address='b'", [])
+            .unwrap();
+        let conflicting = run(&db.0, &[], &settings).unwrap();
+        assert_eq!(conflicting["coverage"]["signal_conflict_groups"], 1);
+        assert_eq!(conflicting["structural_hits"]["A"]["events"], 0);
+        conn.execute("UPDATE signals SET score=1", []).unwrap();
+        assert_eq!(
+            run(&db.0, &[], &settings).unwrap()["structural_hits"]["A"]["events"],
+            1
+        );
+
+        let db = Database::new();
+        breakout(&db);
+        Connection::open(&db.0)
+            .unwrap()
+            .execute("DELETE FROM signals", [])
+            .unwrap();
+        assert_eq!(
+            run(&db.0, &[], &settings).unwrap()["structural_hits"]["A"]["events"],
+            1
+        );
     }
     #[test]
     fn replay_rejects_unknown_arguments_missing_database_and_invalid_settings() {

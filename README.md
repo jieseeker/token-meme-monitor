@@ -33,7 +33,7 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm signal-v2-replay --legacy-proxy
 ```
 
-回放直接以 SQLite READ_ONLY 打开来源，不初始化或写表、不启动服务或请求行情；stdout 仅一个 JSON，错误写 stderr 并返回非零。使用一致性数据库副本。`MIN_VOLUME_H1_USD` 和 `FOCUS_SCORE_THRESHOLD` 取当前环境值，试验身份由版本与这两个参数共同确定，不能据此追认历史配置。
+回放直接以 SQLite READ_ONLY 打开来源，不初始化或写表、不启动服务或请求行情；stdout 仅一个 JSON，错误写 stderr 并返回非零。使用一致性数据库副本。`MIN_VOLUME_H1_USD` 和 `FOCUS_SCORE_THRESHOLD` 取当前环境值，回放要求成交额阈值有限且大于零、分数阈值至少为 1；试验身份由版本与这两个参数共同确定，不能据此追认历史配置。
 
 严格模式只接收采集时保存的有效 V2 元数据；旧 `{}` 数据全部排除。`--legacy-proxy` 明确标为探索性结果，以同币同时间近似一次响应，旧成交额零值按未知处理。按时间读取最多七天数据，从首次合格存储组前瞻冻结流动性最高池，不读取今天的活跃池名单；只保留该池 24 小时基线和短期标签队列。分组排序与历史超预算会安全拒绝，不截断成完整覆盖。
 

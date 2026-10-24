@@ -6,6 +6,7 @@ Deterministic collected-input replay is implemented. Both historical datasets co
 
 - Engine: the unchanged production `signal_v2::advance` / `tick`; individual strict rows use the same `signal_v2_store::decode` parser.
 - Composite experiment identity: `signal_v2_shadow_v1` **and** `min_volume_h1_usd=15000.0`, `focus_score_threshold=65`. These are replay settings; no historical configuration labels are claimed.
+- Replay parameter boundary: finite positive min volume and integer focus threshold >=1; nonpositive focus thresholds are rejected before database access. This restriction is specific to offline replay and does not change legacy configuration or shared runtime settings validation.
 - Command: `MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm signal-v2-replay`; add only `--legacy-proxy` for the separate exploratory run.
 - SQLite opens READ_ONLY before application startup or directory creation. A read transaction keeps both scans consistent. Replay does not call schema initialization, persistence, `observe`, providers, or current `pairs.active` / universe queries. Stdout is one JSON object; errors use stderr and nonzero exit.
 
@@ -105,3 +106,11 @@ The four cases remain identity/coverage diagnostics only: local ticker/name clue
 - UI unchanged; browser not run. No provider fetch, push, deployment, exact runtime-parity reproduction, four-asset verification or production-load benchmark was performed by Task 3.
 
 Controller owns scoped review, whole-branch review and remaining live API acceptance before rollout.
+
+## Task 3 scoped-review fix: missing score at the threshold boundary
+
+The review found that substituting score 0 for unavailable/conflicting history could create A when a replay focus threshold was zero or negative. Replay now rejects nonpositive focus thresholds at its own boundary; shared runtime settings validation, legacy configuration, engine formulas and volume-based entry remain unchanged. All `settings_valid` callers were inspected before choosing this replay-only restriction.
+
+TDD RED: `cargo test --manifest-path rust-dashboard/Cargo.toml replay_rejects_nonpositive_focus_thresholds` failed with `accepted unsupported threshold 0` (exit101). After the one-line boundary guard, the focused replay suite passes **11/11**. Temporary SQLite checks cover zero/negative/minimum-integer rejection, missing and conflicting scores at the lowest supported threshold1 producing zero A without volume background, a genuine stored score1 producing A, and missing scores still allowing A from sufficient independent volume history. The previous default-threshold replay aggregates are unaffected; the four database runs and 114-test full-suite evidence above describe the original implementation pass. Controller will run fresh whole-branch checks after review fixes.
+
+The first 11-test parallel run after the guard exposed temporary test database filename collisions (8 passed / 3 failed: malformed-metadata count, UNIQUE snapshot constraint and missing table). Test filenames now include a process-local atomic suffix. The subsequent normal parallel focused run passed all 11; this fixture correction changes no production persistence.
