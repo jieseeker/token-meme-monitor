@@ -33,6 +33,9 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
+  if(url==='/api/structure?limit=100')return {ok:true,json:async()=>({items:[
+    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[]}
+  ]})};
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
   if(url.endsWith('/prices')) return {ok:true,json:async()=>({symbol:'TESTUSDT',spot:[{at:at-100000,price:row.price_usd*.99},{at:at-40000,price:row.price_usd}],futures:[{at:at-100000,price:row.price_usd*1.01},{at:at-40000,price:row.price_usd*1.02}]})};
@@ -50,6 +53,8 @@ setImmediate(async () => {
   assert.ok(!v2Tip.includes('B时间') && !v2Tip.includes('C时间'), 'V2 tooltip should not expose B/C jargon');
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
+  assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
+  assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');
   assert.ok(detail.indexOf('市场价格对比') < detail.indexOf('价格区间深度'), 'trend should be visible before pool depth');
   assert.ok(detail.includes('活跃度分'));
   assert.ok(detail.includes('class="triage-strip"'), 'score, market risk and snapshot should lead the detail');
@@ -172,7 +177,7 @@ setImmediate(async () => {
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
-  assert.deepEqual(calls.slice(before).filter(url=>url!=='/api/tokens'&&url!=='/api/signal-v2?limit=50'),[],'unchanged overview must not reload detail APIs');
+  assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=50','/api/structure?limit=100'].includes(url)),[],'unchanged overview must not reload detail APIs');
   assert.equal(document.getElementById('depthBody').innerHTML,depth);
   row.observed_at=new Date(Date.now()+1000).toISOString();
   vm.runInContext(`detailCache.get('0xtoken').at=0`,context);
