@@ -329,8 +329,11 @@ async function ensureStructure(token){
   try{
     const result=await fetchJSON(`/api/structure?token=${encodeURIComponent(key)}`);
     const item=(result.items||[])[0];
-    if(item)structureRows.set(key,item);
-    if(selectedToken===key)renderDetail();
+    if(item){
+      structureRows.set(key,item);
+      renderTokenList();
+      if(selectedToken===key)renderDetail();
+    }
   }catch{}
 }
 const riskLabels={low_liquidity:'流动性偏低',liquidity_near_zero:'流动性极低',stale_pair:'池龄偏长',thin_m5_activity:'近期成交稀少',sell_pressure:'卖出笔数偏多',fdv_liquidity_stretched:'估值与流动性失衡',liquidity_withdrawal:'约20分钟内池子流动性下降≥25%',thin_downside_depth:'跌1%所需卖出额偏低',upside_depth_heavy:'涨1%所需买入额约为跌1%卖出额的3倍以上'};
