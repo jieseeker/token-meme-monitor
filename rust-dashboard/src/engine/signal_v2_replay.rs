@@ -246,7 +246,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
             pair,
             group,
             sample,
-            score: row.get(8)?,
+            score: row.get(8).ok().flatten(),
             risks: risks.and_then(|v| serde_json::from_str(&v).ok()),
         });
     }
@@ -321,7 +321,7 @@ fn cancel(state: &mut State, at: i64, settings: &Settings) {
         liquidity_usd: None,
         fingerprint: String::new(),
     };
-    signal_v2::advance(state, &marker, &[], 0, &[], settings);
+    signal_v2::advance(state, &marker, &[], None, &[], settings);
 }
 
 fn initial_history(
@@ -548,9 +548,9 @@ impl TokenReplay {
             }
         }
         let score = if missing || conflict {
-            0
+            None
         } else {
-            scores.first().copied().unwrap_or(0)
+            scores.first().copied()
         };
         if history_overflow {
             cancel(state, at.timestamp(), settings);
@@ -990,6 +990,85 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn replay_unknown_scores_cannot_rearm_terminated_event_after_recovery() {
+        let mut candidates = Vec::new();
+        for unknown in ["missing", "malformed", "malformed_score", "conflicting"] {
+            let db = Database::new();
+            breakout(&db);
+            for (offset, price) in [(360, 99.4), (480, 99.3), (600, 99.2), (720, 100.1)] {
+                db.insert(
+                    T + offset,
+                    "a",
+                    price,
+                    30000.0,
+                    70000.0 + offset as f64,
+                    true,
+                );
+            }
+            let conn = Connection::open(&db.0).unwrap();
+            let at = DateTime::from_timestamp(T + 600, 0).unwrap().to_rfc3339();
+            match unknown {
+                "missing" => {
+                    conn.execute("DELETE FROM signals WHERE observed_at=?1", [&at])
+                        .unwrap();
+                }
+                "malformed_score" => {
+                    conn.execute(
+                        "UPDATE signals SET score='invalid-score' WHERE observed_at=?1",
+                        [&at],
+                    )
+                    .unwrap();
+                }
+                "malformed" => {
+                    conn.execute(
+                        "UPDATE signals SET risk_flags='invalid-json' WHERE observed_at=?1",
+                        [&at],
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    db.insert(T + 600, "b", 99.2, 30000.0, 1.0, true);
+                    conn.execute("UPDATE signals SET score=69 WHERE pair_address='b'", [])
+                        .unwrap();
+                }
+            }
+            let report = db.replay(false);
+            assert_eq!(report["structural_hits"]["B"]["events"], 1, "{unknown}");
+            candidates.push((
+                unknown,
+                report["structural_hits"]["A"]["events"].as_u64().unwrap(),
+            ));
+            assert_eq!(
+                report["coverage"]["accepted_evidence_groups"], 34,
+                "{unknown}"
+            );
+            // A genuine zero must still rearm the score entry; the recovered score is high.
+            conn.execute(
+                "UPDATE signals SET score=0,risk_flags='[]' WHERE observed_at=?1",
+                [&at],
+            )
+            .unwrap();
+            if unknown == "missing" {
+                conn.execute("INSERT INTO signals(pair_address,token_address,observed_at,strategy_version,score,pair_state) VALUES ('a','token',?1,'legacy',0,'active')", [&at]).unwrap();
+            }
+            assert_eq!(
+                db.replay(false)["structural_hits"]["A"]["events"],
+                2,
+                "{unknown}"
+            );
+        }
+        assert_eq!(
+            candidates,
+            vec![
+                ("missing", 1),
+                ("malformed", 1),
+                ("malformed_score", 1),
+                ("conflicting", 1)
+            ]
+        );
+    }
+
     #[test]
     fn replay_rejects_unknown_arguments_missing_database_and_invalid_settings() {
         let db = Database::new();

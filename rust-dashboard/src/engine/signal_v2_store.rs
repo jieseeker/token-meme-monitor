@@ -206,7 +206,7 @@ fn cancel(state: &mut State, now: i64, settings: &Settings) {
         liquidity_usd: None,
         fingerprint: String::new(),
     };
-    signal_v2::advance(state, &invalid, &[], 0, &[], settings);
+    signal_v2::advance(state, &invalid, &[], None, &[], settings);
     state.data_status = "interrupted".into();
     if state.b_at.is_some() {
         state.c_reason = Some("interrupted".into());
@@ -287,6 +287,10 @@ pub fn observe(
         };
         (State::new(token, &first), None)
     };
+    let gap = now >= state.updated_at
+        && state
+            .last_evidence_at
+            .is_some_and(|at| now.saturating_sub(at) > 300);
     if let Some(consumed) = &consumed {
         let unseen: bool = match conn.query_row("SELECT EXISTS(SELECT 1 FROM snapshots WHERE pair_address=?1 AND token_address=?2 AND observed_at>?3 AND observed_at<?4)",params![state.pair_address,token,consumed,at],|r|r.get(0)) {
             Ok(value) => value,
@@ -322,7 +326,7 @@ pub fn observe(
         {
             cancel(&mut state, now, settings);
         }
-        signal_v2::advance(&mut state, current, &history, score, risks, settings);
+        signal_v2::advance(&mut state, current, &history, Some(score), risks, settings);
     }
     if config_changed {
         state.data_status = "config_changed".into();
@@ -332,7 +336,7 @@ pub fn observe(
     crate::logging::event(
         "info",
         "signal_v2_observed",
-        json!({"token":token,"stage":state.stage,"data_status":state.data_status,"risk_status":state.risk_status,"changed":changed,"warmup":state.data_status=="warming_up","gap":state.data_status=="interrupted","reference_missing":!samples.iter().any(|s|s.pair_address==state.pair_address)}),
+        json!({"token":token,"stage":state.stage,"data_status":state.data_status,"risk_status":state.risk_status,"changed":changed,"warmup":state.data_status=="warming_up","gap":gap,"reference_missing":!samples.iter().any(|s|s.pair_address==state.pair_address)}),
     );
     Ok(Some(summary))
 }
@@ -443,12 +447,86 @@ mod tests {
         assert_eq!(rows[0].volume_m5, None);
     }
     #[test]
+    fn signal_v2_logs_gap_even_when_valid_recovery_replaces_interrupted_status() {
+        const CHILD: &str = "TMM_TEST_RECOVERY_GAP_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            for established_b in [false, true] {
+                let path = database();
+                let mut conn = Connection::open(&path).unwrap();
+                let first = observation(1000, 100.0);
+                let mut state = State::new("token", &first);
+                signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
+                if established_b {
+                    state.stage = "first_start".into();
+                    state.b_at = Some(1000);
+                    state.b_price = Some(100.0);
+                    state.reference_upper = Some(100.0);
+                    state.first_wave_high = Some(100.0);
+                }
+                save(&mut conn, &state, &at(1000), &Settings::default()).unwrap();
+                for (time, price) in [(1300, 101.0), (1601, 102.0)] {
+                    let result = observe(
+                        &path,
+                        "token",
+                        &[observation(time, price)],
+                        &at(time),
+                        65,
+                        &[],
+                        &Settings::default(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                    assert_ne!(result["data_status"], "interrupted");
+                    if established_b && time == 1601 {
+                        assert_eq!(result["c_reason"], "interrupted");
+                    }
+                }
+                let mut state = load(&conn, "token").unwrap().unwrap().0;
+                signal_v2::tick(&mut state, 2300);
+                save(&mut conn, &state, &at(2300), &Settings::default()).unwrap();
+                observe(
+                    &path,
+                    "token",
+                    &[observation(2100, 103.0)],
+                    &at(2100),
+                    65,
+                    &[],
+                    &Settings::default(),
+                )
+                .unwrap();
+                drop(conn);
+                std::fs::remove_file(path).unwrap();
+            }
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "engine::signal_v2_store::tests::signal_v2_logs_gap_even_when_valid_recovery_replaces_interrupted_status", "--nocapture"])
+            .env(CHILD, "1").env("LOG_LEVEL", "info").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let logs: Vec<Value> = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|log| log["event"] == "signal_v2_observed")
+            .collect();
+        assert_eq!(logs.len(), 6);
+        let gaps: Vec<_> = logs
+            .iter()
+            .map(|log| log["fields"]["gap"].as_bool().unwrap())
+            .collect();
+        assert_eq!(gaps, vec![false, true, false, false, true, false]);
+    }
+
+    #[test]
     fn signal_v2_state_roundtrip_and_changes_ignore_polling_evidence() {
         let path = database();
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(100, 1.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         assert!(save(&mut conn, &state, &at(100), &Settings::default()).unwrap());
         let restored = load(&conn, "token").unwrap().unwrap();
         assert_eq!(
@@ -457,7 +535,7 @@ mod tests {
         );
         assert_eq!(restored.1, at(100));
         let next = observation(160, 1.01);
-        signal_v2::advance(&mut state, &next, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &next, &[], Some(65), &[], &Settings::default());
         assert!(!save(&mut conn, &state, &at(160), &Settings::default()).unwrap());
         state.risk_status = "WARN".into();
         assert!(save(&mut conn, &state, &at(160), &Settings::default()).unwrap());
@@ -489,7 +567,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         // Model a pending B from a prior successful process without exposing engine internals.
         let mut serialized = serde_json::to_value(&state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
@@ -565,7 +643,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         let mut serialized = serde_json::to_value(state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
         serialized["reference_upper"] = json!(100.0);
@@ -591,7 +669,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         let mut serialized = serde_json::to_value(state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
         serialized["b_rearmed"] = json!(true);
@@ -634,7 +712,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         let mut serialized = serde_json::to_value(state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
         serialized["reference_upper"] = json!(100.0);
@@ -667,7 +745,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         state.b_at = Some(1000);
         state.reference_upper = Some(99.0);
         save(&mut conn, &state, &at(1000), &Settings::default()).unwrap();
@@ -712,7 +790,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         let mut serialized = serde_json::to_value(state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
         serialized["reference_upper"] = json!(100.0);
@@ -739,7 +817,7 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         let first = observation(1000, 100.0);
         let mut state = State::new("token", &first);
-        signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+        signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
         let mut serialized = serde_json::to_value(state).unwrap();
         serialized["b_pending"] = json!({"at":1000,"count":1});
         let malformed: State = serde_json::from_value(serialized).unwrap();
@@ -775,7 +853,7 @@ mod tests {
             let mut conn = Connection::open(&path).unwrap();
             let first = observation(1000, 100.0);
             let mut state = State::new("token", &first);
-            signal_v2::advance(&mut state, &first, &[], 65, &[], &Settings::default());
+            signal_v2::advance(&mut state, &first, &[], Some(65), &[], &Settings::default());
             let mut serialized = serde_json::to_value(state).unwrap();
             serialized["b_at"] = json!(1000);
             serialized["b_price"] = json!(100.0);

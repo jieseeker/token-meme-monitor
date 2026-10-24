@@ -303,7 +303,7 @@ pub fn advance(
     state: &mut State,
     sample: &Sample,
     history: &[Sample],
-    score: i32,
+    score: Option<i32>,
     risks: &[String],
     settings: &Settings,
 ) {
@@ -357,12 +357,17 @@ pub fn advance(
         "current"
     }
     .into();
-    let score_hit = score >= settings.focus_score_threshold;
-    let volume =
-        baseline.map(|_| volume_hit(sample.volume_h1, baseline, 1.5, settings.min_volume_h1_usd));
-    let entry = (score_hit && state.score_entry != Some(true))
+    let score_hit = score.map(|score| score >= settings.focus_score_threshold);
+    let volume = sample
+        .volume_h1
+        .zip(baseline)
+        .map(|_| volume_hit(sample.volume_h1, baseline, 1.5, settings.min_volume_h1_usd));
+    let entry = (score_hit == Some(true) && state.score_entry != Some(true))
         || (volume == Some(true) && state.volume_entry != Some(true));
-    state.score_entry = Some(score_hit);
+    // Unknown evidence cannot reset an entry's last known predicate.
+    if let Some(score_hit) = score_hit {
+        state.score_entry = Some(score_hit);
+    }
     if let Some(volume) = volume {
         state.volume_entry = Some(volume);
     }
@@ -671,7 +676,7 @@ mod tests {
             state,
             &sample(at, price),
             &history(),
-            70,
+            Some(70),
             &[],
             &Settings::default(),
         );
@@ -726,7 +731,7 @@ mod tests {
             &mut s,
             &sample(T + 360, 101.2),
             &h,
-            70,
+            Some(70),
             &[],
             &Settings::default(),
         );
@@ -752,7 +757,14 @@ mod tests {
                 (T + 240, 101.1),
                 (T + 360, 101.2),
             ] {
-                advance(&mut s, &sample(at, p), &h, 0, &[], &Settings::default());
+                advance(
+                    &mut s,
+                    &sample(at, p),
+                    &h,
+                    Some(0),
+                    &[],
+                    &Settings::default(),
+                );
             }
             assert_eq!(s.stage, "inactive", "invalid baseline {kind}");
         }
@@ -766,7 +778,7 @@ mod tests {
             &mut s,
             &sample(T, 100.0),
             &zeros,
-            0,
+            Some(0),
             &[],
             &Settings::default(),
         );
@@ -778,7 +790,7 @@ mod tests {
             &mut s,
             &sample(T, 100.0),
             &missing,
-            0,
+            Some(0),
             &[],
             &Settings::default(),
         );
@@ -786,12 +798,26 @@ mod tests {
         for bad in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
             let mut s = watch();
             let mut input = sample(T + 120, bad);
-            advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(99),
+                &[],
+                &Settings::default(),
+            );
             assert_eq!(s.last_evidence_at, Some(T));
             assert_eq!(s.stage, "watch");
             input.price = Some(101.0);
             input.volume_h1 = Some(-1.0);
-            advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(99),
+                &[],
+                &Settings::default(),
+            );
             assert_eq!(s.last_evidence_at, Some(T));
         }
     }
@@ -805,7 +831,7 @@ mod tests {
             &mut s,
             &duplicate,
             &history(),
-            99,
+            Some(99),
             &[],
             &Settings::default(),
         );
@@ -816,7 +842,7 @@ mod tests {
             &mut s,
             &same_content,
             &history(),
-            99,
+            Some(99),
             &[],
             &Settings::default(),
         );
@@ -829,7 +855,14 @@ mod tests {
         let mut s = first_start();
         let mut input = sample(T + 480, 110.0);
         input.pair_address = "other".into();
-        advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+        advance(
+            &mut s,
+            &input,
+            &history(),
+            Some(99),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.stage, "first_start");
         assert_eq!(s.pair_address, "pool");
         assert_eq!(summary(&s)["c_closed"], true);
@@ -844,13 +877,27 @@ mod tests {
         let mut input = sample(T + 1980, 109.1);
         input.volume_m5 = Some(5_000.0);
         // The first cross must also have volume; reset below the frozen line before another try.
-        advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+        advance(
+            &mut s,
+            &input,
+            &history(),
+            Some(70),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.stage, "base");
         feed(&mut s, T + 2040, 108.3);
         for (at, p) in [(T + 2100, 109.0), (T + 2160, 109.1)] {
             let mut input = sample(at, p);
             input.volume_m5 = Some(5_000.0);
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         assert_eq!(s.stage, "second_start");
         assert_eq!(summary(&s)["c_at"], T + 2160);
@@ -913,7 +960,14 @@ mod tests {
         ] {
             let mut input = sample(at, p);
             input.volume_m5 = None;
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         assert!(summary(&s)["base_upper"].is_null());
         feed(&mut s, T + 1920, 113.0);
@@ -923,7 +977,14 @@ mod tests {
             let mut input = sample(at, p);
             input.volume_h1 = Some(1_000_000.0);
             input.volume_m5 = None;
-            advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(99),
+                &[],
+                &Settings::default(),
+            );
         }
         assert!(summary(&s)["c_at"].is_null());
     }
@@ -977,11 +1038,65 @@ mod tests {
         assert_eq!(summary(&s)["terminated"], true);
         let mut low = sample(T + 840, 100.0);
         low.volume_h1 = Some(10_000.0);
-        advance(&mut s, &low, &history(), 0, &[], &Settings::default());
+        advance(&mut s, &low, &history(), Some(0), &[], &Settings::default());
         feed(&mut s, T + 960, 100.1);
         assert_eq!(s.stage, "watch");
         assert_eq!(s.first_seen_at, T + 960);
     }
+    #[test]
+    fn missing_h1_cannot_rearm_terminated_event() {
+        let mut state = first_start();
+        feed(&mut state, T + 480, 99.4);
+        feed(&mut state, T + 600, 99.3);
+        assert!(state.terminated);
+        let mut unknown = sample(T + 720, 99.2);
+        unknown.volume_h1 = None;
+        advance(
+            &mut state,
+            &unknown,
+            &history(),
+            Some(70),
+            &[],
+            &Settings::default(),
+        );
+        feed(&mut state, T + 840, 100.1);
+        assert!(state.terminated);
+        assert_eq!(state.first_seen_at, T);
+        assert_eq!(state.last_evidence_at, Some(T + 840));
+    }
+
+    #[test]
+    fn known_entry_rearms_independently_while_other_evidence_is_unknown() {
+        for volume_entry in [false, true] {
+            let mut state = first_start();
+            feed(&mut state, T + 480, 99.4);
+            feed(&mut state, T + 600, 99.3);
+            let mut low = sample(T + 720, 99.2);
+            low.volume_h1 = volume_entry.then_some(0.0);
+            advance(
+                &mut state,
+                &low,
+                &history(),
+                (!volume_entry).then_some(0),
+                &[],
+                &Settings::default(),
+            );
+            assert!(state.terminated);
+            let mut high = sample(T + 840, 100.1);
+            high.volume_h1 = volume_entry.then_some(30000.0);
+            advance(
+                &mut state,
+                &high,
+                &history(),
+                (!volume_entry).then_some(70),
+                &[],
+                &Settings::default(),
+            );
+            assert_eq!(state.stage, "watch");
+            assert_eq!(state.first_seen_at, T + 840);
+        }
+    }
+
     #[test]
     fn risk_precedence_keeps_structure_facts_separate() {
         let mut s = watch();
@@ -999,7 +1114,7 @@ mod tests {
                 &mut s,
                 &input,
                 &history(),
-                99,
+                Some(99),
                 &flags.iter().map(|x| x.to_string()).collect::<Vec<_>>(),
                 &Settings::default(),
             );
@@ -1029,7 +1144,14 @@ mod tests {
         for (at, p) in [(T + 1920, 109.0), (T + 2040, 119.0)] {
             let mut input = sample(at, p);
             input.volume_m5 = Some(5_000.0);
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         assert_eq!(s.stage, "second_start_extended");
     }
@@ -1079,7 +1201,14 @@ mod tests {
                 }
             }
             let mut s = State::new("token", &sample(T, 100.0));
-            advance(&mut s, &sample(T, 100.0), &h, 0, &[], &Settings::default());
+            advance(
+                &mut s,
+                &sample(T, 100.0),
+                &h,
+                Some(0),
+                &[],
+                &Settings::default(),
+            );
             assert_eq!(
                 s.stage, "inactive",
                 "cached baseline by fingerprint={by_fingerprint}"
@@ -1094,14 +1223,28 @@ mod tests {
             old.volume_h1 = Some(0.0);
         }
         let mut s = State::new("token", &sample(T, 100.0));
-        advance(&mut s, &sample(T, 100.0), &h, 0, &[], &Settings::default());
+        advance(
+            &mut s,
+            &sample(T, 100.0),
+            &h,
+            Some(0),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.stage, "inactive");
         let mut h = history();
         for old in &mut h {
             old.fingerprint.clear();
         }
         let mut s = State::new("token", &sample(T, 100.0));
-        advance(&mut s, &sample(T, 100.0), &h, 0, &[], &Settings::default());
+        advance(
+            &mut s,
+            &sample(T, 100.0),
+            &h,
+            Some(0),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.stage, "inactive");
     }
     #[test]
@@ -1117,7 +1260,7 @@ mod tests {
                 if kind == 1 {
                     input.volume_h1 = Some(19_999.0);
                 }
-                advance(&mut s, &input, &h, 99, &[], &Settings::default());
+                advance(&mut s, &input, &h, Some(99), &[], &Settings::default());
             }
             assert_eq!(s.stage, "watch");
             if kind == 2 {
@@ -1132,20 +1275,48 @@ mod tests {
         for (at, p) in [(T + 1920, 109.0), (T + 1979, 109.1)] {
             let mut input = sample(at, p);
             input.volume_m5 = Some(5_000.0);
-            advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(99),
+                &[],
+                &Settings::default(),
+            );
         }
         assert!(summary(&s)["c_at"].is_null());
         let mut input = sample(T + 1980, 109.2);
         input.volume_m5 = Some(5_000.0);
-        advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+        advance(
+            &mut s,
+            &input,
+            &history(),
+            Some(99),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.c_at, Some(T + 1980));
         let mut s = base();
         let mut input = sample(T + 1920, 109.0);
         input.volume_m5 = Some(5_000.0);
-        advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+        advance(
+            &mut s,
+            &input,
+            &history(),
+            Some(99),
+            &[],
+            &Settings::default(),
+        );
         input = sample(T + 2221, 109.1);
         input.volume_m5 = Some(5_000.0);
-        advance(&mut s, &input, &history(), 99, &[], &Settings::default());
+        advance(
+            &mut s,
+            &input,
+            &history(),
+            Some(99),
+            &[],
+            &Settings::default(),
+        );
         assert!(s.c_at.is_none());
         assert!(s.c_closed);
     }
@@ -1156,7 +1327,14 @@ mod tests {
         for at in ((T + 660)..end).step_by(300) {
             let mut input = sample(at, 101.2);
             input.volume_m5 = Some(at as f64);
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         tick(&mut s, end - 1);
         assert!(!s.c_closed);
@@ -1169,7 +1347,14 @@ mod tests {
         let mut s = watch();
         let mut wrong = sample(T + 60, 110.0);
         wrong.pair_address = "other".into();
-        advance(&mut s, &wrong, &history(), 70, &[], &Settings::default());
+        advance(
+            &mut s,
+            &wrong,
+            &history(),
+            Some(70),
+            &[],
+            &Settings::default(),
+        );
         assert_eq!(s.last_evidence_at, Some(T));
         assert!(s.reference_upper.is_none());
         feed(&mut s, T + 120, 100.1);
@@ -1202,7 +1387,14 @@ mod tests {
         for (at, p) in [(T + 2040, 106.4), (T + 2160, 106.5)] {
             let mut input = sample(at, p);
             input.volume_m5 = Some(5_000.0);
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         assert!(s.c_at.is_none());
         assert_eq!(s.stage, "base");
@@ -1223,7 +1415,14 @@ mod tests {
                 "missing_liquidity"
             };
             let mut s = State::new("token", &input);
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
             assert_eq!(s.stage, "watch");
             assert_eq!(s.data_status, want);
             let mut s = first_start();
@@ -1232,10 +1431,24 @@ mod tests {
             assert!(s.terminated);
             let mut reset = sample(T + 720, 99.2);
             reset.volume_h1 = Some(10_000.0);
-            advance(&mut s, &reset, &history(), 0, &[], &Settings::default());
+            advance(
+                &mut s,
+                &reset,
+                &history(),
+                Some(0),
+                &[],
+                &Settings::default(),
+            );
             input.at = T + 840;
             input.fingerprint = "retrigger".into();
-            advance(&mut s, &input, &history(), 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
             assert_eq!(s.stage, "watch");
             assert_eq!(s.first_seen_at, T + 840);
             assert_eq!(s.data_status, want);
@@ -1251,7 +1464,14 @@ mod tests {
             let mut s = watch();
             let mut input = sample(T + 120, 100.1);
             input.price = None;
-            advance(&mut s, &input, &history(), 99, &flags, &Settings::default());
+            advance(
+                &mut s,
+                &input,
+                &history(),
+                Some(99),
+                &flags,
+                &Settings::default(),
+            );
             assert_eq!(s.risk_status, want);
             assert_eq!(s.data_status, "invalid_input");
             assert_eq!(s.last_evidence_at, Some(T));
@@ -1268,7 +1488,7 @@ mod tests {
             &mut s,
             &sample(T + 120, 101.0),
             &h,
-            70,
+            Some(70),
             &[],
             &Settings::default(),
         );
@@ -1287,7 +1507,14 @@ mod tests {
         h.retain(|x| x.at != T - 2700);
         h.push(sample(T + 180, 100.0));
         for (at, p) in [(T + 120, 101.0), (T + 240, 101.1), (T + 360, 101.2)] {
-            advance(&mut s, &sample(at, p), &h, 70, &[], &Settings::default());
+            advance(
+                &mut s,
+                &sample(at, p),
+                &h,
+                Some(70),
+                &[],
+                &Settings::default(),
+            );
         }
         assert!(s.reference_upper.is_none());
         assert_eq!(s.stage, "watch");
