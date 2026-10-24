@@ -316,7 +316,7 @@ pub fn structure_for_token(conn: &Connection, token: &str) -> Value {
         .to_string();
 
     let Some(latest_at) = snapshots.iter().map(|sample| sample.at).max() else {
-        return unavailable(&token, stage_name, data_status, risk_status, "暂无可用快照");
+        return unavailable(&token, &stage, data_status, risk_status, "暂无可用快照");
     };
     let window: Vec<Snapshot> = snapshots
         .into_iter()
@@ -328,7 +328,7 @@ pub fn structure_for_token(conn: &Connection, token: &str) -> Value {
         .max_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(b.0)))
         .map(|(pair, _)| pair.clone())
     else {
-        return unavailable(&token, stage_name, data_status, risk_status, "暂无可用池子");
+        return unavailable(&token, &stage, data_status, risk_status, "暂无可用池子");
     };
     let mut samples: Vec<Snapshot> = window
         .into_iter()
@@ -336,7 +336,7 @@ pub fn structure_for_token(conn: &Connection, token: &str) -> Value {
         .collect();
     samples.sort_by_key(|sample| sample.at);
     if samples.len() < 6 || samples.last().unwrap().at - samples.first().unwrap().at < 1_500 {
-        return unavailable(&token, stage_name, data_status, risk_status, "历史样本不足");
+        return unavailable(&token, &stage, data_status, risk_status, "历史样本不足");
     }
 
     let latest = samples.last().unwrap();
@@ -400,6 +400,7 @@ pub fn structure_for_token(conn: &Connection, token: &str) -> Value {
         "structure_label": label,
         "conclusion": conclusion(&stage_name, status, &factors),
         "timeline": stage_timeline(&stage_name),
+        "b_crossed_at": stage["b_crossed_at"].clone(),
         "b_at": stage["b_at"].clone(),
         "b_price": stage["b_price"].clone(),
         "b_breakout_line": stage["b_breakout_line"].clone(),
@@ -412,7 +413,7 @@ pub fn structure_for_token(conn: &Connection, token: &str) -> Value {
 
 fn unavailable(
     token: &str,
-    stage: String,
+    stage: &Value,
     data_status: String,
     risk_status: String,
     reason: &str,
@@ -423,8 +424,8 @@ fn unavailable(
         "available": false,
         "reason": reason,
         "updated_at": null,
-        "stage": stage,
-        "stage_label": stage_label(&stage),
+        "stage": stage["stage"].clone(),
+        "stage_label": stage["stage"].as_str().unwrap_or("unknown"),
         "data_status": data_status,
         "data_status_label": data_status_label(&data_status),
         "risk_status": risk_status,
@@ -433,7 +434,8 @@ fn unavailable(
         "structure_status": "neutral",
         "structure_label": "结构观察",
         "conclusion": reason,
-        "timeline": stage_timeline(&stage)
+        "timeline": stage_timeline(stage["stage"].as_str().unwrap_or("unknown")),
+        "b_crossed_at": stage["b_crossed_at"].clone()
     })
 }
 
@@ -472,5 +474,22 @@ mod tests {
             "liquidity_stability_30m": {"status":"neutral"}
         });
         assert_eq!(structure_status(&factors).1, "结构良好");
+    }
+
+    #[test]
+    fn unavailable_structure_exposes_b_crossed_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE signal_v2_state(token_address TEXT PRIMARY KEY, summary_json TEXT);
+             CREATE TABLE snapshots(token_address TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO signal_v2_state VALUES(?1, ?2)",
+            rusqlite::params!["token", r#"{"stage":"watch","b_crossed_at":123}"#],
+        )
+        .unwrap();
+        let output = structure_for_token(&conn, "token");
+        assert_eq!(output["b_crossed_at"], json!(123));
     }
 }
