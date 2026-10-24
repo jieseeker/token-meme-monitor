@@ -272,6 +272,21 @@ function stageMatches(stage,filter){
   return stage===filter;
 }
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
+function structureState(structure){
+  if(!structure)return {label:'结构加载中',note:'等待结构数据'};
+  if(!structure.available)return {label:structure.stage_label||'未知',note:structure.reason||'暂无结构数据'};
+  const stage=String(structure.stage||'');
+  if(stage.startsWith('second_start'))return {label:'C 已启动',note:'二次启动已确认'};
+  if(stage.startsWith('first_start'))return {label:'B 已启动',note:'等待回调或二次启动'};
+  if(stage==='first_wave')return {label:'C 首波',note:'等待回调'};
+  if(stage==='pullback')return {label:'C 回调',note:'等待企稳'};
+  if(stage==='base')return {label:'C 企稳',note:'等待二次突破'};
+  if(stage==='watch'&&structure.b_crossed_at!=null&&structure.b_at==null)return {label:'B 候选',note:'等待量能确认'};
+  if(stage==='watch')return {label:'A 观察',note:'等待突破候选'};
+  if(structure.b_at!=null)return {label:'B 已启动',note:'等待回调或二次启动'};
+  if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待量能确认'};
+  return {label:structure.stage_label||'未知',note:'结构观察'};
+}
 function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
 function factorProgress(value,kind){
   if(value==null||isNaN(value))return 0;
@@ -287,6 +302,7 @@ function factorItemHTML(key,label,factor){
 function structureCardHTML(token){
   const structure=structureOf(token);
   if(!structure)return '<div class="hint">结构数据加载中...</div>';
+  const state=structureState(structure);
   if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div></div></div>`;
   const factors=structure.factors||{};
   const activeIndex=(structure.timeline||[]).findIndex(x=>x.active);
@@ -294,7 +310,7 @@ function structureCardHTML(token){
   return `<div class="structure-card">
     <div class="structure-head">
       <div>
-        <div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div>
+        <div class="structure-stage">${escapeAttr(state.label)} · ${escapeAttr(state.note)}</div>
         <div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')} · ${structure.updated_at?new Date(structure.updated_at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'更新时间未知'}</div>
         <div class="structure-conclusion">${escapeAttr(structure.conclusion||'结构观察')}</div>
       </div>
@@ -391,9 +407,9 @@ function renderTokenList() {
       const v2Tip=v2TipText(v2);
       const v2Badge=v2?`<span class="token-v2${v2RiskClass(v2.risk_status)}" data-tip="${escapeAttr(v2Tip)}" aria-label="${escapeAttr(v2Tip)}">${escapeAttr(v2StageLabels[v2.stage]||'未知')}</span>`:'';
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
-      const stage=structureOf(t.token_address)?.stage_label;
+      const state=structureState(structureOf(t.token_address));
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${stage?`${escapeAttr(stage)} · `:''}快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');

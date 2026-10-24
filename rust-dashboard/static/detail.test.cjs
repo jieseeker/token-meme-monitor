@@ -35,7 +35,7 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
-    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[]}
+    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],b_crossed_at:1792753000,b_at:null,c_at:null}
   ]})};}
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
@@ -52,6 +52,18 @@ setImmediate(async () => {
   const v2Tip=vm.runInContext(`v2TipText({stage:'base',risk_status:'WARN',data_status:'warming_up',b_at:null,c_at:null,c_reason:'support_failed'})`,context);
   assert.ok(v2Tip.includes('V2阶段：企稳') && v2Tip.includes('数据状态：预热中') && v2Tip.includes('结果：跌破支撑'), 'V2 stages and data states should use Chinese copy');
   assert.ok(!v2Tip.includes('B时间') && !v2Tip.includes('C时间'), 'V2 tooltip should not expose B/C jargon');
+  const stateCases=[
+    [{available:true,stage:'watch',b_crossed_at:1,b_at:null,c_at:null},'B 候选'],
+    [{available:true,stage:'watch',b_crossed_at:null,b_at:null,c_at:null},'A 观察'],
+    [{available:true,stage:'first_start',b_crossed_at:1,b_at:2,c_at:null},'B 已启动'],
+    [{available:true,stage:'first_wave',b_crossed_at:1,b_at:2,c_at:null},'C 首波'],
+    [{available:true,stage:'pullback',b_crossed_at:1,b_at:2,c_at:null},'C 回调'],
+    [{available:true,stage:'base',b_crossed_at:1,b_at:2,c_at:null},'C 企稳'],
+    [{available:true,stage:'second_start',b_crossed_at:1,b_at:2,c_at:3},'C 已启动']
+  ];
+  for(const [input,expected] of stateCases){
+    assert.equal(vm.runInContext(`structureState(${JSON.stringify(input)}).label`,context),expected,`structure state should map ${input.stage} to ${expected}`);
+  }
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
@@ -74,6 +86,7 @@ setImmediate(async () => {
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);
   assert.ok(!list.includes('ZERO'));
   assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
+  assert.ok(list.includes('B 候选'), 'list should show a B candidate instead of a generic watch state');
   assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币');
   assert.ok(document.getElementById('refreshInfo').textContent.startsWith('行情快照最早 '));
   assert.ok(JSON.parse(storage.get('tmm-tokens-v1')).rows.length>1, 'network result replaces the cached list');
