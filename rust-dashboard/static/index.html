@@ -212,6 +212,7 @@ let searchTerm = '';
 let stageFilter = 'all';
 let signalV2Rows = new Map();
 let structureRows = new Map();
+let structureRefreshPromise = null;
 const oiCache = new Map();
 const depthCache = new Map();
 const whaleCache = new Map();
@@ -809,17 +810,26 @@ try{
 }catch{}
 renderStageFilter();
 
+function refreshStructure(){
+  if(structureRefreshPromise)return structureRefreshPromise;
+  structureRefreshPromise=fetchJSON('/api/structure?limit=100').then(structure=>{
+    structureRows=new Map((structure.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
+    renderTokenList();
+    if(selectedToken)renderDetail();
+  }).catch(()=>{}).finally(()=>{structureRefreshPromise=null;});
+  return structureRefreshPromise;
+}
+
 async function refresh(){
   try{
-    const [rows, signalV2, structure] = await Promise.all([
+    const [rows, signalV2] = await Promise.all([
       fetchJSON('/api/tokens'),
-      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]})),
-      fetchJSON('/api/structure?limit=100').catch(()=>({items:[]}))
+      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]}))
     ]);
     signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
-    structureRows = new Map((structure.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     showOverview(rows);
     try{localStorage.setItem(OVERVIEW_CACHE_KEY,JSON.stringify({at:Date.now(),rows}));}catch{}
+    refreshStructure();
   }catch(e){
     document.getElementById('refreshInfo').textContent=`更新失败: ${e.message}`;
     if(!tokenData.length){

@@ -184,6 +184,7 @@ pub fn init_schema(path: &str) -> Result<(), rusqlite::Error> {
             UNIQUE(pair_address, observed_at)
         );
         CREATE INDEX IF NOT EXISTS idx_snapshots_pair ON snapshots(pair_address, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_snapshots_token ON snapshots(token_address, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at ON snapshots(observed_at);
         CREATE TABLE IF NOT EXISTS signal_v2_state (
             token_address TEXT PRIMARY KEY,
@@ -724,6 +725,28 @@ pub fn status(path: &str) -> Result<Value, rusqlite::Error> {
 
 #[cfg(test)]
 mod pool_tests {
+    #[test]
+    fn structure_snapshot_lookup_uses_token_index() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-structure-index-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let path = path.to_str().unwrap();
+        super::init_schema(path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT pair_address,observed_at FROM snapshots WHERE token_address=?1 ORDER BY observed_at DESC LIMIT 2000",
+                ["0xtoken"],
+                |row| row.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_snapshots_token"), "{plan}");
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn futures_symbol_ignores_retired_token_with_same_symbol() {
         let path = std::env::temp_dir().join(format!(

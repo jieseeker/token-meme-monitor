@@ -21,6 +21,7 @@ const row = {
   signal_score: 65, signal_reasons:'["healthy_liquidity_band","h1_volume_support"]', signal_risk_flags:'["sell_pressure"]', signal_at:new Date().toISOString(), risk_6h_dd30: null, dex_id: 'pancakeswap',
 };
 let depthAt = new Date().toISOString();
+let structureGate = null;
 const calls=[];
 const storage = new Map([['tmm-tokens-v1', JSON.stringify({at:Date.now()-60000,rows:[{token_address:'0xtoken',token_symbol:'CACHED',token_name:'Cached',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:new Date(Date.now()-120000).toISOString()}]})]]);
 const localStorage = {getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)};
@@ -33,9 +34,9 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
-  if(url==='/api/structure?limit=100')return {ok:true,json:async()=>({items:[
+  if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[]}
-  ]})};
+  ]})};}
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
   if(url.endsWith('/prices')) return {ok:true,json:async()=>({symbol:'TESTUSDT',spot:[{at:at-100000,price:row.price_usd*.99},{at:at-40000,price:row.price_usd}],futures:[{at:at-100000,price:row.price_usd*1.01},{at:at-40000,price:row.price_usd*1.02}]})};
@@ -291,4 +292,15 @@ setImmediate(async () => {
   assert.ok(document.getElementById('detailPanel').innerHTML.includes('跌1%所需卖出额偏低'), 'fresh background depth must update the current risk strip');
   vm.runInContext('showOverview([...tokenData,{...tokenData[0],token_address:"0xfuture",observed_at:new Date(Date.now()+3600000).toISOString()}])',context);
   assert.equal(document.getElementById('refreshInfo').textContent,'行情快照时间异常');
+  let releaseStructure;
+  structureGate=new Promise(resolve=>{releaseStructure=resolve;});
+  row.token_symbol='FAST';
+  const slowStructureRefresh=vm.runInContext('refresh()',context);
+  await new Promise(setImmediate);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('FAST'),'slow structure must not delay the token list');
+  const structureCalls=calls.filter(url=>url==='/api/structure?limit=100').length;
+  await vm.runInContext('refresh()',context);
+  assert.equal(calls.filter(url=>url==='/api/structure?limit=100').length,structureCalls,'slow structure must not launch overlapping scans');
+  releaseStructure();
+  await slowStructureRefresh;
 });
