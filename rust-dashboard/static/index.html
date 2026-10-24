@@ -48,10 +48,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
 .token-btn .score-tag { position:relative; flex:none; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; padding:5px 9px; border-radius:6px; cursor:help; }
-.token-v2 { display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px; border:1px solid rgba(15,118,110,.22); border-radius:999px; background:rgba(15,118,110,.08); color:var(--accent); font-size:12px; font-weight:650; line-height:1.35; cursor:help; }
-.token-v2.warn { border-color:rgba(180,83,9,.24); background:rgba(180,83,9,.08); color:var(--risk); }
-.token-v2.block { border-color:rgba(239,68,68,.24); background:rgba(239,68,68,.08); color:var(--danger); }
-.token-v2.hold { border-color:var(--line); background:rgba(107,114,128,.08); color:var(--muted); }
 .structure-stage { color:var(--text); font-weight:650; }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:12px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
@@ -405,11 +401,10 @@ function renderTokenList() {
       const sel=t.token_address===selectedToken?' selected':'';
       const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
       const v2Tip=v2TipText(v2);
-      const v2Badge=v2?`<span class="token-v2${v2RiskClass(v2.risk_status)}" data-tip="${escapeAttr(v2Tip)}" aria-label="${escapeAttr(v2Tip)}">${escapeAttr(v2StageLabels[v2.stage]||'未知')}</span>`:'';
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       const state=structureState(structureOf(t.token_address));
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');
@@ -756,8 +751,8 @@ function showScoreTooltip(score){
 }
 function hideScoreTooltip(){scoreTooltip.hidden=true;}
 tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
-tokenList.addEventListener('pointerover',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target)showScoreTooltip(target);});
-tokenList.addEventListener('pointerout',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
+tokenList.addEventListener('pointerover',e=>{const target=e.target.closest('.score-tag');if(target)showScoreTooltip(target);});
+tokenList.addEventListener('pointerout',e=>{const target=e.target.closest('.score-tag');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
 const detailPanelElement=document.getElementById('detailPanel');
 detailPanelElement.addEventListener('pointerover',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target)showScoreTooltip(target);});
 detailPanelElement.addEventListener('pointerout',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});

@@ -46,7 +46,7 @@ vm.runInContext(script, context);
 assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 'recent list cache should render before the network response');
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('token-v2'), 'V2 status badge should render after the network response');
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('V2阶段：首次启动'), 'V2 tooltip should use Chinese copy');
   const v2Tip=vm.runInContext(`v2TipText({stage:'base',risk_status:'WARN',data_status:'warming_up',b_at:null,c_at:null,c_reason:'support_failed'})`,context);
