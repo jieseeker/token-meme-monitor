@@ -16,6 +16,22 @@ async fn main() {
     let db_path =
         env::var("MONITOR_DATABASE_PATH").unwrap_or_else(|_| "data/monitor.db".to_string());
 
+    if mode == "signal-v2-replay" {
+        let config = config::Config::from_env();
+        let settings = engine::signal_v2::Settings {
+            min_volume_h1_usd: config.min_volume_h1_usd,
+            focus_score_threshold: config.focus_score_threshold,
+        };
+        match engine::signal_v2_replay::run(&db_path, &args[2..], &settings) {
+            Ok(report) => println!("{}", report),
+            Err(error) => {
+                eprintln!("signal-v2-replay: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // Ensure parent dir
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
         let _ = std::fs::create_dir_all(parent);

@@ -24,6 +24,21 @@ cargo build --release --locked --manifest-path rust-dashboard/Cargo.toml
 
 页面主要使用 `/api/tokens`、`/api/token/{address}/summary` 和各指标缓存接口；`/api/status` 用于查看后台刷新状态。池子深度、OI 和大额动向由后台预热，页面读取共享缓存。
 
+## A/B/C 影子诊断与只读回放
+
+`SIGNAL_V2_MODE=shadow` 在旧采集写入后保存独立阶段诊断；默认 `legacy`。旧分数、列表与调度继续使用原规则。`GET /api/signal-v2?limit=100` 查看模式、试验版本、参数与阶段摘要；可传 `token=0x...`，limit 为 1–500。阶段命中保留来源时间未验证标记，不代表正式交易机会。
+
+```bash
+MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm signal-v2-replay
+MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm signal-v2-replay --legacy-proxy
+```
+
+回放直接以 SQLite READ_ONLY 打开来源，不初始化或写表、不启动服务或请求行情；stdout 仅一个 JSON，错误写 stderr 并返回非零。使用一致性数据库副本。`MIN_VOLUME_H1_USD` 和 `FOCUS_SCORE_THRESHOLD` 取当前环境值，试验身份由版本与这两个参数共同确定，不能据此追认历史配置。
+
+严格模式只接收采集时保存的有效 V2 元数据；旧 `{}` 数据全部排除。`--legacy-proxy` 明确标为探索性结果，以同币同时间近似一次响应，旧成交额零值按未知处理。按时间读取最多七天数据，从首次合格存储组前瞻冻结流动性最高池，不读取今天的活跃池名单；只保留该池 24 小时基线和短期标签队列。分组排序与历史超预算会安全拒绝，不截断成完整覆盖。
+
+JSON 分别报告 A/B/C 采样结构命中、风险、断档、缺失与覆盖。15m/1h/4h 标签取同池在目标时刻至其后五分钟的首个有效价格，并要求目标前后相邻价格间隔不超过五分钟；无端点、右删失及零命中均明确计数，收益字段保留 null。它们是采样价格变化，不是成交或策略利润。元数据不能证明响应完整；部分池写入成功的残留组可能进入回放，生产因写入/退休失败、影子冷却或保存失败而跳过的实际执行轨迹也无法还原。参见[验证报告](docs/superpowers/reports/2026-10-24-signal-stages-validation.md)。
+
 ## 云端部署
 
 先将待发布代码推送到 GitHub `main`，然后在本地运行：

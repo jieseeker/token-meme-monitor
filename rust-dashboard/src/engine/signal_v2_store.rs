@@ -28,7 +28,12 @@ pub fn metadata(pair: &Value, at: &str) -> Value {
     }})
 }
 
-fn decode(pair: &str, at: &str, values: [Option<f64>; 4], raw: &Value) -> Option<Sample> {
+pub(crate) fn decode(
+    pair: &str,
+    at: &str,
+    values: [Option<f64>; 4],
+    raw: &Value,
+) -> Option<Sample> {
     let meta = raw.get("signal_v2")?;
     if meta["version"] != 1
         || meta["provider"] != "dexscreener"

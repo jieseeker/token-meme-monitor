@@ -1,0 +1,954 @@
+//! Read-only replay; forward observations never enter detection history early.
+use super::signal_v2::{self, Sample, Settings, State};
+use super::signal_v2_store::{self, EXPERIMENT_VERSION};
+use chrono::{DateTime, Duration, Utc};
+use rusqlite::{Connection, OpenFlags};
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, VecDeque};
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Counts = BTreeMap<String, u64>;
+fn count(counts: &mut Counts, key: &str) {
+    *counts.entry(key.into()).or_default() += 1;
+}
+fn counters(keys: &[&str]) -> Counts {
+    keys.iter().map(|key| ((*key).into(), 0)).collect()
+}
+const HORIZONS: [(&str, i64); 3] = [("15m", 900), ("1h", 3600), ("4h", 14400)];
+
+#[derive(Default, Serialize)]
+struct Outcome {
+    denominator: u64,
+    eligible: u64,
+    endpoint_missing: u64,
+    right_censored: u64,
+    mean_sampled_return_pct: Option<f64>,
+    min_sampled_return_pct: Option<f64>,
+    max_sampled_return_pct: Option<f64>,
+}
+impl Outcome {
+    fn record(&mut self, value: f64) {
+        self.eligible += 1;
+        let mean = self.mean_sampled_return_pct.unwrap_or(0.0);
+        self.mean_sampled_return_pct = Some(mean + (value - mean) / self.eligible as f64);
+        self.min_sampled_return_pct = Some(self.min_sampled_return_pct.unwrap_or(value).min(value));
+        self.max_sampled_return_pct = Some(self.max_sampled_return_pct.unwrap_or(value).max(value));
+    }
+}
+#[derive(Serialize)]
+struct Hits {
+    events: u64,
+    first_at: Option<i64>,
+    last_at: Option<i64>,
+    risk_status: Counts,
+    data_status: Counts,
+    forward: BTreeMap<String, Outcome>,
+}
+impl Default for Hits {
+    fn default() -> Self {
+        Self {
+            events: 0,
+            first_at: None,
+            last_at: None,
+            risk_status: Counts::new(),
+            data_status: Counts::new(),
+            forward: HORIZONS
+                .iter()
+                .map(|(name, _)| ((*name).into(), Outcome::default()))
+                .collect(),
+        }
+    }
+}
+struct Row {
+    at: DateTime<Utc>,
+    pair: String,
+    group: String,
+    sample: Option<Sample>,
+    score: Option<i32>,
+    risks: Option<Vec<String>>,
+}
+struct Pending {
+    stage: String,
+    at: DateTime<Utc>,
+    pair: String,
+    price: f64,
+    previous: (DateTime<Utc>, f64),
+    remaining: Vec<(&'static str, i64)>,
+}
+
+/// Opens the source read-only before any application startup, migration, or persistence.
+pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
+    let proxy = match args {
+        [] => false,
+        [arg] if arg == "--legacy-proxy" => true,
+        _ => return Err("usage: signal-v2-replay [--legacy-proxy]".into()),
+    };
+    if !signal_v2_store::settings_valid(settings) {
+        return Err("invalid shadow settings".into());
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_millis(100))?;
+    // Keep the two input scans in one consistent SQLite read snapshot.
+    conn.execute_batch("BEGIN")?;
+    let mut input = counters(&[
+        "total_rows",
+        "window_rows",
+        "older_rows",
+        "invalid_time_rows",
+        "accepted_rows",
+        "strict_rows",
+        "proxy_rows",
+        "excluded_rows",
+        "legacy_rows",
+        "groups",
+        "tokens",
+        "groups_over_three_pools",
+    ]);
+    let mut coverage = counters(&[
+        "frozen_tokens",
+        "reference_missing_groups",
+        "invalid_reference_groups",
+        "no_eligible_reference_groups",
+        "frozen_pool_rows",
+        "accepted_evidence_groups",
+        "duplicate_or_unchanged_groups",
+        "accepted_evidence_intervals",
+        "accepted_evidence_gaps_over_5m",
+        "reference_intervals",
+        "reference_intervals_over_5m",
+        "missing_price_rows",
+        "missing_h1_rows",
+        "missing_m5_rows",
+        "missing_liquidity_rows",
+        "warming_up_groups",
+        "signal_missing_groups",
+        "signal_conflict_groups",
+        "history_limit_groups",
+        "reference_switches",
+    ]);
+    let mut hits: BTreeMap<String, Hits> = ["A", "B", "C"]
+        .into_iter()
+        .map(|stage| (stage.into(), Hits::default()))
+        .collect();
+    let mut first: Option<DateTime<Utc>> = None;
+    let mut last: Option<DateTime<Utc>> = None;
+    let mut times = conn.prepare("SELECT observed_at,julianday(observed_at) FROM snapshots")?;
+    for at in times.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?))
+    })? {
+        count(&mut input, "total_rows");
+        let (text, sql_time) = at?;
+        match DateTime::parse_from_rfc3339(&text) {
+            Ok(at) if sql_time.is_some() => {
+                let at = at.with_timezone(&Utc);
+                first = Some(first.unwrap_or(at).min(at));
+                last = Some(last.unwrap_or(at).max(at));
+            }
+            _ => count(&mut input, "invalid_time_rows"),
+        }
+    }
+    let from = last.map(|end| first.unwrap().max(end - Duration::days(7)));
+    let mut query = conn.prepare("SELECT s.token_address,s.pair_address,s.observed_at,s.price_usd,s.volume_h1,s.volume_m5,s.liquidity_usd,s.raw_json,g.score,g.risk_flags,julianday(s.observed_at)
+        FROM snapshots s LEFT JOIN signals g ON g.id=(SELECT id FROM signals WHERE pair_address=s.pair_address AND token_address=s.token_address AND observed_at=s.observed_at ORDER BY id DESC LIMIT 1)
+        ORDER BY s.token_address,julianday(s.observed_at),s.id")?;
+    let mut cursor = query.query([])?;
+    let mut token = String::new();
+    let mut rows = Vec::new();
+    let mut bucket_time = None;
+    let mut replay = TokenReplay {
+        from: from.map(|time| time.timestamp()).unwrap_or(0),
+        ..TokenReplay::default()
+    };
+    while let Some(row) = cursor.next()? {
+        let next_token: String = row.get(0)?;
+        let text: String = row.get(2)?;
+        let Ok(parsed) = DateTime::parse_from_rfc3339(&text) else {
+            continue;
+        };
+        let at = parsed.with_timezone(&Utc);
+        let Some(sql_time) = row.get::<_, Option<f64>>(10)? else {
+            continue;
+        };
+        if at < from.unwrap() {
+            count(&mut input, "older_rows");
+            continue;
+        }
+        if !rows.is_empty() && (next_token != token || bucket_time != Some(sql_time)) {
+            flush(
+                &conn,
+                &token,
+                &mut rows,
+                &mut replay,
+                proxy,
+                settings,
+                &mut input,
+                &mut coverage,
+                &mut hits,
+            )?;
+        }
+        if next_token != token {
+            replay.finish(last.unwrap(), &mut hits);
+            replay = TokenReplay {
+                from: from.unwrap().timestamp(),
+                ..TokenReplay::default()
+            };
+            count(&mut input, "tokens");
+        }
+        token = next_token;
+        bucket_time = Some(sql_time);
+        // shortcut: 4096 rows per millisecond bound tie sorting; fail rather than truncate denser inputs.
+        if rows.len() >= 4096 {
+            return Err("replay response sort budget exceeded".into());
+        }
+        count(&mut input, "window_rows");
+        let pair: String = row.get(1)?;
+        let values: [Option<f64>; 4] = [row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?];
+        let raw: String = row.get(7)?;
+        let raw: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        let legacy = raw == json!({});
+        let is_proxy = proxy && legacy;
+        let sample = decode(&pair, &text, values, &raw, proxy);
+        if legacy {
+            count(&mut input, "legacy_rows");
+        }
+        if let Some(sample) = &sample {
+            count(&mut input, "accepted_rows");
+            count(
+                &mut input,
+                if is_proxy {
+                    "proxy_rows"
+                } else {
+                    "strict_rows"
+                },
+            );
+            for (field, value) in [
+                ("missing_price_rows", sample.price),
+                ("missing_h1_rows", sample.volume_h1),
+                ("missing_m5_rows", sample.volume_m5),
+                ("missing_liquidity_rows", sample.liquidity_usd),
+            ] {
+                if value.is_none() {
+                    count(&mut coverage, field);
+                }
+            }
+        } else {
+            count(&mut input, "excluded_rows");
+        }
+        let group = sample
+            .as_ref()
+            .map(|s| s.fingerprint.clone())
+            .or_else(|| raw["signal_v2"]["request_id"].as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("legacy:{text}"));
+        let risks: Option<String> = row.get(9)?;
+        rows.push(Row {
+            at,
+            pair,
+            group,
+            sample,
+            score: row.get(8)?,
+            risks: risks.and_then(|v| serde_json::from_str(&v).ok()),
+        });
+    }
+    flush(
+        &conn,
+        &token,
+        &mut rows,
+        &mut replay,
+        proxy,
+        settings,
+        &mut input,
+        &mut coverage,
+        &mut hits,
+    )?;
+    replay.finish(last.unwrap_or_else(Utc::now), &mut hits);
+    Ok(json!({
+        "mode":if proxy {"legacy_proxy_exploratory"} else {"strict"},
+        "experiment_identity":{"experiment_version":EXPERIMENT_VERSION,"settings":settings},
+        "source_time_unverified":true,"opportunity_eligible_events":0,
+        "frame_completeness_verified":false,"runtime_execution_trace_reproduced":false,
+        "window":{"available_from":first,"available_until":last,"replay_from":from,"replay_until":last,"max_days":7},
+        "input":input,"coverage":coverage,"structural_hits":hits,
+        "methods":{
+            "ordering":"stream by token and SQLite millisecond time, exact RFC3339 sort within ties; independent stored request groups; engine clock is Unix seconds",
+            "reference":"first eligible stored response group, highest liquidity then lowest pool address, frozen prospectively",
+            "history":"only prior positive-price reference-pool samples within the replay window and 24h, 4096 raw observations maximum; overflow cancels evidence",
+            "legacy_grouping":"same token and exact observed_at proxy request identity; only empty metadata eligible for proxy fallback",
+            "legacy_comparison":"exact contemporaneous stored signals, one token decision per response; unknown historical configurations",
+            "forward":"same frozen pool; first positive sampled price in [trigger+horizon,trigger+horizon+300s], previous sample at/before target and bracketing gap <=300s; otherwise unavailable",
+            "forward_denominator":"all structural stage events, split into eligible, endpoint_missing, right_censored; right censor if replay ends before target+300s without a usable endpoint",
+            "returns":"sampled endpoint price change only; no execution, profit, fees, slippage, or path/extrema labels"
+        },
+        "limitations":["all upstream source times unverified", "metadata verifies individual recorded rows, not response completeness; partial-write survivors may be replayed", "collected-input replay does not reproduce runtime skips from retirement failure, shadow mode/cooldown, observe/save failure or subsequent recovery", "historical request failures and original selected-pool sets unavailable for legacy rows", "proxy numeric presence and response identity unverified; zero legacy volumes unknown", "risk and score use stored contemporaneous evidence only; missing/conflicting evidence holds", "no current pairs or active-universe selection; four case identities remain unverified", "endpoint sampling does not establish continuous tradeable price coverage"]
+    }))
+}
+
+fn decode(
+    pair: &str,
+    text: &str,
+    values: [Option<f64>; 4],
+    raw: &Value,
+    proxy: bool,
+) -> Option<Sample> {
+    signal_v2_store::decode(pair, text, values, raw).or_else(|| {
+        if !proxy
+            || *raw != json!({})
+            || pair.is_empty()
+            || values.iter().flatten().any(|v| !v.is_finite() || *v < 0.0)
+        {
+            return None;
+        }
+        Some(Sample {
+            at: DateTime::parse_from_rfc3339(text).ok()?.timestamp(),
+            pair_address: pair.into(),
+            price: values[0],
+            // Legacy fallback zeros cannot establish actual zero volume.
+            volume_h1: values[1].filter(|v| *v > 0.0),
+            volume_m5: values[2].filter(|v| *v > 0.0),
+            liquidity_usd: values[3],
+            fingerprint: format!("legacy:{text}"),
+        })
+    })
+}
+
+fn cancel(state: &mut State, at: i64, settings: &Settings) {
+    let marker = Sample {
+        at,
+        pair_address: String::new(),
+        price: None,
+        volume_h1: None,
+        volume_m5: None,
+        liquidity_usd: None,
+        fingerprint: String::new(),
+    };
+    signal_v2::advance(state, &marker, &[], 0, &[], settings);
+}
+
+fn initial_history(
+    conn: &Connection,
+    token: &str,
+    pair: &str,
+    at: i64,
+    proxy: bool,
+    window_from: i64,
+) -> Result<(VecDeque<Sample>, VecDeque<i64>)> {
+    let from = DateTime::from_timestamp(at.saturating_sub(86400).max(window_from), 0)
+        .ok_or("invalid history time")?
+        .to_rfc3339();
+    let until = DateTime::from_timestamp(at, 0)
+        .ok_or("invalid history time")?
+        .to_rfc3339();
+    let mut query=conn.prepare("SELECT observed_at,price_usd,volume_h1,volume_m5,liquidity_usd,raw_json FROM snapshots WHERE pair_address=?1 AND token_address=?2 AND observed_at>=?3 AND observed_at<?4 ORDER BY observed_at DESC LIMIT 4097")?;
+    let mut cursor = query.query(rusqlite::params![pair, token, from, until])?;
+    let mut samples = Vec::new();
+    let mut count = 0;
+    let mut times = Vec::new();
+    while let Some(row) = cursor.next()? {
+        count += 1;
+        if count > 4096 {
+            return Err("shadow history limit exceeded".into());
+        }
+        let text: String = row.get(0)?;
+        let parsed = DateTime::parse_from_rfc3339(&text)?.timestamp();
+        if parsed < window_from || parsed >= at {
+            continue;
+        }
+        times.push(parsed);
+        let raw: String = row.get(5)?;
+        let raw: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        if let Some(sample) = decode(
+            pair,
+            &text,
+            [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?],
+            &raw,
+            proxy,
+        )
+        .filter(|s| s.price.is_some_and(|p| p > 0.0) && s.at < at)
+        {
+            samples.push(sample);
+        }
+    }
+    samples.sort_by_key(|s| s.at);
+    times.sort_unstable();
+    Ok((samples.into(), times.into()))
+}
+
+#[derive(Default)]
+struct TokenReplay {
+    from: i64,
+    reference_rows: VecDeque<i64>,
+    state: Option<State>,
+    history: VecDeque<Sample>,
+    overflow_until: Option<i64>,
+    previous_reference: Option<DateTime<Utc>>,
+    pending: Vec<Pending>,
+}
+fn flush(
+    conn: &Connection,
+    token: &str,
+    rows: &mut Vec<Row>,
+    replay: &mut TokenReplay,
+    proxy: bool,
+    settings: &Settings,
+    input: &mut Counts,
+    coverage: &mut Counts,
+    hits: &mut BTreeMap<String, Hits>,
+) -> Result<()> {
+    rows.sort_by(|a, b| {
+        a.at.cmp(&b.at)
+            .then(a.group.cmp(&b.group))
+            .then(a.pair.cmp(&b.pair))
+    });
+    let mut index = 0;
+    while index < rows.len() {
+        let start = index;
+        while index < rows.len()
+            && rows[index].at == rows[start].at
+            && rows[index].group == rows[start].group
+        {
+            index += 1;
+        }
+        replay.group(
+            conn,
+            token,
+            &rows[start..index],
+            proxy,
+            settings,
+            input,
+            coverage,
+            hits,
+        )?;
+    }
+    rows.clear();
+    Ok(())
+}
+impl TokenReplay {
+    fn group(
+        &mut self,
+        conn: &Connection,
+        token: &str,
+        group: &[Row],
+        proxy: bool,
+        settings: &Settings,
+        input: &mut Counts,
+        coverage: &mut Counts,
+        hits: &mut BTreeMap<String, Hits>,
+    ) -> Result<()> {
+        let Self {
+            from,
+            reference_rows,
+            state,
+            history,
+            overflow_until,
+            previous_reference,
+            pending,
+        } = self;
+        let at = group[0].at;
+        count(input, "groups");
+        if group.len() > 3 {
+            count(input, "groups_over_three_pools");
+        }
+        // Forward labels consume later data separately; detection receives no future rows.
+        labels(pending, group, at, hits);
+        if state
+            .as_ref()
+            .is_some_and(|s| at.timestamp().saturating_sub(s.first_seen_at) >= 7 * 86400)
+        {
+            *state = None;
+            history.clear();
+            reference_rows.clear();
+            *previous_reference = None;
+            *overflow_until = None;
+        }
+        if state.is_none() {
+            if let Some(first) = group
+                .iter()
+                .filter_map(|r| r.sample.as_ref())
+                .filter(|s| s.price.is_some_and(|p| p > 0.0) && s.liquidity_usd.is_some())
+                .max_by(|a, b| {
+                    a.liquidity_usd
+                        .unwrap()
+                        .total_cmp(&b.liquidity_usd.unwrap())
+                        .then_with(|| b.pair_address.cmp(&a.pair_address))
+                })
+            {
+                *state = Some(State::new(token, first));
+                (*history, *reference_rows) =
+                    initial_history(conn, token, &first.pair_address, first.at, proxy, *from)?;
+                count(coverage, "frozen_tokens");
+            } else {
+                count(coverage, "no_eligible_reference_groups");
+                return Ok(());
+            }
+        }
+        let state = state.as_mut().unwrap();
+        let previous_evidence = state.last_evidence_at;
+        let old_first = state.first_seen_at;
+        let old_stage = state.stage.clone();
+        let old_terminated = state.terminated;
+        let old_b = state.b_at;
+        let old_c = state.c_at;
+        signal_v2::tick(state, at.timestamp());
+        let Some(reference) = group.iter().find(|r| r.pair == state.pair_address) else {
+            count(coverage, "reference_missing_groups");
+            count(coverage, &format!("data_status:{}", state.data_status));
+            return Ok(());
+        };
+        count(coverage, "frozen_pool_rows");
+        if let Some(previous) = *previous_reference {
+            count(coverage, "reference_intervals");
+            if at - previous > Duration::seconds(300) {
+                count(coverage, "reference_intervals_over_5m");
+            }
+        }
+        *previous_reference = Some(at);
+        while history
+            .front()
+            .is_some_and(|s| s.at < at.timestamp().saturating_sub(86400))
+        {
+            history.pop_front();
+        }
+        while reference_rows
+            .front()
+            .is_some_and(|time| *time < at.timestamp().saturating_sub(86400))
+        {
+            reference_rows.pop_front();
+        }
+        let history_overflow = reference_rows.len() > 4096
+            || overflow_until.is_some_and(|until| at.timestamp() < until);
+        reference_rows.push_back(at.timestamp());
+        // shortcut: cap raw history counts at 4097; discarded timestamps block evidence until they age out.
+        if reference_rows.len() > 4097 {
+            *overflow_until = Some(reference_rows.pop_front().unwrap().saturating_add(86400));
+        }
+        let Some(current) = reference
+            .sample
+            .as_ref()
+            .filter(|s| s.price.is_some_and(|p| p > 0.0))
+        else {
+            cancel(state, at.timestamp(), settings);
+            count(coverage, "invalid_reference_groups");
+            return Ok(());
+        };
+        let mut risks = Vec::new();
+        let scores: Vec<_> = group.iter().filter_map(|r| r.score).collect();
+        let missing = group.iter().any(|r| r.score.is_none() || r.risks.is_none());
+        let conflict = scores.windows(2).any(|w| w[0] != w[1]);
+        if missing {
+            count(coverage, "signal_missing_groups");
+            risks.push("HOLD".into());
+        }
+        if conflict {
+            count(coverage, "signal_conflict_groups");
+            risks.push("HOLD".into());
+        }
+        for row in group {
+            if let Some(flags) = &row.risks {
+                risks.extend(flags.iter().cloned());
+            }
+        }
+        let score = if missing || conflict {
+            0
+        } else {
+            scores.first().copied().unwrap_or(0)
+        };
+        if history_overflow {
+            cancel(state, at.timestamp(), settings);
+            count(coverage, "history_limit_groups");
+        } else {
+            let history = history.make_contiguous();
+            signal_v2::advance(state, current, history, score, &risks, settings);
+        }
+        if state.last_evidence_at != previous_evidence {
+            count(coverage, "accepted_evidence_groups");
+            if let Some(previous) = previous_evidence {
+                count(coverage, "accepted_evidence_intervals");
+                if current.at.saturating_sub(previous) > 300 {
+                    count(coverage, "accepted_evidence_gaps_over_5m");
+                }
+            }
+        } else {
+            count(coverage, "duplicate_or_unchanged_groups");
+        }
+        if state.data_status == "warming_up" {
+            count(coverage, "warming_up_groups");
+        }
+        count(coverage, &format!("data_status:{}", state.data_status));
+        count(coverage, &format!("risk_status:{}", state.risk_status));
+        if let Some(reason) = &state.c_reason {
+            count(coverage, &format!("c_reason:{reason}"));
+        }
+        let a = state.stage == "watch"
+            && (old_stage == "inactive" || old_terminated || state.first_seen_at != old_first);
+        for (stage, trigger) in [
+            ("A", a),
+            ("B", old_b.is_none() && state.b_at.is_some()),
+            ("C", old_c.is_none() && state.c_at.is_some()),
+        ] {
+            if !trigger {
+                continue;
+            }
+            let hit = hits.get_mut(stage).unwrap();
+            hit.events += 1;
+            hit.first_at = Some(hit.first_at.unwrap_or(current.at).min(current.at));
+            hit.last_at = Some(hit.last_at.unwrap_or(current.at).max(current.at));
+            count(&mut hit.risk_status, &state.risk_status);
+            count(&mut hit.data_status, &state.data_status);
+            for outcome in hit.forward.values_mut() {
+                outcome.denominator += 1;
+            }
+            pending.push(Pending {
+                stage: stage.into(),
+                at,
+                pair: state.pair_address.clone(),
+                price: current.price.unwrap(),
+                previous: (at, current.price.unwrap()),
+                remaining: HORIZONS.to_vec(),
+            });
+        }
+        history.push_back(current.clone());
+        if history.len() > 4097 {
+            history.pop_front();
+        }
+        Ok(())
+    }
+    fn finish(&mut self, end: DateTime<Utc>, hits: &mut BTreeMap<String, Hits>) {
+        for pending in self.pending.drain(..) {
+            for (name, horizon) in pending.remaining {
+                let outcome = hits
+                    .get_mut(&pending.stage)
+                    .unwrap()
+                    .forward
+                    .get_mut(name)
+                    .unwrap();
+                if end < pending.at + Duration::seconds(horizon + 300) {
+                    outcome.right_censored += 1;
+                } else {
+                    outcome.endpoint_missing += 1;
+                }
+            }
+        }
+    }
+}
+
+fn labels(
+    pending: &mut Vec<Pending>,
+    group: &[Row],
+    now: DateTime<Utc>,
+    hits: &mut BTreeMap<String, Hits>,
+) {
+    for event in pending.iter_mut() {
+        let current = group
+            .iter()
+            .find(|r| r.pair == event.pair)
+            .and_then(|r| r.sample.as_ref())
+            .and_then(|s| s.price)
+            .filter(|p| *p > 0.0);
+        event.remaining.retain(|(name, horizon)| {
+            let target = event.at + Duration::seconds(*horizon);
+            if now < target {
+                return true;
+            }
+            let outcome = hits
+                .get_mut(&event.stage)
+                .unwrap()
+                .forward
+                .get_mut(*name)
+                .unwrap();
+            if now > target + Duration::seconds(300) {
+                outcome.endpoint_missing += 1;
+                return false;
+            }
+            if let Some(price) = current {
+                if event.previous.0 <= target && now - event.previous.0 <= Duration::seconds(300) {
+                    let value = (price / event.price - 1.0) * 100.0;
+                    if value.is_finite() {
+                        outcome.record(value);
+                    } else {
+                        outcome.endpoint_missing += 1;
+                    }
+                } else {
+                    outcome.endpoint_missing += 1;
+                }
+                return false;
+            }
+            true
+        });
+        if let Some(price) = current {
+            event.previous = (now, price);
+        }
+    }
+    pending.retain(|event| !event.remaining.is_empty());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::{params, Connection};
+    struct Database(String);
+    impl Database {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "tmm-replay-{}-{}.db",
+                std::process::id(),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            ));
+            let path = path.to_str().unwrap().to_string();
+            crate::db::init_schema(&path).unwrap();
+            Self(path)
+        }
+        fn insert(&self, time: i64, pair: &str, price: f64, h1: f64, liquidity: f64, strict: bool) {
+            let at = chrono::DateTime::from_timestamp(time, 0)
+                .unwrap()
+                .to_rfc3339();
+            let raw = if strict {
+                json!({"signal_v2":{"version":1,"provider":"dexscreener","request_id":format!("r{time}"),"request_completed_at":at,"source_time_unverified":true,"presence":{"price_usd":true,"volume_h1":true,"volume_m5":true,"liquidity_usd":true}}})
+            } else {
+                json!({})
+            };
+            let conn = Connection::open(&self.0).unwrap();
+            conn.execute("INSERT INTO snapshots(pair_address,token_address,observed_at,price_usd,volume_h1,volume_m5,liquidity_usd,raw_json) VALUES (?1,'token',?2,?3,?4,0,?5,?6)", params![pair,at,price,h1,liquidity,raw.to_string()]).unwrap();
+            conn.execute("INSERT INTO signals(pair_address,token_address,observed_at,strategy_version,score,pair_state) VALUES (?1,'token',?2,'legacy',70,'active')",params![pair,at]).unwrap();
+        }
+        fn replay(&self, proxy: bool) -> Value {
+            let args = if proxy {
+                vec!["--legacy-proxy".into()]
+            } else {
+                vec![]
+            };
+            run(&self.0, &args, &Settings::default()).unwrap()
+        }
+    }
+    impl Drop for Database {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    const T: i64 = 100 * 86400;
+    fn breakout(db: &Database) {
+        for hour in 2..=24 {
+            db.insert(
+                T - hour * 3600,
+                "a",
+                100.0,
+                10000.0,
+                50000.0 + hour as f64,
+                true,
+            );
+        }
+        for (i, price) in [100.0, 100.1, 100.2, 100.3, 101.0].iter().enumerate() {
+            db.insert(
+                T - 3600 + i as i64 * 900,
+                "a",
+                *price,
+                30000.0,
+                60000.0 + i as f64,
+                true,
+            );
+        }
+        // The three confirmation observations span four minutes, each gap <= five minutes.
+        db.insert(T + 120, "a", 101.3, 30000.0, 70001.0, true);
+        db.insert(T + 240, "a", 101.4, 30000.0, 70002.0, true);
+    }
+    #[test]
+    fn replay_strict_excludes_legacy_and_proxy_keeps_zero_volume_unknown() {
+        let db = Database::new();
+        db.insert(T, "a", 1.0, 0.0, 50000.0, false);
+        let strict = db.replay(false);
+        assert_eq!(strict["input"]["accepted_rows"], 0);
+        assert_eq!(strict["input"]["excluded_rows"], 1);
+        let proxy = db.replay(true);
+        assert_eq!(proxy["input"]["proxy_rows"], 1);
+        assert_eq!(proxy["coverage"]["missing_h1_rows"], 1);
+        assert_eq!(proxy["coverage"]["missing_m5_rows"], 1);
+        assert_eq!(proxy["mode"], "legacy_proxy_exploratory");
+    }
+    #[test]
+    fn replay_future_suffix_and_liquidity_ranking_cannot_rewrite_prior_trigger() {
+        let db = Database::new();
+        breakout(&db);
+        let before = db.replay(false);
+        assert_eq!(before["structural_hits"]["B"]["events"], 1);
+        assert_eq!(before["structural_hits"]["B"]["first_at"], T + 240);
+        for time in [T + 480, T + 720] {
+            db.insert(time, "a", 101.5, 30000.0, 100.0, true);
+            db.insert(time, "z", 9000.0, 999999.0, 999999999.0, true);
+        }
+        let after = db.replay(false);
+        assert_eq!(after["structural_hits"]["B"]["first_at"], T + 240);
+        assert_eq!(after["structural_hits"]["B"]["events"], 1);
+        assert_eq!(after["coverage"]["reference_switches"], 0);
+        assert_eq!(after["opportunity_eligible_events"], 0);
+    }
+    #[test]
+    fn replay_is_read_only_and_reports_zero_hits_and_censored_outcomes() {
+        let db = Database::new();
+        db.insert(T, "a", 1.0, 30000.0, 50000.0, true);
+        let conn = Connection::open(&db.0).unwrap();
+        let before: String = conn
+            .query_row("SELECT group_concat(sql,';') FROM sqlite_master", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["A"]["events"], 1);
+        assert_eq!(report["structural_hits"]["B"]["events"], 0);
+        assert_eq!(report["structural_hits"]["C"]["events"], 0);
+        assert_eq!(report["coverage"]["warming_up_groups"], 1);
+        let forward = &report["structural_hits"]["A"]["forward"]["15m"];
+        assert_eq!(forward["denominator"], 1);
+        assert_eq!(forward["eligible"], 0);
+        assert_eq!(forward["right_censored"], 1);
+        assert!(forward["mean_sampled_return_pct"].is_null());
+        let after: String = conn
+            .query_row("SELECT group_concat(sql,';') FROM sqlite_master", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(before, after);
+        for (table, want) in [
+            ("snapshots", 1),
+            ("signals", 1),
+            ("signal_v2_state", 0),
+            ("signal_v2_changes", 0),
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, want);
+        }
+        assert!(conn
+            .is_readonly(rusqlite::DatabaseName::Main)
+            .is_ok_and(|read_only| !read_only));
+    }
+    #[test]
+    fn replay_forward_requires_endpoint_coverage_and_never_substitutes_late_prices() {
+        let db = Database::new();
+        for (time, price) in [
+            (T, 100.0),
+            (T + 840, 101.0),
+            (T + 960, 110.0),
+            (T + 4200, 200.0),
+            (T + 15000, 300.0),
+        ] {
+            db.insert(time, "a", price, 30000.0, 50000.0, true);
+        }
+        let report = db.replay(false);
+        let forward = &report["structural_hits"]["A"]["forward"];
+        assert_eq!(forward["15m"]["eligible"], 1);
+        assert!((forward["15m"]["mean_sampled_return_pct"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+        assert_eq!(forward["1h"]["eligible"], 0);
+        assert_eq!(forward["1h"]["endpoint_missing"], 1);
+        assert_eq!(forward["4h"]["eligible"], 0);
+        assert_eq!(forward["4h"]["endpoint_missing"], 1);
+    }
+    #[test]
+    fn replay_uses_prior_same_pool_history_when_liquidity_first_becomes_available() {
+        let db = Database::new();
+        for hour in 2..=24 {
+            db.insert(
+                T - hour * 3600,
+                "a",
+                100.0,
+                10000.0 + hour as f64,
+                50000.0 + hour as f64,
+                true,
+            );
+        }
+        for i in 0..4 {
+            db.insert(
+                T - 3600 + i * 900,
+                "a",
+                100.0 + i as f64 * 0.1,
+                30000.0,
+                60000.0 + i as f64,
+                true,
+            );
+        }
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET liquidity_usd=NULL,raw_json=json_set(raw_json,'$.signal_v2.presence.liquidity_usd',json('false'))",[]).unwrap();
+        for (time, price) in [
+            (T, 100.4),
+            (T + 120, 101.0),
+            (T + 240, 101.1),
+            (T + 360, 101.2),
+        ] {
+            db.insert(time, "a", price, 30000.0, 70000.0 + price, true);
+        }
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["B"]["events"], 1);
+        assert_eq!(report["structural_hits"]["B"]["first_at"], T + 360);
+    }
+    #[test]
+    fn replay_equal_liquidity_tie_uses_lowest_address_and_never_replaces_missing_reference() {
+        let db = Database::new();
+        db.insert(T, "z", 900.0, 30000.0, 50000.0, true);
+        db.insert(T, "a", 100.0, 30000.0, 50000.0, true);
+        db.insert(T + 900, "z", 999.0, 30000.0, 999999.0, true);
+        let report = db.replay(false);
+        assert_eq!(report["input"]["groups"], 2);
+        assert_eq!(report["structural_hits"]["A"]["events"], 1);
+        assert_eq!(report["coverage"]["reference_missing_groups"], 1);
+        assert_eq!(report["coverage"]["accepted_evidence_groups"], 1);
+    }
+    #[test]
+    fn replay_does_not_promote_malformed_metadata_in_proxy_mode() {
+        let db = Database::new();
+        db.insert(T, "a", 1.0, 30000.0, 50000.0, true);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute(
+            "UPDATE snapshots SET raw_json=json_set(raw_json,'$.signal_v2.provider','other')",
+            [],
+        )
+        .unwrap();
+        let report = db.replay(true);
+        assert_eq!(report["input"]["accepted_rows"], 0);
+        assert_eq!(report["input"]["excluded_rows"], 1);
+        assert_eq!(
+            report["structural_hits"]["A"]["forward"]["1h"]["denominator"],
+            0
+        );
+        assert!(
+            report["structural_hits"]["A"]["forward"]["1h"]["mean_sampled_return_pct"].is_null()
+        );
+    }
+    #[test]
+    fn replay_counts_unrepresentable_sqlite_time_without_panicking_or_inventing_hits() {
+        let db = Database::new();
+        db.insert(T, "a", 1.0, 30000.0, 50000.0, true);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute(
+            "UPDATE snapshots SET observed_at='1998-12-31T23:59:60+00:00'",
+            [],
+        )
+        .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["input"]["invalid_time_rows"], 1);
+        assert_eq!(report["input"]["window_rows"], 0);
+        assert_eq!(report["structural_hits"]["A"]["events"], 0);
+        assert!(report["window"]["replay_from"].is_null());
+    }
+    #[test]
+    fn replay_rejects_unknown_arguments_missing_database_and_invalid_settings() {
+        let db = Database::new();
+        assert!(run(&db.0, &["--anything".into()], &Settings::default()).is_err());
+        assert!(run(
+            &db.0,
+            &["--legacy-proxy".into(), "--legacy-proxy".into()],
+            &Settings::default()
+        )
+        .is_err());
+        let missing = format!("{}-does-not-exist/monitor.db", db.0);
+        assert!(run(&missing, &[], &Settings::default()).is_err());
+        assert!(!std::path::Path::new(&missing).exists());
+        assert!(run(
+            &db.0,
+            &[],
+            &Settings {
+                min_volume_h1_usd: 0.0,
+                ..Settings::default()
+            }
+        )
+        .is_err());
+    }
+}
