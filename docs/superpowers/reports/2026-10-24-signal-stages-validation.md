@@ -107,6 +107,18 @@ The four cases remain identity/coverage diagnostics only: local ticker/name clue
 
 Controller owns scoped review, whole-branch review and remaining live API acceptance before rollout.
 
+## Delivery decisions and remaining acceptance gates
+
+- User delegated design, testing/replay, review, commit/push, deployment and rollback; routine step confirmations are covered. This convention is recorded in AGENTS.md.
+- Native managed worktree creation succeeded but sandbox writes were denied. Development used `codex/signal-stages` in the original checkout; the host-protected managed checkout was not forcibly removed. This reduces filesystem isolation, so commits and ownership were kept explicit.
+- First delivery enables shadow computation and read-only diagnostics. Legacy list, scores and scheduling remain authoritative. Visible B/C promotion waits for trustworthy input and outcome evidence; this release does not yet improve the public opportunity list.
+- Three initially Minor Task1 findings were treated as acceptance gaps because missing-data consistency and future-input isolation affect diagnostic trust; they were fixed and re-reviewed rather than deferred.
+- Local HTTP startup smoke was blocked by sandbox binding. Equivalent legacy/shadow staged Linux tests against temporary databases and ports18531/18532 must pass on cloud **before** active binary/environment replacement. This directly tests the target host but leaves macOS live startup unverified.
+- Task2's accumulated counters were deferred: stage/data/gap/warmup are structured per-observation log fields, countable through journal aggregation. Whole-branch review still triages this observability limit.
+- The exact-SHA rollout preserves the existing unit and proxy configuration, retains binary/environment rollback copies, and observes production for30minutes. A failed startup gate aborts before activation; a later old-API/service regression triggers rollback without replacing the production database.
+
+Whole-branch review, fresh final suite, permitted-host startup smoke and production observation are still pending at this report revision. Deployment results will record the deployed source SHA separately from later report-only commits.
+
 ## Task 3 scoped-review fix: missing score at the threshold boundary
 
 The review found that substituting score 0 for unavailable/conflicting history could create A when a replay focus threshold was zero or negative. Replay now rejects nonpositive focus thresholds at its own boundary; shared runtime settings validation, legacy configuration, engine formulas and volume-based entry remain unchanged. All `settings_valid` callers were inspected before choosing this replay-only restriction.
