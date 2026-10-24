@@ -30,6 +30,9 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',token_symbol:row.token_symbol,token_name:'Test',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:row.observed_at},
     {token_address:'0xother',token_symbol:'OTHER',token_name:'Other',indicator_score:20,indicator_reasons:'[]',observed_at:new Date(Date.now()-180000).toISOString()},
     {token_address:'0xzero',token_symbol:'ZERO',token_name:'Zero',indicator_score:0,indicator_reasons:'[]'}]};
+  if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
+    {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
+  ]})};
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
   if(url.endsWith('/prices')) return {ok:true,json:async()=>({symbol:'TESTUSDT',spot:[{at:at-100000,price:row.price_usd*.99},{at:at-40000,price:row.price_usd}],futures:[{at:at-100000,price:row.price_usd*1.01},{at:at-40000,price:row.price_usd*1.02}]})};
@@ -39,6 +42,12 @@ vm.runInContext(script, context);
 assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 'recent list cache should render before the network response');
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('token-v2'), 'V2 status badge should render after the network response');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('V2阶段：首次启动'), 'V2 tooltip should use Chinese copy');
+  const v2Tip=vm.runInContext(`v2TipText({stage:'base',risk_status:'WARN',data_status:'warming_up',b_at:null,c_at:null,c_reason:'support_failed'})`,context);
+  assert.ok(v2Tip.includes('V2阶段：企稳') && v2Tip.includes('数据状态：预热中') && v2Tip.includes('结果：跌破支撑'), 'V2 stages and data states should use Chinese copy');
+  assert.ok(!v2Tip.includes('B时间') && !v2Tip.includes('C时间'), 'V2 tooltip should not expose B/C jargon');
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('市场价格对比') < detail.indexOf('价格区间深度'), 'trend should be visible before pool depth');
@@ -61,7 +70,7 @@ setImmediate(async () => {
   assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币');
   assert.ok(document.getElementById('refreshInfo').textContent.startsWith('行情快照最早 '));
   assert.ok(JSON.parse(storage.get('tmm-tokens-v1')).rows.length>1, 'network result replaces the cached list');
-  assert.ok(list.includes('data-tip="活跃度分 · 命中标签：流动性适中、1小时成交额达标"'));
+  assert.ok(list.includes('data-tip="活跃度分 · 命中标签：流动性适中、1小时成交额达标 · V2阶段：首次启动'));
   assert.ok(list.includes('活跃度分'));
   assert.ok(list.includes('快照 '), 'each list row should expose its own sample age');
   assert.ok(!list.includes('onclick='), 'token selection must not embed an address in JavaScript');
@@ -163,7 +172,7 @@ setImmediate(async () => {
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
-  assert.equal(calls.length,before+1,'unchanged overview must not reload detail APIs');
+  assert.deepEqual(calls.slice(before).filter(url=>url!=='/api/tokens'&&url!=='/api/signal-v2?limit=50'),[],'unchanged overview must not reload detail APIs');
   assert.equal(document.getElementById('depthBody').innerHTML,depth);
   row.observed_at=new Date(Date.now()+1000).toISOString();
   vm.runInContext(`detailCache.get('0xtoken').at=0`,context);

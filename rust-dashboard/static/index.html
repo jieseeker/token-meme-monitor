@@ -45,6 +45,10 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-age { font-size:10px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
 .token-btn .score-tag { position:relative; flex:none; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; padding:5px 9px; border-radius:6px; cursor:help; }
+.token-v2 { display:inline-flex; align-items:center; margin-left:4px; padding:1px 5px; border:1px solid rgba(15,118,110,.22); border-radius:999px; background:rgba(15,118,110,.08); color:var(--accent); font-size:10px; font-weight:650; line-height:1.35; cursor:help; }
+.token-v2.warn { border-color:rgba(180,83,9,.24); background:rgba(180,83,9,.08); color:var(--risk); }
+.token-v2.block { border-color:rgba(239,68,68,.24); background:rgba(239,68,68,.08); color:var(--danger); }
+.token-v2.hold { border-color:var(--line); background:rgba(107,114,128,.08); color:var(--muted); }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:11px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
@@ -167,6 +171,7 @@ let selectedDetail = null;
 let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
+let signalV2Rows = new Map();
 const oiCache = new Map();
 const depthCache = new Map();
 const whaleCache = new Map();
@@ -217,6 +222,21 @@ function marketRisks(raw){
 }
 function escapeAttr(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
+const v2StageLabels={inactive:'未启动',watch:'观察',first_wave:'第一波',pullback:'回调',base:'企稳',first_start:'首次启动',first_start_extended:'首次启动·超8%',second_start:'二次启动',second_start_extended:'二次启动·超8%'};
+const v2RiskLabels={PASS:'通过',WARN:'警告',BLOCK:'阻断',HOLD:'暂缓'};
+const v2DataLabels={current:'数据连续',warming_up:'预热中',interrupted:'数据断档',expired:'窗口过期',source_changed:'数据源变更',invalid_input:'数据无效',missing_price:'数据缺失',missing_m5:'数据缺失',missing_h1:'数据缺失',missing_liquidity:'数据缺失'};
+const v2ReasonLabels={confirmed:'确认',support_failed:'跌破支撑',base_lower_failed:'跌破箱体下沿',retrace_exceeded:'回撤过大',first_wave_continuation:'第一波延续',event_expired:'事件过期',window_expired:'窗口过期',source_changed:'数据源变更',interrupted:'数据断档'};
+function fmtUnixTime(at){return Number.isFinite(at)?new Date(at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'未触发';}
+function v2TipText(state){
+  if(!state)return '';
+  const stage=v2StageLabels[state.stage]||'未知';
+  const risk=v2RiskLabels[state.risk_status]||'未知';
+  const data=v2DataLabels[state.data_status]||'未知';
+  const reason=state.c_reason?` · 结果：${v2ReasonLabels[state.c_reason]||state.c_reason}`:'';
+  return `V2阶段：${stage} · 风险：${risk} · 数据状态：${data} · 首次启动时间：${fmtUnixTime(state.b_at)} · 二次启动时间：${fmtUnixTime(state.c_at)}${reason}`;
+}
+function v2RiskClass(risk){return risk==='PASS'?'':risk==='WARN'?' warn':risk==='BLOCK'?' block':' hold';}
+
 function mergeTokens(rows) {
   const groups=new Map();
   for(const row of rows){
@@ -253,9 +273,13 @@ function renderTokenList() {
       const score=t.indicator_score;
       const cls=score>=60?'tag-high':score>=40?'tag-mid':'tag-low';
       const sel=t.token_address===selectedToken?' selected':'';
+      const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
+      const v2Tip=v2TipText(v2);
+      const v2Badge=v2?`<span class="token-v2${v2RiskClass(v2.risk_status)}" data-tip="${escapeAttr(v2Tip)}" aria-label="${escapeAttr(v2Tip)}">${escapeAttr(v2StageLabels[v2.stage]||'未知')}</span>`:'';
+      const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}</span></span>
-        <span class="score-tag ${cls}" data-tip="活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${escapeAttr(scoreTags(t.indicator_reasons))}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}">${score}</span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
+        <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');
   hideScoreTooltip();
@@ -588,8 +612,8 @@ function showScoreTooltip(score){
 }
 function hideScoreTooltip(){scoreTooltip.hidden=true;}
 tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
-tokenList.addEventListener('pointerover',e=>{const score=e.target.closest('.score-tag');if(score)showScoreTooltip(score);});
-tokenList.addEventListener('pointerout',e=>{const score=e.target.closest('.score-tag');if(score&&!score.contains(e.relatedTarget))hideScoreTooltip();});
+tokenList.addEventListener('pointerover',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target)showScoreTooltip(target);});
+tokenList.addEventListener('pointerout',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
 tokenList.addEventListener('focusin',e=>{const score=e.target.closest('.token-btn')?.querySelector('.score-tag');if(score)showScoreTooltip(score);});
 tokenList.addEventListener('focusout',hideScoreTooltip);
 tokenList.addEventListener('scroll',hideScoreTooltip);
@@ -641,7 +665,11 @@ try{
 
 async function refresh(){
   try{
-    const rows=await fetchJSON('/api/tokens');
+    const [rows, signalV2] = await Promise.all([
+      fetchJSON('/api/tokens'),
+      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]}))
+    ]);
+    signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
     showOverview(rows);
     try{localStorage.setItem(OVERVIEW_CACHE_KEY,JSON.stringify({at:Date.now(),rows}));}catch{}
   }catch(e){
