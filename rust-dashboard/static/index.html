@@ -34,9 +34,9 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .search-input { width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
 .search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
 .list-summary { font-size:12px; color:var(--subtle); }
-.stage-filter { display:flex; flex-wrap:wrap; gap:5px; }
-.stage-filter button { border:1px solid var(--line); border-radius:999px; padding:3px 8px; background:transparent; color:var(--muted); font-size:10px; cursor:pointer; }
-.stage-filter button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:650; }
+.stage-filter { display:flex; flex-wrap:wrap; gap:4px 10px; }
+.stage-filter button { border:0; background:transparent; color:var(--muted); font-size:10px; cursor:pointer; padding:2px 0; }
+.stage-filter button.active { color:var(--accent); font-weight:700; }
 .list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
 @media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
 .token-btn { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
@@ -52,10 +52,10 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-v2.warn { border-color:rgba(180,83,9,.24); background:rgba(180,83,9,.08); color:var(--risk); }
 .token-v2.block { border-color:rgba(239,68,68,.24); background:rgba(239,68,68,.08); color:var(--danger); }
 .token-v2.hold { border-color:var(--line); background:rgba(107,114,128,.08); color:var(--muted); }
-.structure-line { display:flex; align-items:center; gap:5px; margin-top:3px; font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; }
-.structure-chip { padding:1px 4px; border-radius:4px; background:rgba(107,114,128,.10); color:var(--muted); font-variant-numeric:tabular-nums; }
-.structure-chip.strong { background:rgba(15,118,110,.12); color:var(--accent); }
-.structure-chip.weak { background:rgba(239,68,68,.10); color:var(--danger); }
+.structure-line { display:grid; grid-template-columns:auto auto minmax(0,1fr); gap:4px 8px; align-items:baseline; margin-top:3px; font-size:10px; color:var(--muted); white-space:nowrap; }
+.structure-stage { color:var(--text); font-weight:650; }
+.structure-data { color:var(--subtle); }
+.structure-factors { min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-variant-numeric:tabular-nums; }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:11px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
@@ -83,28 +83,28 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .triage-risk .triage-value { color:var(--risk); }
 .triage-risk.clear .triage-value { color:var(--accent-strong); }
 .triage-note { display:block; margin-top:4px; color:var(--muted); font-size:10px; }
-.structure-card { display:grid; grid-template-columns:minmax(160px,.8fr) minmax(0,2fr); gap:14px; margin:-6px 0 14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.03); }
+.structure-card { display:grid; grid-template-columns:minmax(150px,.75fr) minmax(0,2.2fr); gap:16px; margin:-8px 0 14px; padding:14px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.025); }
 .structure-head { min-width:0; }
 .structure-stage { font-size:12px; font-weight:700; color:var(--text); }
 .structure-meta { margin-top:5px; font-size:11px; color:var(--muted); line-height:1.5; }
 .structure-conclusion { margin-top:7px; font-size:12px; color:var(--text); line-height:1.45; }
-.factor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px 12px; }
+.factor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 16px; }
 .factor-item { min-width:0; }
 .factor-label { display:flex; justify-content:space-between; gap:6px; font-size:10px; color:var(--muted); }
 .factor-value { margin-top:3px; font-size:15px; font-weight:750; font-variant-numeric:tabular-nums; }
 .factor-value.strong { color:var(--accent); }
 .factor-value.weak { color:var(--danger); }
-.factor-bar { height:4px; margin-top:5px; border-radius:999px; background:rgba(107,114,128,.14); overflow:hidden; }
+.factor-bar { height:3px; margin-top:6px; border-radius:999px; background:rgba(107,114,128,.14); overflow:hidden; }
 .factor-bar span { display:block; height:100%; border-radius:inherit; }
 .factor-bar .strong { background:var(--accent); }
 .factor-bar .weak { background:var(--danger); }
 .factor-bar .neutral { background:var(--muted); }
-.timeline { display:flex; flex-wrap:wrap; gap:5px 4px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
-.timeline span { padding:2px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); font-size:10px; }
-.timeline span.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:700; }
+.timeline { display:flex; flex-wrap:wrap; gap:4px 8px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+.timeline span { color:var(--subtle); font-size:10px; }
+.timeline span.active { color:var(--accent); font-weight:700; }
 .detail-section .hint { font-size:11px; line-height:1.45; color:#64748b; }
 @media(max-width:820px){ .structure-card { grid-template-columns:1fr; } .factor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media(max-width:600px){ .factor-grid { grid-template-columns:1fr; } }
+@media(max-width:600px){ .structure-line { grid-template-columns:auto minmax(0,1fr); } .structure-factors { grid-column:1/-1; } .factor-grid { grid-template-columns:1fr; } }
 .secondary-metrics { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); }
 .secondary-metrics b { color:var(--text); }
 .detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
@@ -275,14 +275,14 @@ function factorProgress(value,kind){
 function structureLineHTML(token){
   const structure=structureOf(token);
   if(!structure)return '<span class="structure-line">结构数据加载中</span>';
-  if(!structure.available)return `<span class="structure-line">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.reason||'暂无结构数据')}</span>`;
+  if(!structure.available)return `<span class="structure-line"><span class="structure-stage">${escapeAttr(structure.stage_label||'未知')}</span><span class="structure-data">${escapeAttr(structure.data_status_label||'数据状态未知')}</span><span class="structure-factors">${escapeAttr(structure.reason||'暂无结构数据')}</span></span>`;
   const factors=structure.factors||{};
-  const chips=[
-    {label:'5m动量',value:factors.momentum_5m?.display,status:factors.momentum_5m?.status},
-    {label:'放量',value:factors.relative_volume_30m?.display,status:factors.relative_volume_30m?.status},
-    {label:'买压',value:factors.buy_pressure_5m?.display,status:factors.buy_pressure_5m?.status}
-  ].filter(x=>x.value!=null);
-  return `<span class="structure-line">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.data_status_label||'数据状态未知')}${chips.length?` · ${chips.map(x=>`<span class="structure-chip ${factorClass(x.status)}">${x.label} ${escapeAttr(x.value)}</span>`).join('')}`:''}</span>`;
+  const summary=[
+    factors.momentum_5m?.display?`5m ${factors.momentum_5m.display}`:null,
+    factors.relative_volume_30m?.display?`放量 ${factors.relative_volume_30m.display}`:null,
+    factors.buy_pressure_5m?.display?`买压 ${factors.buy_pressure_5m.display}`:null
+  ].filter(Boolean).join(' · ');
+  return `<span class="structure-line"><span class="structure-stage">${escapeAttr(structure.stage_label||'未知')}</span><span class="structure-data">${escapeAttr(structure.data_status_label||'数据状态未知')}</span><span class="structure-factors">${escapeAttr(summary||'--')}</span></span>`;
 }
 function factorItemHTML(key,label,factor){
   if(!factor)return `<div class="factor-item"><div class="factor-label"><span>${label}</span><span>--</span></div><div class="factor-value neutral">--</div><div class="factor-bar"><span class="neutral" style="width:0"></span></div></div>`;
