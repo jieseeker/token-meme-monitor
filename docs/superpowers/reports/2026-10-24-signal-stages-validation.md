@@ -1,4 +1,6 @@
-# Signal stages: replay and local validation — 2026-10-24
+# Signal stages: replay validation and shadow release — 2026-10-24
+
+交付结论：A/B/C 影子版已提交并上线，120项 Rust 测试及目标主机启动验收通过，30分钟观察完成。期间两次 SQLite 锁冲突已退避恢复，仍存在影子覆盖损失。页面旧规则继续生效；现有历史不足以证明提前捕捉能力。
 
 Deterministic collected-input replay is implemented. Both historical datasets contain only legacy `{}` metadata, so strict acceptance is **zero**. Exploratory proxy replay produced local A/B/C = **33/0/0**, cloud baseline A/B/C = **92/21/1**. All outputs retain unverified source time and **zero opportunity-eligible events**. These results do not establish strategy profitability or exact production execution parity.
 
@@ -100,12 +102,12 @@ The four cases remain identity/coverage diagnostics only: local ticker/name clue
 - A delayed-liquidity history fixture initially lost distinct content after removing liquidity; corrected hourly h1 values preserve independent evidence. A try/finally mutation deleting initial history then failed the B expectation (exit 101), restored implementation passed. An unsupported SQLite leap-second test failed with a None unwrap, then passed after timestamp rejection was moved before window use. Final focused replay suite: **9/9 passed**.
 - Full `cargo test --manifest-path rust-dashboard/Cargo.toml`: **114 passed, zero failed/ignored**, including all 105 prior tests. `node rust-dashboard/static/detail.test.cjs`: exit 0. `bash deploy-cloud.test.sh`: exit 0.
 - `cargo build --release --locked --manifest-path rust-dashboard/Cargo.toml`: success. Three release CLI error cases passed: missing database, unknown option, repeated option; stdout empty, stderr error, nonzero exit, and no missing parent directory created.
-- Strict and proxy each ran twice on both copies: **byte-identical JSON**. For both copies, complete sqlite_master schema digest, every table row count and full database SHA256 are identical before/after. Four aggregate JSONs and integrity evidence are kept in ignored SDD scratch, without address dumps in this report.
+- Strict and proxy each ran twice on both copies: **byte-identical JSON**. For both copies, complete sqlite_master schema digest, every table row count and full database SHA256 are identical before/after. Aggregate JSONs and integrity checks were produced in temporary ignored SDD scratch; aggregate results and source hashes are preserved in this report, without address dumps or a permanent raw-data archive.
 - Local elapsed measurements for two deterministic runs together: local strict 2.815s / proxy 3.994s; cloud strict 3.649s / proxy 8.806s. Optional `/usr/bin/time -l` failed its sandboxed sysctl query; no RSS result is claimed.
 - **Live-port smoke blocked/deferred to Task 4:** dashboard-only release on an empty temporary DB, separate port 18531, failed local bind with `Operation not permitted`; scoped escalation did not execute. Legacy/shadow HTTP smoke is not claimed passed. Controller will run temporary-DB/separate-port legacy+shadow smoke on the permitted deployment host before production activation. Existing Rust route/mode tests passed.
 - UI unchanged; browser not run. No provider fetch, push, deployment, exact runtime-parity reproduction, four-asset verification or production-load benchmark was performed by Task 3.
 
-Controller owns scoped review, whole-branch review and remaining live API acceptance before rollout.
+Scoped task reviews, whole-branch review and its consolidated fix re-review are complete. Coordinator final gates and target-host results are recorded below.
 
 ## Delivery decisions and remaining acceptance gates
 
@@ -117,7 +119,7 @@ Controller owns scoped review, whole-branch review and remaining live API accept
 - Task2's accumulated counters remain deferred: stage/data/gap/warmup are structured per-observation log fields. The final-review fix records `gap` from the pre-advance accepted-evidence time, so a valid recovery cannot erase it. It counts successful logged observations after >300 seconds without accepted evidence, not distinct outage episodes or all worker failures; repeated observations during one interruption may all carry true. No complete runtime gap-rate claim follows from journal aggregation.
 - The exact-SHA rollout preserves the existing unit and proxy configuration, retains binary/environment rollback copies, and observes production for30minutes. A failed startup gate aborts before activation; a later old-API/service regression triggers rollback without replacing the production database.
 
-Whole-branch review identified the entry-reset bug and recovery-gap logging issue; the consolidated fix and fresh local evidence are below. Scoped re-review, coordinator final gates, permitted-host startup smoke and production observation remain pending. Deployment results will record the deployed source SHA separately from later report-only commits.
+Whole-branch review identified the entry-reset bug and recovery-gap logging issue; the consolidated fix and fresh local evidence are below. A fresh scoped re-review marked both addressed with no new breakage. The deployed source SHA is recorded separately from later report-only commits.
 
 ## Task 3 scoped-review fix: missing score at the threshold boundary
 
@@ -139,7 +141,44 @@ Behavioral RED reproduced missing-h1 recovery reopening a terminated event, thre
 - Existing plain script `python3 .superpowers/sdd/2026-10-24-signal-stages/run-replay-validation.py`: exit0. Strict and proxy ran twice on each existing consistent copy, byte-identical in every pair. No resource tool or listener was launched.
 - Fresh two-run elapsed totals: local strict **2.539s**, local proxy **4.120s**, cloud strict **3.753s**, cloud proxy **9.027s**. These are elapsed times, not RSS/load measurements.
 - The dataset, exploratory coverage, stage/risk and forward-outcome tables above were checked against these fresh JSON outputs. Their numerical results all remain unchanged: strict0/0/0 on both, local proxy33/0/0, cloud proxy92/21/1; opportunities0 and both completeness/runtime-trace flags false throughout. The unchanged historical totals do not negate the synthetic regression or establish runtime input parity.
-- Every table count, complete sqlite_master digest and complete database file SHA256 match before/after. Local has24 tables, cloud9; neither source acquired V2 state/change tables. Snapshot/signal counts remain190513/190513 locally and312723/312723 on cloud. Full count maps and hashes are in the refreshed ignored `replay-local-source-integrity.json` and `replay-cloud-source-integrity.json`.
+- Every table count, complete sqlite_master digest and complete database file SHA256 match before/after. Local has24 tables, cloud9; neither source acquired V2 state/change tables. Snapshot/signal counts remain190513/190513 locally and312723/312723 on cloud. Temporary integrity JSON checked the full maps; aggregate counts and source/schema hashes are preserved here.
+- Local input SHA256: `1b72d0632dcd4d1caf000f3474693c789b5cb3b992c608f03b7df566f5e1e944`; schema SHA256: `72ce75acc71736083476b25fb5c25b48dd20573c15ce2be67048a117eedf88b1`.
+- Cloud input SHA256: `a858d436a644ec344ad88c1cadf91f95fe6effbdd7ba60a76c8328f747ec9b6d`; schema SHA256: `9c4372a85b00e8a4f7b424949770bcb036bc0c1f4e3c05bf128e62427174acfa`.
 - `git diff --check` and rustfmt checks for all three changed Rust files pass. No dependencies, collectors, runtime journal/manifest, UI, OI or notifier changes were added.
 
-Live-port smoke remains deferred to the coordinator’s staged Linux temporary-database gate before activation. Source freshness, seven-day empirical coverage, exact applied-runtime equivalence, strategy efficacy, named-asset identity and production capacity remain unverified as disclosed above.
+Local live-port smoke remains blocked; target-host startup validation is recorded below. Source freshness, seven-day empirical coverage, exact applied-runtime equivalence, strategy efficacy and named-asset identity remain unverified as disclosed above.
+
+## Coordinator final gates and cloud release
+
+Final source commit: `4d244b7d27520483699f3a347c6645585669b0b7`. At this exact source and after fast-forward merge: **120/120 Rust tests passed**; fresh Node detail and deployment-shell checks exited0; fresh release build succeeded in24.56s without warnings. Final whitespace, tracked-file and credential-marker checks passed. No database, build products, actual environment configuration or key files were committed. GitHub main was verified at this SHA before rollout.
+
+Review boundaries retained: predictive efficacy/calibration/equal-budget superiority, exact four-asset/OI mapping, exact applied-runtime replay and frame completeness are unverified. Pre-existing legacy semantics remain the comparison behavior. Public B/C promotion, trading and notification delivery are excluded. Seven-day logical bounds use the existing cleanup scheduler; instantaneous physical deletion/compaction is not claimed. No arbitrary multi-worker capacity, adversarial manual-DB guarantee or macOS listener/browser pass is claimed.
+
+- Deployed source SHA: `4d244b7d27520483699f3a347c6645585669b0b7`; activation: **2026-10-24T01:24:17Z**. Later report-only commits are separate from this binary's source SHA.
+- Cloud pulled GitHub main, built with one job in43.96s, then passed **both legacy and shadow** staged Linux tests on independent ports18531/18532 and temporary empty databases. Old tokens/status, new diagnostics and invalid-query400 checks passed before active binary/environment replacement. This satisfies the deferred startup gate on the target host; macOS live startup remains unverified.
+- Existing unit and proxy configuration were byte-verified unchanged; proxy remained active. Only `SIGNAL_V2_MODE=shadow` changed in the environment. Running binary, build output and reviewed source identity were verified. Binary/environment rollback copies are retained privately. Production database was not replaced or restored.
+- A separate coordinator read confirmed the Git source SHA and identical SHA256 for installed/build/running binaries: `478e868b3b1f1eb01cae32634e8971a408cd709ad0b2e58ac5ea06ea9a234387`. Live diagnostic parameters are focus65/minimum h1 volume15000, experiment `signal_v2_shadow_v1`, mode shadow, source time unverified.
+- The first post-restart connect attempt was refused during startup, then the built-in retry passed all health checks. There was no rollback or automatic process restart.
+- Before release: tokens11.7ms/status12.1ms, service memory464,101,376bytes,1117MiB available and30GiB disk free. Initial post-release probe at01:24:53Z: tokens154rows34.3ms/status11.4ms/overview6.0ms/new diagnostics1.3ms, all HTTP200;35 shadow observations, all warming up; no error/warn/panic; service/proxy active with NRestarts0. Cold-start memory211,066,880bytes is not a steady-state capacity result.
+
+Observation completed at **2026-10-24T01:54:28Z**, covering30minutes11seconds after activation. All28 scheduled loopback API checks returned200; the service and proxy remained active at every probe, with the same PIDs and zero automatic restarts. An external client also reached the page (HTTP200,134ms) and confirmed the public diagnostic mode/version.
+
+| UTC probe | Token rows | Tokens ms | Status ms | Overview ms | V2 ms | Nonempty cycles | Shadow observations | Shadow failures | Memory MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 01:24:53 | 154 | 34.3 | 11.4 | 6.0 | 1.3 | 2 | 35 | 0 | 201.3 |
+| 01:29:28 | 153 | 36.9 | 12.1 | 6.6 | 1.3 | 18 | 251 | 1 | 237.5 |
+| 01:34:25 | 149 | 34.7 | 11.3 | 6.0 | 2.3 | 34 | 449 | 2 | 317.3 |
+| 01:39:36 | 150 | 41.2 | 11.6 | 5.9 | 2.4 | 53 | 690 | 2 | 259.8 |
+| 01:44:28 | 149 | 44.4 | 11.6 | 6.8 | 1.2 | 68 | 957 | 2 | 330.6 |
+| 01:49:25 | 152 | 34.3 | 11.4 | 6.1 | 1.3 | 86 | 1205 | 2 | 340.7 |
+| 01:54:28 | 151 | 34.0 | 11.5 | 6.1 | 1.3 | 105 | 1455 | 2 | 343.7 |
+
+Final nonempty market cycles:105, median8772ms/p95_27333ms, versus the earlier baseline median8054ms/p95_24857ms; throughput is close to54cycles/15minutes baseline. These are observed cycle durations with third-party traffic, not a causal benchmark. Old token API probes ranged34.0–44.4ms and V2 probes1.2–2.4ms. Final service memory343.7MiB, peak344.5MiB, versus442.6MiB immediately before release; cold-cache warming and the short window prevent a long-term capacity claim. Final host one-minute load0.125.
+
+Logs:3049info/114warn, no error-level entries or panic. Warnings split into74fail-closed continuity resets,2shadow SQLite busy failures,14existing depth failures,9RPC failovers and15existing whale-proxy failures. The two busy failures were01:27:33 and01:33:37; later committed observations were confirmed, with no further shadow failures for about21minutes by window end. Continuity resets stopped increasing after the15-minute probe. Provider warning categories predate this release and do not show a new shadow provider dependency.
+
+The1455successful shadow observation logs contain1247warming-up/208interrupted states, and1364inactive/91watch states. These are repeated observation statuses, not unique events. No live B/C effectiveness was evaluated; fresh strict metadata needs its historical background. Neither source freshness nor signal quality is established by a healthy30-minute runtime.
+
+**Release assessment:** retain the isolated shadow release; no rollback condition was observed. Main APIs and collection continued, and isolated shadow failures recovered. This accepts a disclosed shadow coverage limitation; it does not declare zero anomalies or complete signal delivery.
+
+During observation, isolated shadow-only SQLite `DatabaseBusy` warnings occurred and later successful shadow commits were confirmed. The configured global60-second shadow backoff can skip other token frames and cause fail-closed continuity resets; failed-log counts are not a coverage-loss denominator. This is an explicit shadow coverage limitation even when the original collector and old APIs remain healthy. Persistent failure without recovery or a sustained old-path regression would trigger the recorded rollback criteria.
