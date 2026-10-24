@@ -43,6 +43,14 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 每个端点新增 `positive`、`negative`、`flat` 和 `positive_sampled_return_rate_pct`；上涨比例的分母仅为可用端点，缺失、右删失单列，零样本为 null。该比例不是交易胜率或扣费收益；按日分组也不自动构成独立验证。上述固定初值用于比较，回放不调参、不改变线上规则、不自动晋级信号；影子采集仍须持续验证数据与效果。
 
+## Factor v1 只读回放
+
+```bash
+MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm factor-v1-replay
+```
+
+`factor-v1-replay` 以只读方式从 `snapshots` 生成 6 个研究因子：5m 动量、15m 动量、30m 突破、30m 相对成交量、5m 买入占比和 30m 流动性稳定性。每个 token 固定使用回放期内历史峰值流动性最高的池，避免中途换池造成价格断点。报告输出因子覆盖、分位数、与 15m/1h 采样收益的相关性，以及最强的突破和放量样本。该模式不写数据库、不请求行情、不改变现有信号或页面，仅用于离线研究。
+
 ## 云端部署
 
 先将待发布代码推送到 GitHub `main`，然后在本地运行：
