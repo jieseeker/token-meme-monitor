@@ -100,9 +100,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .timeline span { flex:1; height:5px; border-radius:999px; background:rgba(107,114,128,.18); }
 .timeline span.done { background:rgba(15,118,110,.24); }
 .timeline span.active { background:var(--accent); }
-.structure-details { border-top:1px solid var(--line); padding-top:8px; }
-.structure-details summary { color:var(--accent); font-size:12px; font-weight:650; cursor:pointer; }
-.structure-details[open] .factor-grid { margin-top:10px; }
 .detail-section .hint { font-size:12px; line-height:1.45; color:#64748b; }
 @media(max-width:820px){ .structure-head { grid-template-columns:1fr; } .factor-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:900px){ .context-grid { grid-template-columns:1fr; } }
@@ -316,15 +313,10 @@ function structureCardHTML(token){
       ${factorItemHTML('breakout_30m','30m突破',factors.breakout_30m)}
       ${factorItemHTML('relative_volume_30m','相对成交量',factors.relative_volume_30m)}
       ${factorItemHTML('buy_pressure_5m','买压',factors.buy_pressure_5m)}
+      ${factorItemHTML('momentum_5m','5m动量',factors.momentum_5m)}
+      ${factorItemHTML('momentum_15m','15m动量',factors.momentum_15m)}
+      ${factorItemHTML('liquidity_stability_30m','流动性稳定',factors.liquidity_stability_30m)}
     </div>
-    <details class="structure-details">
-      <summary>更多结构因子</summary>
-      <div class="factor-grid">
-        ${factorItemHTML('momentum_5m','5m动量',factors.momentum_5m)}
-        ${factorItemHTML('momentum_15m','15m动量',factors.momentum_15m)}
-        ${factorItemHTML('liquidity_stability_30m','流动性稳定',factors.liquidity_stability_30m)}
-      </div>
-    </details>
   </div>`;
 }
 async function ensureStructure(token){

@@ -241,8 +241,7 @@ fn nearest_prior(samples: &[Snapshot], target: i64, tolerance: i64) -> Option<&S
     samples
         .iter()
         .rev()
-        .take_while(|sample| sample.at <= target + tolerance)
-        .find(|sample| sample.at >= target - tolerance)
+        .find(|sample| sample.at >= target - tolerance && sample.at <= target + tolerance)
 }
 
 fn read_snapshots(conn: &Connection, token: &str) -> Result<Vec<Snapshot>> {
@@ -491,5 +490,31 @@ mod tests {
         .unwrap();
         let output = structure_for_token(&conn, "token");
         assert_eq!(output["b_crossed_at"], json!(123));
+    }
+
+    #[test]
+    fn nearest_prior_finds_sample_when_latest_history_is_after_tolerance_window() {
+        let samples = vec![
+            Snapshot {
+                at: 100,
+                pair: "p".into(),
+                price: 1.0,
+                volume_m5: 1.0,
+                liquidity_usd: 1.0,
+                buys_m5: 1,
+                sells_m5: 1,
+            },
+            Snapshot {
+                at: 190,
+                pair: "p".into(),
+                price: 2.0,
+                volume_m5: 1.0,
+                liquidity_usd: 1.0,
+                buys_m5: 1,
+                sells_m5: 1,
+            },
+        ];
+        let found = nearest_prior(&samples, 100, 50).unwrap();
+        assert_eq!(found.at, 100);
     }
 }
