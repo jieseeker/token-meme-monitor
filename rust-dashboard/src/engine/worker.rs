@@ -420,11 +420,11 @@ fn dex_retry_delay(attempt: u8) -> Duration {
 
 fn market_refresh_age(address: &str, short: &[String], hot: &[String], visible: &[String]) -> u64 {
     if short.iter().any(|token| token == address) || hot.iter().any(|token| token == address) {
-        120
+        30
     } else if visible.iter().any(|token| token == address) {
-        240
+        60
     } else {
-        900
+        180
     }
 }
 
@@ -997,12 +997,12 @@ mod tests {
     fn displayed_tokens_after_the_first_fifty_keep_five_minute_priority() {
         let visible: Vec<String> = (0..51).map(|i| format!("token{i}")).collect();
         let hot = visible[..50].to_vec();
-        assert_eq!(market_refresh_age("token0", &[], &hot, &visible), 120);
-        assert_eq!(market_refresh_age("token50", &[], &hot, &visible), 240);
-        assert_eq!(market_refresh_age("hidden", &[], &hot, &visible), 900);
+        assert_eq!(market_refresh_age("token0", &[], &hot, &visible), 30);
+        assert_eq!(market_refresh_age("token50", &[], &hot, &visible), 60);
+        assert_eq!(market_refresh_age("hidden", &[], &hot, &visible), 180);
         assert_eq!(
             market_refresh_age("hidden", &["hidden".into()], &hot, &visible),
-            120
+            30
         );
     }
 
