@@ -449,10 +449,54 @@ fn initial_history(
     Ok((samples.into(), times.into()))
 }
 
+fn crossing_m5(conn: &Connection, token: &str, state: &State, proxy: bool) -> Result<Option<f64>> {
+    let Some(crossed_at) = state.b_crossed_at else {
+        return Ok(None);
+    };
+    let time = DateTime::from_timestamp(crossed_at, 0)
+        .ok_or("invalid crossing time")?
+        .to_rfc3339();
+    // Price history omits invalid rows; raw crossing evidence must include them.
+    // shortcut: scan one retained pool via its pair index; normalize/index time if replay event volume makes this costly.
+    let mut query = conn.prepare("SELECT observed_at,price_usd,volume_h1,volume_m5,liquidity_usd,raw_json FROM snapshots WHERE pair_address=?1 AND token_address=?2 AND julianday(observed_at) BETWEEN julianday(?3)-1.0/86400 AND julianday(?3)+2.0/86400 LIMIT 4097")?;
+    let mut rows = query.query(rusqlite::params![state.pair_address, token, time])?;
+    let mut baseline = None;
+    let mut count = 0;
+    while let Some(row) = rows.next()? {
+        count += 1;
+        if count > 4096 {
+            return Ok(None);
+        }
+        let text: String = row.get(0)?;
+        if DateTime::parse_from_rfc3339(&text)?.timestamp() != crossed_at {
+            continue;
+        }
+        let raw: String = row.get(5)?;
+        let raw: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        let volume = decode(
+            &state.pair_address,
+            &text,
+            [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?],
+            &raw,
+            proxy,
+        )
+        .and_then(|s| s.volume_m5)
+        .filter(|v| *v > 0.0);
+        let Some(volume) = volume else {
+            return Ok(None);
+        };
+        if baseline.is_some_and(|previous| previous != volume) {
+            return Ok(None);
+        }
+        baseline = Some(volume);
+    }
+    Ok(baseline)
+}
+
 fn b_cohorts(
     state: &State,
     current: &Sample,
-    history: &[Sample],
+    crossing_m5: Option<f64>,
 ) -> (Vec<&'static str>, Option<bool>) {
     let mut names = vec!["all"];
     if state.risk_status != "PASS" {
@@ -462,14 +506,7 @@ fn b_cohorts(
     let recent = (|| {
         let m5 = current.volume_m5?;
         let h1 = current.volume_h1?;
-        let crossed_at = state.b_crossed_at?;
-        let mut crossing = history
-            .iter()
-            .filter(|s| s.pair_address == state.pair_address && s.at == crossed_at);
-        let baseline = crossing.next()?.volume_m5.filter(|v| *v > 0.0)?;
-        if crossing.any(|s| s.volume_m5 != Some(baseline)) {
-            return None;
-        }
+        let baseline = crossing_m5?;
         Some(m5 > 0.0 && h1 > 0.0 && m5 >= h1 / 12.0 && m5 >= baseline * 0.8)
     })();
     let distance = current.price.zip(state.reference_upper).map(|(p, upper)| {
@@ -717,7 +754,12 @@ impl TokenReplay {
             }
             let mut keys = vec![stage.to_string()];
             if stage == "B" {
-                let (names, recent) = b_cohorts(state, current, history.make_contiguous());
+                let baseline = if state.risk_status == "PASS" {
+                    crossing_m5(conn, token, state, proxy)?
+                } else {
+                    None
+                };
+                let (names, recent) = b_cohorts(state, current, baseline);
                 if state.risk_status == "PASS" {
                     count(
                         coverage,
@@ -1055,6 +1097,45 @@ mod tests {
         .unwrap();
         let report = db.replay(false);
         assert_eq!(report["structural_hits"]["B"]["events"], 1);
+        assert_eq!(
+            report["b_filter_comparison"]["cohorts"]["pass_recent_volume"]["events"],
+            0
+        );
+        assert_eq!(
+            report["b_filter_comparison"]["recent_volume_evidence"]["unknown"],
+            1
+        );
+    }
+    #[test]
+    fn replay_b_missing_price_crossing_conflict_cannot_disappear_from_filter() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        let original = DateTime::from_timestamp(T, 0).unwrap().to_rfc3339();
+        let valid = DateTime::from_timestamp(T, 200_000_000)
+            .unwrap()
+            .to_rfc3339();
+        conn.execute("UPDATE snapshots SET observed_at=?1,raw_json=json_set(raw_json,'$.signal_v2.request_completed_at',?1) WHERE observed_at=?2",params![valid,original]).unwrap();
+        conn.execute(
+            "UPDATE signals SET observed_at=?1 WHERE observed_at=?2",
+            params![valid, original],
+        )
+        .unwrap();
+        db.insert(T + 1, "a", 101.0, 30000.0, 60000.0, true);
+        let bad = DateTime::from_timestamp(T, 100_000_000)
+            .unwrap()
+            .to_rfc3339();
+        conn.execute("UPDATE snapshots SET observed_at=?1,volume_m5=9000,raw_json=json_set(raw_json,'$.signal_v2.request_completed_at',?1,'$.signal_v2.presence.price_usd',json('false')) WHERE id=(SELECT MAX(id) FROM snapshots)",[&bad]).unwrap();
+        conn.execute(
+            "UPDATE signals SET observed_at=?1 WHERE id=(SELECT MAX(id) FROM signals)",
+            [&bad],
+        )
+        .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["B"]["events"], 1);
+        assert_eq!(report["structural_hits"]["B"]["first_at"], T + 240);
         assert_eq!(
             report["b_filter_comparison"]["cohorts"]["pass_recent_volume"]["events"],
             0
