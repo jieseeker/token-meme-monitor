@@ -34,6 +34,9 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .search-input { width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
 .search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
 .list-summary { font-size:12px; color:var(--subtle); }
+.stage-filter { display:flex; flex-wrap:wrap; gap:5px; }
+.stage-filter button { border:1px solid var(--line); border-radius:999px; padding:3px 8px; background:transparent; color:var(--muted); font-size:10px; cursor:pointer; }
+.stage-filter button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:650; }
 .list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
 @media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
 .token-btn { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
@@ -49,6 +52,10 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-v2.warn { border-color:rgba(180,83,9,.24); background:rgba(180,83,9,.08); color:var(--risk); }
 .token-v2.block { border-color:rgba(239,68,68,.24); background:rgba(239,68,68,.08); color:var(--danger); }
 .token-v2.hold { border-color:var(--line); background:rgba(107,114,128,.08); color:var(--muted); }
+.structure-line { display:flex; align-items:center; gap:5px; margin-top:3px; font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; }
+.structure-chip { padding:1px 4px; border-radius:4px; background:rgba(107,114,128,.10); color:var(--muted); font-variant-numeric:tabular-nums; }
+.structure-chip.strong { background:rgba(15,118,110,.12); color:var(--accent); }
+.structure-chip.weak { background:rgba(239,68,68,.10); color:var(--danger); }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:11px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
@@ -76,7 +83,28 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .triage-risk .triage-value { color:var(--risk); }
 .triage-risk.clear .triage-value { color:var(--accent-strong); }
 .triage-note { display:block; margin-top:4px; color:var(--muted); font-size:10px; }
+.structure-card { display:grid; grid-template-columns:minmax(160px,.8fr) minmax(0,2fr); gap:14px; margin:-6px 0 14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.03); }
+.structure-head { min-width:0; }
+.structure-stage { font-size:12px; font-weight:700; color:var(--text); }
+.structure-meta { margin-top:5px; font-size:11px; color:var(--muted); line-height:1.5; }
+.structure-conclusion { margin-top:7px; font-size:12px; color:var(--text); line-height:1.45; }
+.factor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px 12px; }
+.factor-item { min-width:0; }
+.factor-label { display:flex; justify-content:space-between; gap:6px; font-size:10px; color:var(--muted); }
+.factor-value { margin-top:3px; font-size:15px; font-weight:750; font-variant-numeric:tabular-nums; }
+.factor-value.strong { color:var(--accent); }
+.factor-value.weak { color:var(--danger); }
+.factor-bar { height:4px; margin-top:5px; border-radius:999px; background:rgba(107,114,128,.14); overflow:hidden; }
+.factor-bar span { display:block; height:100%; border-radius:inherit; }
+.factor-bar .strong { background:var(--accent); }
+.factor-bar .weak { background:var(--danger); }
+.factor-bar .neutral { background:var(--muted); }
+.timeline { display:flex; flex-wrap:wrap; gap:5px 4px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+.timeline span { padding:2px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); font-size:10px; }
+.timeline span.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:700; }
 .detail-section .hint { font-size:11px; line-height:1.45; color:#64748b; }
+@media(max-width:820px){ .structure-card { grid-template-columns:1fr; } .factor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px){ .factor-grid { grid-template-columns:1fr; } }
 .secondary-metrics { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); }
 .secondary-metrics b { color:var(--text); }
 .detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
@@ -153,6 +181,7 @@ svg.chart.price-chart { height:104px; }
   <div class="list-panel">
     <div class="section-title">代币列表</div>
     <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
+    <div class="stage-filter" id="stageFilter"></div>
     <div class="list-summary" id="listSummary">正在获取最新名单</div>
     <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
   </div>
@@ -171,7 +200,9 @@ let selectedDetail = null;
 let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
+let stageFilter = 'all';
 let signalV2Rows = new Map();
+let structureRows = new Map();
 const oiCache = new Map();
 const depthCache = new Map();
 const whaleCache = new Map();
@@ -214,6 +245,82 @@ const retiredReasons=new Set(['project_metadata_present','partial_metadata_prese
 function scoreTags(raw){
   try { const tags=typeof raw==='string'?JSON.parse(raw):raw;const live=Array.isArray(tags)?tags.filter(x=>!retiredReasons.has(x)):[];return live.length?live.map(x=>reasonLabels[x]||String(x)).join('、'):'暂无命中标签'; }
   catch { return '暂无命中标签'; }
+}
+const stageFilterOptions=[
+  {key:'all',label:'全部'},
+  {key:'watch',label:'观察'},
+  {key:'first_wave',label:'第一波'},
+  {key:'pullback',label:'回调'},
+  {key:'base',label:'企稳'},
+  {key:'first_start',label:'首次启动'},
+  {key:'second_start',label:'二次启动'}
+];
+function renderStageFilter(){
+  document.getElementById('stageFilter').innerHTML=stageFilterOptions.map(option=>`<button type="button" data-stage="${option.key}" class="${stageFilter===option.key?'active':''}">${option.label}</button>`).join('');
+}
+function stageMatches(stage,filter){
+  if(filter==='all')return true;
+  if(filter==='first_start')return String(stage||'').startsWith('first_start');
+  if(filter==='second_start')return String(stage||'').startsWith('second_start');
+  return stage===filter;
+}
+function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
+function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
+function factorProgress(value,kind){
+  if(value==null||isNaN(value))return 0;
+  if(kind==='buy_pressure_5m')return Math.max(0,Math.min(100,value*100));
+  if(kind==='relative_volume_30m'||kind==='liquidity_stability_30m')return Math.max(0,Math.min(100,value/3*100));
+  return Math.max(0,Math.min(100,(value+0.10)/0.20*100));
+}
+function structureLineHTML(token){
+  const structure=structureOf(token);
+  if(!structure)return '<span class="structure-line">结构数据加载中</span>';
+  if(!structure.available)return `<span class="structure-line">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.reason||'暂无结构数据')}</span>`;
+  const factors=structure.factors||{};
+  const chips=[
+    {label:'5m动量',value:factors.momentum_5m?.display,status:factors.momentum_5m?.status},
+    {label:'放量',value:factors.relative_volume_30m?.display,status:factors.relative_volume_30m?.status},
+    {label:'买压',value:factors.buy_pressure_5m?.display,status:factors.buy_pressure_5m?.status}
+  ].filter(x=>x.value!=null);
+  return `<span class="structure-line">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.data_status_label||'数据状态未知')}${chips.length?` · ${chips.map(x=>`<span class="structure-chip ${factorClass(x.status)}">${x.label} ${escapeAttr(x.value)}</span>`).join('')}`:''}</span>`;
+}
+function factorItemHTML(key,label,factor){
+  if(!factor)return `<div class="factor-item"><div class="factor-label"><span>${label}</span><span>--</span></div><div class="factor-value neutral">--</div><div class="factor-bar"><span class="neutral" style="width:0"></span></div></div>`;
+  const cls=factorClass(factor.status);
+  return `<div class="factor-item" data-tip="${escapeAttr(factor.help||label)}"><div class="factor-label"><span>${label}</span><span>${escapeAttr(factor.status_label||'中性')}</span></div><div class="factor-value ${cls}">${escapeAttr(factor.display||'--')}</div><div class="factor-bar"><span class="${cls}" style="width:${factorProgress(factor.value,key).toFixed(1)}%"></span></div></div>`;
+}
+function structureCardHTML(token){
+  const structure=structureOf(token);
+  if(!structure)return '<div class="hint">结构数据加载中...</div>';
+  if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div><div class="factor-grid"><div class="hint">${escapeAttr(structure.reason||'暂无结构数据')}</div></div></div>`;
+  const factors=structure.factors||{};
+  const timeline=(structure.timeline||[]).map(x=>`<span class="${x.active?'active':''}">${escapeAttr(x.label)}</span>`).join('');
+  return `<div class="structure-card">
+    <div class="structure-head">
+      <div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div>
+      <div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')} · ${structure.updated_at?new Date(structure.updated_at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'更新时间未知'}</div>
+      <div class="structure-conclusion">${escapeAttr(structure.conclusion||'结构观察')}</div>
+      <div class="timeline">${timeline}</div>
+    </div>
+    <div class="factor-grid">
+      ${factorItemHTML('momentum_5m','5m动量',factors.momentum_5m)}
+      ${factorItemHTML('momentum_15m','15m动量',factors.momentum_15m)}
+      ${factorItemHTML('breakout_30m','30m突破',factors.breakout_30m)}
+      ${factorItemHTML('relative_volume_30m','相对成交量',factors.relative_volume_30m)}
+      ${factorItemHTML('buy_pressure_5m','买压',factors.buy_pressure_5m)}
+      ${factorItemHTML('liquidity_stability_30m','流动性稳定',factors.liquidity_stability_30m)}
+    </div>
+  </div>`;
+}
+async function ensureStructure(token){
+  const key=String(token||'').toLowerCase();
+  if(structureRows.has(key))return;
+  try{
+    const result=await fetchJSON(`/api/structure?token=${encodeURIComponent(key)}`);
+    const item=(result.items||[])[0];
+    if(item)structureRows.set(key,item);
+    if(selectedToken===key)renderDetail();
+  }catch{}
 }
 const riskLabels={low_liquidity:'流动性偏低',liquidity_near_zero:'流动性极低',stale_pair:'池龄偏长',thin_m5_activity:'近期成交稀少',sell_pressure:'卖出笔数偏多',fdv_liquidity_stretched:'估值与流动性失衡',liquidity_withdrawal:'约20分钟内池子流动性下降≥25%',thin_downside_depth:'跌1%所需卖出额偏低',upside_depth_heavy:'涨1%所需买入额约为跌1%卖出额的3倍以上'};
 function marketRisks(raw){
@@ -265,9 +372,10 @@ function renderTokenList() {
     if(!searchTerm)return true;
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
-  });
+  }).filter(t=>stageMatches(structureOf(t.token_address)?.stage,stageFilter));
   document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币`;
   document.getElementById('listSummary').textContent = searchTerm ? `匹配 ${filtered.length} 个代币` : `显示前 ${Math.min(filtered.length,50)} 条`;
+  renderStageFilter();
 
   const html=filtered.slice(0,50).map(t=>{
       const score=t.indicator_score;
@@ -278,7 +386,7 @@ function renderTokenList() {
       const v2Badge=v2?`<span class="token-v2${v2RiskClass(v2.risk_status)}" data-tip="${escapeAttr(v2Tip)}" aria-label="${escapeAttr(v2Tip)}">${escapeAttr(v2StageLabels[v2.stage]||'未知')}</span>`:'';
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span>${structureLineHTML(t.token_address)}</span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');
@@ -324,7 +432,8 @@ function makeMarketChart(pool, markets) {
 function renderDetail() {
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
   if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale;
+  const structure=structureOf(t.token_address);
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'');
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -342,6 +451,7 @@ function renderDetail() {
       <div class="triage-item triage-risk${risks?.length===0?' clear':''}"><span class="triage-label">代币风险观察</span><strong class="triage-value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong><span class="triage-note">合并池子口径 · ${t.signal_at?'信号 '+timeAgo(t.signal_at):'信号时间未知'}</span></div>
       <div class="triage-item"><span class="triage-label">行情快照</span><strong class="triage-value">${timeAgo(t.observed_at)}</strong><span class="triage-note">主要池</span></div>
     </div>
+    ${structureCardHTML(t.token_address)}
     <div class="metric-grid">
       <div class="metric-card"><div class="label">参考价格</div><div class="value">${fmtPrice(t.price_usd)}</div><div class="note">5m ${fmtChange(t.price_change_m5)} · 1h ${fmtChange(t.price_change_h1)}</div></div>
       <div class="metric-card"><div class="label">池内资产估值</div><div class="value">${fmtMoney(t.liquidity_usd)}</div></div>
@@ -602,6 +712,12 @@ async function loadTrend(token) {
 }
 
 document.getElementById('search').addEventListener('input',e=>{searchTerm=e.target.value;renderTokenList();});
+document.getElementById('stageFilter').addEventListener('click',e=>{
+  const button=e.target.closest('button[data-stage]');
+  if(!button)return;
+  stageFilter=button.dataset.stage;
+  renderTokenList();
+});
 const tokenList=document.getElementById('tokenList'), scoreTooltip=document.getElementById('scoreTooltip');
 function showScoreTooltip(score){
   scoreTooltip.textContent=score.dataset.tip;
@@ -614,6 +730,9 @@ function hideScoreTooltip(){scoreTooltip.hidden=true;}
 tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
 tokenList.addEventListener('pointerover',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target)showScoreTooltip(target);});
 tokenList.addEventListener('pointerout',e=>{const target=e.target.closest('.score-tag, .token-v2');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
+const detailPanelElement=document.getElementById('detailPanel');
+detailPanelElement.addEventListener('pointerover',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target)showScoreTooltip(target);});
+detailPanelElement.addEventListener('pointerout',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
 tokenList.addEventListener('focusin',e=>{const score=e.target.closest('.token-btn')?.querySelector('.score-tag');if(score)showScoreTooltip(score);});
 tokenList.addEventListener('focusout',hideScoreTooltip);
 tokenList.addEventListener('scroll',hideScoreTooltip);
@@ -631,6 +750,7 @@ function showOverview(rows, cachedAt){
 }
 
 async function loadSelectedDetail(address){
+  ensureStructure(address);
   const cached=detailCache.get(address);
   if(cached?.rows){
     allData=cached.rows;
@@ -662,14 +782,17 @@ try{
   const cached=JSON.parse(localStorage.getItem(OVERVIEW_CACHE_KEY)||'null');
   if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
 }catch{}
+renderStageFilter();
 
 async function refresh(){
   try{
-    const [rows, signalV2] = await Promise.all([
+    const [rows, signalV2, structure] = await Promise.all([
       fetchJSON('/api/tokens'),
-      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]}))
+      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]})),
+      fetchJSON('/api/structure?limit=100').catch(()=>({items:[]}))
     ]);
     signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
+    structureRows = new Map((structure.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     showOverview(rows);
     try{localStorage.setItem(OVERVIEW_CACHE_KEY,JSON.stringify({at:Date.now(),rows}));}catch{}
   }catch(e){

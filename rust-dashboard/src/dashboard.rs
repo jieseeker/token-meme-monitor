@@ -160,6 +160,12 @@ struct SignalV2Params {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct StructureParams {
+    token: Option<String>,
+    limit: Option<usize>,
+}
+
 fn signal_v2_diagnostic(
     path: &str,
     params: SignalV2Params,
@@ -377,6 +383,7 @@ pub async fn serve(db_path: &str) {
         .route("/", get(index))
         .route("/api/overview", get(overview))
         .route("/api/tokens", get(tokens))
+        .route("/api/structure", get(structure))
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/signal-v2", get(signal_v2_diagnostics))
@@ -2176,6 +2183,63 @@ async fn tokens(
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=30"),
+    );
+    Ok(response)
+}
+
+async fn structure(
+    State(state): State<AppState>,
+    Query(params): Query<StructureParams>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let token = params
+        .token
+        .map(|token| token.to_ascii_lowercase())
+        .filter(|token| !token.is_empty());
+    if token.as_ref().is_some_and(|token| !valid_hex(token, 42)) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"无效代币地址"})),
+        ));
+    }
+    let path = state.db_path.as_ref().clone();
+    let selected_token = token.clone();
+    let token_rows =
+        tokio::task::spawn_blocking(move || -> std::result::Result<Vec<String>, String> {
+            if let Some(token) = selected_token {
+                return Ok(vec![token]);
+            }
+            let rows = crate::db::overview(&path, 5000).map_err(|e| e.to_string())?;
+            Ok(list_overview(rows)
+                .into_iter()
+                .filter_map(|row| row["token_address"].as_str().map(|token| token.to_string()))
+                .take(limit)
+                .collect::<Vec<_>>())
+        })
+        .await
+        .map_err(axum_error)?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":e.to_string()})),
+            )
+        })?;
+    let structure_path = state.db_path.as_ref().clone();
+    let items = tokio::task::spawn_blocking(move || {
+        crate::engine::factor_v1::structures(&structure_path, &token_rows, token_rows.len())
+    })
+    .await
+    .map_err(axum_error)?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+    })?;
+    let mut response = Json(serde_json::json!({"items":items})).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=15"),
     );
     Ok(response)
 }
