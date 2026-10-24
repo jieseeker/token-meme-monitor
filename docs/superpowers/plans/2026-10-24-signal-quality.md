@@ -31,11 +31,11 @@
 
 **Interfaces:** Keep `run(path,args,settings) -> Result<Value>` unchanged. Add direction counters/rate to `Outcome`, immutable per-event cohort keys to `Pending`, `b_filter_comparison` to JSON. Existing `structural_hits` contains exactly A/B/C. Record aggregate and UTC-date cohorts using event-time evidence only.
 
-- [ ] Write failing behavior tests through real SQLite replay: positive/negative/flat versus missing/censored denominator; original B remains one event; risk/missing volume gate; recent-volume positive and negative cases; crossed-volume conflicts unknown; 3/5/8% bucket boundaries; future suffix cannot change cohort classification; date groups use event UTC day and empty replay returns explicit zero cohorts.
-- [ ] Run `cargo test --locked --manifest-path rust-dashboard/Cargo.toml signal_v2_replay`; observe new assertions fail for missing behavior.
-- [ ] Implement cohort matching at trigger, share label accounting, expose methods/limits and update README. Use the spec's fixed 80%, 1/12 and3% values; do not search parameters.
-- [ ] Run focused tests, full Rust tests, existing Node detail and deployment-shell checks. Expected all pass; no new warnings or dependencies.
-- [ ] Commit only replay/tests/README and design/plan as appropriate.
+- [x] Write failing behavior tests through real SQLite replay: positive/negative/flat versus missing/censored denominator; original B remains one event; risk/missing volume gate; recent-volume positive and negative cases; crossed-volume conflicts unknown; 3/5/8% bucket boundaries; future suffix cannot change cohort classification; date groups use event UTC day and empty replay returns explicit zero cohorts.
+- [x] Run `cargo test --locked --manifest-path rust-dashboard/Cargo.toml signal_v2_replay`; observe new assertions fail for missing behavior.
+- [x] Implement cohort matching at trigger, share label accounting, expose methods/limits and update README. Use the spec's fixed 80%, 1/12 and3% values; do not search parameters.
+- [x] Run focused tests, full Rust tests, existing Node detail and deployment-shell checks. Expected all pass; no new warnings or dependencies.
+- [x] Commit only replay/tests/README and design/plan as appropriate.
 
 ### Task 2: Real-data validation, review and delivery
 
@@ -43,8 +43,8 @@
 
 **Interfaces:** Task1's JSON contains original stage counts plus `b_filter_comparison` and direction outcomes. Base release from `0811b22` provides independent original counts. Copies stay in this plan's ignored scratch.
 
-- [ ] Build locked release and run strict/proxy twice on consistent local and cloud copies; preserve source hashes/schema/counts, verify deterministic JSON and original triggers versus base. Record exact dataset range, cohort counts, endpoint missingness and chronological results. Expected reproducible results; insufficiency is a finding, not an invented successful strategy test.
-- [ ] Fresh whole-branch review with plan/spec and Review Focus. Fix Important/Critical findings in one RED→GREEN pass and rerun full suite; ledger deferred minors and rulings.
-- [ ] Verify clean diff/no secrets/build/DB files, fast-forward main, push and verify remote SHA. Existing full delivery authorization applies.
-- [ ] Deploy exact source through existing Git-pull path without synchronizing unrelated local credentials/proxy settings. Retain rollback binary, verify old APIs/active service/shadow mode and source/binary identity; observe short post-release health because runtime logic is unchanged.
-- [ ] Record result and limitations, retain original runtime thresholds unless valid evidence supports promotion. Commit/push final report and clean only this plan's scratch/copies.
+- [x] Build locked release and run strict/proxy twice on consistent local and cloud copies; preserve source hashes/schema/counts, verify deterministic JSON and original triggers versus base. Record exact dataset range, cohort counts, endpoint missingness and chronological results. Expected reproducible results; insufficiency is a finding, not an invented successful strategy test.
+- [x] Fresh whole-branch review with plan/spec and Review Focus. Fix Important/Critical findings in one RED→GREEN pass and rerun full suite; ledger deferred minors and rulings.
+- [x] Verify clean diff/no secrets/build/DB files, fast-forward main, push and verify remote SHA. Existing full delivery authorization applies.
+- [x] Deploy exact source through existing Git-pull path without synchronizing unrelated local credentials/proxy settings. Retain rollback binary, verify old APIs/active service/shadow mode and source/binary identity; observe short post-release health because runtime logic is unchanged.
+- [x] Record result and limitations, retain original runtime thresholds unless valid evidence supports promotion. Commit/push final report and clean only this plan's scratch/copies.
