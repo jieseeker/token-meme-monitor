@@ -52,10 +52,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-v2.warn { border-color:rgba(180,83,9,.24); background:rgba(180,83,9,.08); color:var(--risk); }
 .token-v2.block { border-color:rgba(239,68,68,.24); background:rgba(239,68,68,.08); color:var(--danger); }
 .token-v2.hold { border-color:var(--line); background:rgba(107,114,128,.08); color:var(--muted); }
-.structure-line { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 8px; align-items:baseline; margin-top:4px; font-size:12px; color:var(--muted); }
 .structure-stage { color:var(--text); font-weight:650; }
-.structure-data { justify-self:end; color:var(--subtle); }
-.structure-factors { grid-column:1/-1; min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:12px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
@@ -282,18 +279,6 @@ function factorProgress(value,kind){
   if(kind==='relative_volume_30m'||kind==='liquidity_stability_30m')return Math.max(0,Math.min(100,value/3*100));
   return Math.max(0,Math.min(100,(value+0.10)/0.20*100));
 }
-function structureLineHTML(token){
-  const structure=structureOf(token);
-  if(!structure)return '<span class="structure-line">结构数据加载中</span>';
-  if(!structure.available)return `<span class="structure-line"><span class="structure-stage">${escapeAttr(structure.stage_label||'未知')}</span><span class="structure-data">${escapeAttr(structure.data_status_label||'数据状态未知')}</span><span class="structure-factors">${escapeAttr(structure.reason||'暂无结构数据')}</span></span>`;
-  const factors=structure.factors||{};
-  const summary=[
-    factors.momentum_5m?.display?`5m ${factors.momentum_5m.display}`:null,
-    factors.relative_volume_30m?.display?`放量 ${factors.relative_volume_30m.display}`:null,
-    factors.buy_pressure_5m?.display?`买压 ${factors.buy_pressure_5m.display}`:null
-  ].filter(Boolean).join(' · ');
-  return `<span class="structure-line"><span class="structure-stage">${escapeAttr(structure.stage_label||'未知')}</span><span class="structure-data">${escapeAttr(structure.data_status_label||'数据状态未知')}</span><span class="structure-factors">${escapeAttr(summary||'--')}</span></span>`;
-}
 function factorItemHTML(key,label,factor){
   if(!factor)return `<div class="factor-item"><div class="factor-label"><span>${label}</span><span>--</span></div><div class="factor-value neutral">--</div><div class="factor-bar"><span class="neutral" style="width:0"></span></div></div>`;
   const cls=factorClass(factor.status);
@@ -406,8 +391,9 @@ function renderTokenList() {
       const v2Tip=v2TipText(v2);
       const v2Badge=v2?`<span class="token-v2${v2RiskClass(v2.risk_status)}" data-tip="${escapeAttr(v2Tip)}" aria-label="${escapeAttr(v2Tip)}">${escapeAttr(v2StageLabels[v2.stage]||'未知')}</span>`:'';
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
+      const stage=structureOf(t.token_address)?.stage_label;
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span>${structureLineHTML(t.token_address)}</span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${stage?`${escapeAttr(stage)} · `:''}快照 ${timeAgo(t.observed_at)}${v2Badge?` · ${v2Badge}`:''}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');

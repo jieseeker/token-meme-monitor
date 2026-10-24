@@ -73,6 +73,7 @@ setImmediate(async () => {
   const list = document.getElementById('tokenList').innerHTML;
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);
   assert.ok(!list.includes('ZERO'));
+  assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
   assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币');
   assert.ok(document.getElementById('refreshInfo').textContent.startsWith('行情快照最早 '));
   assert.ok(JSON.parse(storage.get('tmm-tokens-v1')).rows.length>1, 'network result replaces the cached list');
