@@ -49,7 +49,7 @@ pub fn short_cycle_priority_tokens(path: &str) -> Result<Vec<String>, rusqlite::
              ORDER BY observed_at DESC LIMIT 1
          )
          WHERE p.active = 1 AND s.score > 0
-           AND datetime(s.observed_at) >= datetime('now', '-10 minutes')
+           AND datetime(s.observed_at) >= datetime('now', '-5 minutes')
            AND (s.reasons LIKE '%\"m5_buy_dominance\"%'
                 OR s.reasons LIKE '%\"m5_volume_impulse\"%')
          GROUP BY p.token_address ORDER BY MIN(s.observed_at) LIMIT 20",
@@ -581,8 +581,8 @@ pub fn futures_symbol(path: &str, pair: &str) -> Result<Option<String>, rusqlite
         let base = base.to_ascii_uppercase();
         (count == 1
             && !base.is_empty()
-            && base.len() <= 15
-            && base.bytes().all(|b| b.is_ascii_alphanumeric()))
+            && base.chars().count() <= 15
+            && base.chars().all(|c| c.is_alphanumeric()))
         .then(|| format!("{base}USDT"))
     }))
 }
@@ -647,7 +647,7 @@ pub fn overview(path: &str, limit: usize) -> Result<Vec<Value>, rusqlite::Error>
         LEFT JOIN signal_predictions pred ON pred.signal_id = s.id
         WHERE p.active = 1
             AND snap.observed_at IS NOT NULL
-            AND datetime(snap.observed_at) > datetime('now', '-10 minutes')
+            AND datetime(snap.observed_at) > datetime('now', '-5 minutes')
         ORDER BY
             COALESCE(pred.short_momentum_score, pred.opportunity_score, 0) DESC,
             COALESCE(s.score, 0) DESC,
@@ -770,6 +770,30 @@ mod pool_tests {
             Some("TACUSDT")
         );
         assert_eq!(super::futures_symbol(path, "retired").unwrap(), None);
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn futures_symbol_accepts_non_ascii_symbol() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-futures-symbol-unicode-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let path = path.to_str().unwrap();
+        super::init_schema(path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.execute(
+            "INSERT INTO pairs(pair_address,chain_id,token_address,token_symbol,quote_token_address,quote_symbol,token0_address,token1_address,pair_created_at,discovered_at,updated_at,active)
+             VALUES ('pair','bsc','token','哈基米','q','Q','token','q',datetime('now'),datetime('now'),datetime('now'),1)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            super::futures_symbol(path, "pair").unwrap().as_deref(),
+            Some("哈基米USDT")
+        );
         drop(conn);
         std::fs::remove_file(path).unwrap();
     }
@@ -1019,7 +1043,7 @@ mod pool_tests {
     }
 
     #[test]
-    fn overview_excludes_snapshots_older_than_ten_minutes() {
+    fn overview_excludes_snapshots_older_than_five_minutes() {
         let path = std::env::temp_dir().join(format!(
             "tmm-fresh-{}-{}.db",
             std::process::id(),
@@ -1032,7 +1056,7 @@ mod pool_tests {
         super::init_schema(path).unwrap();
         let conn = rusqlite::Connection::open(path).unwrap();
         conn.execute("INSERT INTO pairs(pair_address,chain_id,token_address,quote_token_address,quote_symbol,token0_address,token1_address,pair_created_at,discovered_at,updated_at) VALUES('pair','bsc','token','','','','','','','')", []).unwrap();
-        let old = (chrono::Utc::now() - chrono::Duration::minutes(11)).to_rfc3339();
+        let old = (chrono::Utc::now() - chrono::Duration::minutes(6)).to_rfc3339();
         conn.execute("INSERT INTO snapshots(pair_address,token_address,observed_at) VALUES('pair','token',?1)", [&old]).unwrap();
         drop(conn);
         assert!(super::overview(path, 10).unwrap().is_empty());
@@ -1088,6 +1112,39 @@ mod pool_tests {
             assert_eq!(active, expected, "{pair}");
         }
         drop(conn);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn overview_excludes_retired_alpha_tokens() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-retired-overview-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = path.to_str().unwrap();
+        super::init_schema(path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        for pair in ["retired", "live"] {
+            conn.execute(
+                "INSERT INTO pairs(pair_address,chain_id,token_address,quote_token_address,quote_symbol,token0_address,token1_address,pair_created_at,discovered_at,updated_at) VALUES(?1,'bsc',?2,'','','','','','','')",
+                rusqlite::params![pair, pair],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO snapshots(pair_address,token_address,observed_at) VALUES(?1,?2,?3)",
+                rusqlite::params![pair, pair, chrono::Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        super::retire_missing_alpha_tokens(path, &["live".into()]).unwrap();
+        let rows = super::overview(path, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["token_address"], "live");
         std::fs::remove_file(path).unwrap();
     }
 }

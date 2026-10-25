@@ -8,6 +8,7 @@ use crate::clients::dexscreener::DexScreenerClient;
 use crate::config::{Config, SignalV2Mode};
 use crate::db;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub async fn run_worker(db_path: &str) {
@@ -63,25 +64,42 @@ pub async fn run_worker(db_path: &str) {
                 + Duration::from_secs(config.binance_alpha_refresh_minutes.max(1) * 60);
             match alpha.fetch_bsc_tokens().await {
                 Ok(tokens) if !tokens.is_empty() => {
-                    let active: Vec<String> =
-                        tokens.iter().map(|token| token.address.clone()).collect();
-                    let retired = match db::retire_missing_alpha_tokens(db_path, &active) {
-                        Ok(retired) => retired,
-                        Err(error) => {
+                    if let Some(symbols) = binance_futures_symbols().await {
+                        let listed = futures_listed_tokens(tokens, &symbols);
+                        if !listed.is_empty() {
+                            let active: Vec<String> =
+                                listed.iter().map(|token| token.address.clone()).collect();
+                            let retired = match db::retire_missing_alpha_tokens(db_path, &active) {
+                                Ok(retired) => retired,
+                                Err(error) => {
+                                    crate::logging::event(
+                                        "error",
+                                        "alpha_retire_failed",
+                                        serde_json::json!({"error":error.to_string()}),
+                                    );
+                                    0
+                                }
+                            };
                             crate::logging::event(
-                                "error",
-                                "alpha_retire_failed",
-                                serde_json::json!({"error":error.to_string()}),
+                                "info",
+                                "alpha_refreshed",
+                                serde_json::json!({"tokens":listed.len(),"retired_pools":retired}),
                             );
-                            0
+                            alpha_cache = Some(listed);
+                        } else {
+                            crate::logging::event(
+                                "warn",
+                                "binance_futures_alpha_empty",
+                                serde_json::json!({"fallback":"previous_alpha_list"}),
+                            );
                         }
-                    };
-                    crate::logging::event(
-                        "info",
-                        "alpha_refreshed",
-                        serde_json::json!({"tokens":tokens.len(),"retired_pools":retired}),
-                    );
-                    alpha_cache = Some(tokens);
+                    } else {
+                        crate::logging::event(
+                            "warn",
+                            "binance_futures_catalog_failed",
+                            serde_json::json!({"fallback":"previous_alpha_list"}),
+                        );
+                    }
                 }
                 Ok(_) => crate::logging::event(
                     "warn",
@@ -131,6 +149,26 @@ pub async fn run_worker(db_path: &str) {
     }
 }
 
+async fn binance_futures_symbols() -> Option<HashSet<String>> {
+    let body = reqwest::get("https://fapi.binance.com/fapi/v1/exchangeInfo")
+        .await
+        .ok()?
+        .json::<Value>()
+        .await
+        .ok()?;
+    crate::dashboard::parse_trading_futures_symbols(&body)
+}
+
+fn futures_listed_tokens(
+    tokens: Vec<crate::clients::binance_alpha::AlphaToken>,
+    symbols: &HashSet<String>,
+) -> Vec<crate::clients::binance_alpha::AlphaToken> {
+    tokens
+        .into_iter()
+        .filter(|token| symbols.contains(&format!("{}USDT", token.symbol.to_uppercase())))
+        .collect()
+}
+
 async fn run_cycle(
     db_path: &str,
     config: &Config,
@@ -157,7 +195,7 @@ async fn run_cycle(
     let mut dex_elapsed_ms = 0;
     let mut dex_max_ms = 0;
     let mut last_scanned = None;
-    let ttl = Duration::from_secs(300);
+    let ttl = Duration::from_secs(180);
     successes.retain(|_, at| at.elapsed() < ttl);
     let mut priority = Vec::new();
     for address in short_priority.iter().chain(&visible) {
@@ -420,11 +458,11 @@ fn dex_retry_delay(attempt: u8) -> Duration {
 
 fn market_refresh_age(address: &str, short: &[String], hot: &[String], visible: &[String]) -> u64 {
     if short.iter().any(|token| token == address) || hot.iter().any(|token| token == address) {
-        30
+        20
     } else if visible.iter().any(|token| token == address) {
-        60
+        30
     } else {
-        180
+        90
     }
 }
 
@@ -997,13 +1035,35 @@ mod tests {
     fn displayed_tokens_after_the_first_fifty_keep_five_minute_priority() {
         let visible: Vec<String> = (0..51).map(|i| format!("token{i}")).collect();
         let hot = visible[..50].to_vec();
-        assert_eq!(market_refresh_age("token0", &[], &hot, &visible), 30);
-        assert_eq!(market_refresh_age("token50", &[], &hot, &visible), 60);
-        assert_eq!(market_refresh_age("hidden", &[], &hot, &visible), 180);
+        assert_eq!(market_refresh_age("token0", &[], &hot, &visible), 20);
+        assert_eq!(market_refresh_age("token50", &[], &hot, &visible), 30);
+        assert_eq!(market_refresh_age("hidden", &[], &hot, &visible), 90);
         assert_eq!(
             market_refresh_age("hidden", &["hidden".into()], &hot, &visible),
-            30
+            20
         );
+    }
+
+    #[test]
+    fn futures_listed_tokens_filters_by_usdt_symbol() {
+        let tokens = vec![
+            crate::clients::binance_alpha::AlphaToken {
+                address: "listed".into(),
+                symbol: "ip".into(),
+                name: "Listed".into(),
+                raw: serde_json::Value::Null,
+            },
+            crate::clients::binance_alpha::AlphaToken {
+                address: "unlisted".into(),
+                symbol: "no-fut".into(),
+                name: "Unlisted".into(),
+                raw: serde_json::Value::Null,
+            },
+        ];
+        let symbols = std::collections::HashSet::from(["IPUSDT".to_string()]);
+        let filtered = super::futures_listed_tokens(tokens, &symbols);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].address, "listed");
     }
 
     #[test]

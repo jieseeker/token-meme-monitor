@@ -124,7 +124,8 @@ impl GeckoPacer {
 }
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
-const DEPTH_TTL: std::time::Duration = std::time::Duration::from_secs(240);
+const FAVICON_SVG: &str = include_str!("../static/favicon.svg");
+const DEPTH_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 
 #[derive(Clone)]
 struct AppState {
@@ -381,6 +382,7 @@ pub async fn serve(db_path: &str) {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/favicon.svg", get(favicon))
         .route("/api/overview", get(overview))
         .route("/api/tokens", get(tokens))
         .route("/api/structure", get(structure))
@@ -492,7 +494,7 @@ async fn cache_due(cache: &ResultCache, key: &str, ttl: std::time::Duration) -> 
 }
 
 fn whale_ttl(priority: bool) -> std::time::Duration {
-    std::time::Duration::from_secs(if priority { 240 } else { 300 })
+    std::time::Duration::from_secs(if priority { 120 } else { 180 })
 }
 
 fn whale_high_limit(limit: usize, has_secondary: bool, priority_due: usize) -> usize {
@@ -811,7 +813,7 @@ async fn warm_oi(state: AppState) {
                 let selected = pairs.len();
                 let mut refreshed = 0;
                 for pair in pairs {
-                    if !cache_due(&state.oi_cache, &pair, std::time::Duration::from_secs(300)).await
+                    if !cache_due(&state.oi_cache, &pair, std::time::Duration::from_secs(60)).await
                     {
                         continue;
                     }
@@ -878,7 +880,7 @@ async fn warm_depth(state: AppState) {
                     &cold,
                     &mut next_cold,
                     2,
-                    std::time::Duration::from_secs(900),
+                    std::time::Duration::from_secs(300),
                 )
                 .await;
                 let cold_selected = cold_due.len();
@@ -1118,6 +1120,16 @@ async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
+async fn favicon() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/svg+xml"),
+        )],
+        FAVICON_SVG,
+    )
+}
+
 fn oi_from_history(body: &serde_json::Value, symbol: &str) -> Option<serde_json::Value> {
     let mut rows: Vec<(i64, f64, f64)> = body
         .as_array()?
@@ -1154,7 +1166,7 @@ fn oi_from_history(body: &serde_json::Value, symbol: &str) -> Option<serde_json:
     }))
 }
 
-fn parse_trading_futures_symbols(body: &serde_json::Value) -> Option<HashSet<String>> {
+pub(crate) fn parse_trading_futures_symbols(body: &serde_json::Value) -> Option<HashSet<String>> {
     let rows = body["symbols"].as_array()?;
     if rows.is_empty() {
         return None;
@@ -1175,7 +1187,7 @@ async fn futures_symbol_trading(state: &AppState, symbol: &str) -> Option<bool> 
     // One catalog lookup covers all pairs; on lookup failure, let existing endpoint checks decide.
     let mut cache = state.futures_catalog.lock().await;
     let due = cache.as_ref().is_none_or(|(at, symbols)| {
-        at.elapsed() >= std::time::Duration::from_secs(if symbols.is_some() { 300 } else { 60 })
+        at.elapsed() >= std::time::Duration::from_secs(if symbols.is_some() { 60 } else { 30 })
     });
     if due {
         let result = async {
@@ -1305,7 +1317,7 @@ async fn global_oi_for(
     // ponytail: one lock serializes the shared fetch; a refresh failure keeps the last snapshot for 60 seconds.
     let mut cache = state.global_oi.lock().await;
     if cache.as_ref().map_or(true, |(at, _)| {
-        at.elapsed() >= std::time::Duration::from_secs(300)
+        at.elapsed() >= std::time::Duration::from_secs(60)
     }) {
         let response = match client
             .get("https://api.coingecko.com/api/v3/derivatives")
@@ -2011,7 +2023,7 @@ mod oi_tests {
     #[test]
     fn priority_whales_are_due_before_the_five_minute_display_deadline() {
         let entry = super::CacheEntry {
-            checked_at: std::time::Instant::now() - std::time::Duration::from_secs(270),
+            checked_at: std::time::Instant::now() - std::time::Duration::from_secs(150),
             value: Some(serde_json::json!({"available":true})),
             loading: false,
             failures: 0,
@@ -2552,7 +2564,7 @@ async fn token_oi(
         ));
     }
     let (value, start) =
-        cached_or_pending(&state.oi_cache, &pair, std::time::Duration::from_secs(300)).await;
+        cached_or_pending(&state.oi_cache, &pair, std::time::Duration::from_secs(60)).await;
     if start {
         tokio::spawn(async move {
             let result = fetch_oi(State(state.clone()), Path(pair.clone())).await;
@@ -2732,7 +2744,7 @@ async fn token_prices(
     let (value, start) = cached_or_pending(
         &state.price_cache,
         &pair,
-        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(30),
     )
     .await;
     if start {
@@ -3099,7 +3111,7 @@ async fn token_transfers(
     let (value, start) = cached_or_pending(
         &state.transfer_cache,
         &pair,
-        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(120),
     )
     .await;
     if start {

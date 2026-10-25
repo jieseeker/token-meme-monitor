@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b5f59">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>Alpha 雷达</title>
 <style>
 :root {
@@ -17,6 +19,8 @@
 body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Segoe UI',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
 
 .top-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 28px; border-bottom:1px solid var(--line); }
+.brand-lockup { display:flex; align-items:center; gap:12px; }
+.brand-mark { flex:none; width:38px; height:38px; }
 .toolbar-title { font-size:22px; font-weight:850; letter-spacing:-.3px; }
 .toolbar-subtitle { margin-top:3px; font-size:12px; color:var(--muted); }
 .top-right { display:flex; align-items:center; gap:14px; white-space:nowrap; }
@@ -30,13 +34,21 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 /* ============ LEFT: Token List ============ */
 .list-panel { display:flex; flex-direction:column; gap:12px; position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); padding:16px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
 .section-title { font-size:20px; font-weight:750; letter-spacing:-.2px; }
+.filter-row { display:flex; align-items:flex-start; gap:8px; }
 .search-input { width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
 .search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
+.watchlist-toggle { flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); cursor:pointer; }
+.watchlist-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
+.stage-filter-details { position:relative; flex:0 0 auto; }
+.filter-toggle { display:flex; align-items:center; justify-content:center; min-width:68px; min-height:38px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--muted); font-size:13px; font-weight:650; cursor:pointer; padding:0 12px; list-style:none; }
+.filter-toggle::-webkit-details-marker { display:none; }
+.filter-toggle:hover,.filter-toggle:focus-visible { border-color:var(--line-strong); color:var(--accent-strong); }
+.stage-filter-details[open] > .filter-toggle { border-color:var(--accent); color:var(--accent-strong); background:var(--accent-soft); }
 .list-summary { font-size:12px; color:var(--subtle); }
-.stage-filter { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
-.stage-filter button { min-height:30px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted); font-size:12px; cursor:pointer; padding:3px 2px; }
-.stage-filter button:hover,.stage-filter button:focus-visible { border-color:var(--line-strong); color:var(--accent-strong); }
-.stage-filter button.active { background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
+.stage-filter { position:absolute; right:0; top:calc(100% + 8px); z-index:30; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; width:230px; padding:8px; border:1px solid var(--line); border-radius:10px; background:var(--panel); box-shadow:0 12px 28px rgba(17,24,39,.16); }
+.stage-option { display:flex; align-items:center; gap:6px; min-height:30px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--muted); font-size:12px; cursor:pointer; padding:5px 8px; }
+.stage-option input { accent-color:var(--accent); }
+.stage-option.checked { border-color:var(--accent); color:var(--accent-strong); background:var(--accent-soft); }
 .list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
 @media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
 .token-btn { display:flex; flex-shrink:0; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
@@ -63,21 +75,28 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .detail-section.oi-empty { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 16px; padding:12px 20px; }
 .oi-empty .section-header { margin-bottom:0; }
 .oi-empty .section-copy { display:none; }
-.section-header { display:flex; align-items:baseline; gap:12px; margin-bottom:12px; }
+.section-header { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px 12px; margin-bottom:12px; }
 .section-heading { font-size:16px; font-weight:750; }
+.section-address { min-width:0; flex:0 1 auto; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .detail-section:first-child .section-heading { font-size:20px; }
-.section-copy { font-size:13px; color:var(--muted); margin-left:auto; }
-.identity { font-size:12px; color:var(--muted); overflow-wrap:anywhere; margin:-6px 0 12px; }
-.triage-strip { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(170px,1.6fr) minmax(115px,.8fr); border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-bottom:14px; }
-.triage-item { min-width:0; padding:12px 14px; border-right:1px solid var(--line); }
-.triage-item:first-child { padding-left:0; }
-.triage-item:last-child { border-right:0; padding-right:0; }
-.triage-label { display:block; color:var(--muted); font-size:12px; font-weight:650; }
-.triage-value { display:block; margin-top:3px; font-size:17px; font-weight:750; line-height:1.25; overflow-wrap:anywhere; }
-.triage-score .triage-value { color:var(--accent); font-size:24px; font-variant-numeric:tabular-nums; }
-.triage-risk .triage-value { color:var(--risk); }
-.triage-risk.clear .triage-value { color:var(--accent-strong); }
-.triage-note { display:block; margin-top:4px; color:var(--muted); font-size:12px; }
+.section-meta { display:flex; align-items:baseline; justify-content:flex-end; gap:10px; margin-left:auto; min-width:0; }
+.section-copy { font-size:13px; color:var(--muted); text-align:right; }
+.section-time { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.section-header > .section-time { margin-left:auto; }
+.watch-button { flex:none; padding:4px 9px; border:1px solid var(--line); border-radius:999px; background:var(--panel); font-size:12px; color:var(--muted); cursor:pointer; }
+.watch-button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
+.transfer-header { margin-bottom:8px; }
+.overview-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px 16px; }
+.trade-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin:-2px 0 14px; padding:10px 12px; border:1px solid var(--line-strong); border-radius:12px; background:var(--accent-soft); font-size:12px; color:var(--text); }
+.trade-summary strong { font-weight:800; }
+.trade-summary span { color:var(--muted); }
+.trade-summary span b { color:var(--text); font-weight:700; }
+.overview-item { min-width:0; }
+.overview-item .label { display:block; color:var(--muted); font-size:12px; font-weight:650; }
+.overview-item .value { display:block; margin-top:3px; font-size:18px; font-weight:750; line-height:1.25; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.overview-item .note { display:block; margin-top:4px; color:var(--muted); font-size:12px; }
+.overview-item.risk .value { color:var(--risk); }
+.overview-item.risk.clear .value { color:var(--accent-strong); }
 .structure-card { display:grid; gap:12px; margin:-8px 0 16px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:rgba(15,118,110,.025); }
 .structure-section .structure-card { margin:0; padding:0; border:0; background:transparent; }
 .structure-section .section-header { margin-bottom:10px; }
@@ -110,10 +129,9 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .detail-panel summary { cursor:pointer; }
 
 /* Metric cards */
-.metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); padding:0 0 12px; margin-bottom:12px; border-bottom:1px solid var(--line); }
 .metric-card { min-width:0; padding:0 14px; border-right:1px solid var(--line); }
-.metric-grid .metric-card:first-child,.oi-main .metric-card:first-child { padding-left:0; }
-.metric-grid .metric-card:last-child,.oi-main .metric-card:last-child { border-right:0; }
+.oi-main .metric-card:first-child { padding-left:0; }
+.oi-main .metric-card:last-child { border-right:0; }
 .metric-card .label { font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
 .metric-card .value { font-size:20px; font-weight:800; margin-top:4px; letter-spacing:-.3px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
 .metric-card .note { font-size:12px; color:#64748b; margin-top:4px; }
@@ -124,8 +142,9 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .oi-meta { display:flex; flex-wrap:wrap; gap:10px 28px; padding-top:10px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
 .oi-meta b { display:block; margin-top:3px; font-size:15px; color:var(--text); }
 .oi-footnote { margin-top:10px; }
-@media(max-width:700px){ .metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:14px; } .metric-grid .metric-card:nth-child(2) { border-right:0; } .metric-grid .metric-card:nth-child(3) { padding-left:0; } }
-@media(max-width:600px){ .oi-main { grid-template-columns:1fr; row-gap:12px; } .oi-main .metric-card { padding-left:0; border-right:0; } .main { padding:16px 14px 32px; } .detail-section { padding:14px; } .triage-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } .triage-risk { grid-column:1/-1; grid-row:2; padding:10px 0; border-top:1px solid var(--line); border-right:0; } .triage-item:nth-child(3) { border-right:0; } }
+@media(max-width:1100px){ .overview-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:700px){ .overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px){ .oi-main { grid-template-columns:1fr; row-gap:12px; } .oi-main .metric-card { padding-left:0; border-right:0; } .main { padding:16px 14px 32px; } .detail-section { padding:14px; } .overview-grid { grid-template-columns:1fr; } }
 
 
 /* Charts */
@@ -166,9 +185,18 @@ svg.chart.price-chart { height:104px; }
 <body>
 
 <div class="top-bar">
-  <div>
-    <div class="toolbar-title">Alpha 雷达</div>
-    <div class="toolbar-subtitle">BSC 代币 · 池子深度 · 合约持仓 · 链上动向</div>
+  <div class="brand-lockup">
+    <svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-label="Alpha 雷达标识">
+      <rect width="64" height="64" rx="15" fill="#0b5f59"/>
+      <path d="M15 39a17 17 0 0 1 34 0" fill="none" stroke="#a7d8d0" stroke-width="4" stroke-linecap="round" opacity=".72"/>
+      <path d="M22 46 34 18 46 46" fill="none" stroke="#fffefa" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M27 37h14" stroke="#fffefa" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="49" cy="19" r="5" fill="#d97706"/>
+    </svg>
+    <div>
+      <div class="toolbar-title">Alpha 雷达</div>
+      <div class="toolbar-subtitle">BSC 代币 · 池子深度 · 合约持仓 · 链上动向</div>
+    </div>
   </div>
   <div class="top-right">
     <div class="token-count" id="tokenCount">统计中...</div>
@@ -179,9 +207,14 @@ svg.chart.price-chart { height:104px; }
 <div class="main">
   <div class="list-panel">
     <div class="section-title">代币列表</div>
-    <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
-    <div class="stage-filter" id="stageFilter"></div>
-    <div class="list-summary" id="listSummary">正在获取最新名单</div>
+    <div class="filter-row">
+      <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
+      <details class="stage-filter-details">
+        <summary class="filter-toggle" id="filterToggle">筛选</summary>
+        <div class="stage-filter" id="stageFilter"></div>
+      </details>
+      <button class="watchlist-toggle" id="watchlistToggle" type="button">只看自选</button>
+    </div>
     <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
   </div>
   <div class="detail-panel" id="detailPanel">
@@ -193,13 +226,16 @@ svg.chart.price-chart { height:104px; }
 <script>
 const REFRESH_MS = 15000;
 const OVERVIEW_CACHE_KEY = 'tmm-tokens-v1';
+const WATCHLIST_KEY = 'tmm-watchlist-v1';
+const WATCHLIST_ONLY_KEY = 'tmm-watchlist-only-v1';
 let allData = [];
 let tokenData = [];
 let selectedDetail = null;
 let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
-let stageFilter = 'all';
+let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KEY));
+let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
 let structureRows = new Map();
 let structureRefreshPromise = null;
@@ -208,14 +244,36 @@ const depthCache = new Map();
 const whaleCache = new Map();
 const transferCache = new Map();
 const detailCache = new Map();
+const whaleFlowCache = new Map();
+
+function saveWatchlist() {
+  localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watchlist]));
+}
+
+function toggleWatchlist(token) {
+  const key = String(token || '').toLowerCase();
+  if (!key) return;
+  const active = watchlist.has(key);
+  if (active) watchlist.delete(key);
+  else watchlist.add(key);
+  saveWatchlist();
+  const button = document.getElementById('watchButton');
+  if (button) {
+    button.classList.toggle('active', !active);
+    button.textContent = active ? '☆ 自选' : '★ 已自选';
+    button.setAttribute('aria-pressed', String(!active));
+  }
+  renderTokenList();
+}
 
 function fmtMoney(v) {
   if (v==null||isNaN(v)) return '--';
   const a=Math.abs(v);
-  if(a>=1e9)return '$'+(v/1e9).toFixed(1)+'B';
-  if(a>=1e6)return '$'+(v/1e6).toFixed(1)+'M';
-  if(a>=1e3)return '$'+(v/1e3).toFixed(1)+'K';
-  return '$'+v.toFixed(0);
+  const sign=v<0?'-':'';
+  if(a>=1e9)return sign+'$'+(a/1e9).toFixed(1)+'B';
+  if(a>=1e6)return sign+'$'+(a/1e6).toFixed(1)+'M';
+  if(a>=1e3)return sign+'$'+(a/1e3).toFixed(1)+'K';
+  return sign+'$'+a.toFixed(0);
 }
 function fmtPrice(v) {
   if(v==null||isNaN(v))return'--';
@@ -224,9 +282,19 @@ function fmtPrice(v) {
   return'$'+new Intl.NumberFormat('en-US',{useGrouping:false,maximumSignificantDigits:4,notation:'standard'}).format(v);
 }
 function fmtOiPct(v){if(v==null||isNaN(v))return'--';return`${v>0?'+':''}${v.toFixed(1)}%`;}
+function fmtTurnover(v){return v==null||isNaN(v)||!isFinite(v)?'--':`${(v*100).toFixed(1)}%`;}
+function fmtUsd(v){
+  if(v==null||isNaN(v)||!isFinite(v))return'--';
+  const a=Math.abs(v),sign=v<0?'-':'';
+  if(a>=1000)return fmtMoney(v);
+  if(a>=1)return sign+'$'+a.toFixed(2);
+  return sign+'$'+new Intl.NumberFormat('en-US',{useGrouping:false,maximumSignificantDigits:4}).format(a);
+}
 function timeAgo(iso){const at=Date.parse(iso);if(!Number.isFinite(at))return'时间未知';if(at>Date.now()+60000)return'时间异常';const s=Math.max(0,(Date.now()-at)/1000);if(s<60)return Math.floor(s)+'秒前';if(s<3600)return Math.floor(s/60)+'分钟前';if(s<86400)return Math.floor(s/3600)+'小时前';return Math.floor(s/86400)+'天前';}
 function updatedAt(iso){return Number.isFinite(Date.parse(iso))?`更新于 ${timeAgo(iso)}`:'更新时间未知';}
 function poolUpdatedAt(items){const times=items.map(x=>Date.parse(x.calculated_at));return times.some(x=>!Number.isFinite(x))?'部分池子更新时间未知':updatedAt(new Date(Math.min(...times)).toISOString());}
+function setSectionTime(id,iso,loading='更新时间未知'){const element=document.getElementById(id);if(element)element.textContent=Number.isFinite(Date.parse(iso))?updatedAt(iso):loading;}
+function latestTime(items,field='calculated_at'){const times=items.map(item=>Date.parse(item?.[field])).filter(Number.isFinite);return times.length?new Date(Math.max(...times)).toISOString():null;}
 
 async function fetchJSON(url){const r=await fetch(url);if(!r.ok)throw new Error(r.statusText);return r.json();}
 async function fetchReady(url){
@@ -247,7 +315,7 @@ function scoreTags(raw){
   catch { return '暂无命中标签'; }
 }
 const stageFilterOptions=[
-  {key:'all',label:'全部'},
+  {key:'inactive',label:'未启动'},
   {key:'watch',label:'观察'},
   {key:'first_wave',label:'第一波'},
   {key:'pullback',label:'回调'},
@@ -255,20 +323,23 @@ const stageFilterOptions=[
   {key:'first_start',label:'首次启动'},
   {key:'second_start',label:'二次启动'}
 ];
+let stageFilter = new Set(stageFilterOptions.map(option=>option.key));
 function renderStageFilter(){
-  document.getElementById('stageFilter').innerHTML=stageFilterOptions.map(option=>`<button type="button" data-stage="${option.key}" class="${stageFilter===option.key?'active':''}">${option.label}</button>`).join('');
+  document.getElementById('stageFilter').innerHTML=stageFilterOptions.map(option=>`<label class="stage-option ${stageFilter.has(option.key)?'checked':''}"><input type="checkbox" data-stage="${option.key}" ${stageFilter.has(option.key)?'checked':''}><span>${option.label}</span></label>`).join('');
+  const toggle=document.getElementById('filterToggle');
+  toggle.textContent=stageFilter.size===stageFilterOptions.length?'筛选':`筛选 ${stageFilter.size}`;
 }
 function stageMatches(stage,filter){
-  if(filter==='all')return true;
-  if(filter==='first_start')return String(stage||'').startsWith('first_start');
-  if(filter==='second_start')return String(stage||'').startsWith('second_start');
-  return stage===filter;
+  if(filter.size===stageFilterOptions.length)return true;
+  const value=String(stage||'');
+  return [...filter].some(key=>key==='first_start'||key==='second_start'?value.startsWith(key):value===key);
 }
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
 function structureState(structure){
   if(!structure)return {label:'结构加载中',note:'等待结构数据'};
   if(!structure.available)return {label:structure.stage_label||'未知',note:structure.reason||'暂无结构数据'};
   const stage=String(structure.stage||'');
+  if(stage==='inactive')return {label:'未启动',note:'等待突破候选'};
   if(stage.startsWith('second_start'))return {label:'C 已启动',note:'二次启动已确认'};
   if(stage.startsWith('first_start'))return {label:'B 已启动',note:'等待回调或二次启动'};
   if(stage==='first_wave')return {label:'C 首波',note:'等待回调'};
@@ -279,6 +350,18 @@ function structureState(structure){
   if(structure.b_at!=null)return {label:'B 已启动',note:'等待回调或二次启动'};
   if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待量能确认'};
   return {label:structure.stage_label||'未知',note:'结构观察'};
+}
+function structureGuidance(structure){
+  if(!structure?.available)return {trigger:'等待结构数据',invalidation:'数据不足'};
+  const stage=String(structure.stage||'');
+  if(stage==='inactive')return {trigger:'30m 突破候选',invalidation:'数据断档'};
+  if(stage==='watch')return {trigger:'30m 突破 + 量能确认',invalidation:'突破失败或量能不足'};
+  if(stage.startsWith('first_start'))return {trigger:'首次启动确认',invalidation:'回撤超过 8%'};
+  if(stage==='first_wave')return {trigger:'二次突破',invalidation:'跌破首波低点'};
+  if(stage==='pullback')return {trigger:'回调企稳',invalidation:'跌破支撑'};
+  if(stage==='base')return {trigger:'二次突破',invalidation:'跌破箱体下沿'};
+  if(stage.startsWith('second_start'))return {trigger:'二次启动确认',invalidation:'跌破启动点'};
+  return {trigger:'结构确认',invalidation:'数据不足'};
 }
 function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
 function factorProgress(value,kind){
@@ -296,7 +379,7 @@ function structureCardHTML(token){
   const structure=structureOf(token);
   if(!structure)return '<div class="hint">结构数据加载中...</div>';
   const state=structureState(structure);
-  if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div></div></div>`;
+  if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div></div></div>`;
   const factors=structure.factors||{};
   const activeIndex=(structure.timeline||[]).findIndex(x=>x.active);
   const timeline=(structure.timeline||[]).map((x,index)=>`<span class="${x.active?'active':index<activeIndex?'done':''}" title="${escapeAttr(x.label)}${x.active?'（当前阶段）':''}"></span>`).join('');
@@ -304,7 +387,6 @@ function structureCardHTML(token){
     <div class="structure-head">
       <div>
         <div class="structure-stage">${escapeAttr(state.label)} · ${escapeAttr(state.note)}</div>
-        <div class="structure-meta">${escapeAttr(structure.data_status_label||'数据状态未知')} · ${escapeAttr(structure.risk_status_label||'风险未知')} · ${structure.updated_at?new Date(structure.updated_at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'更新时间未知'}</div>
         <div class="structure-conclusion">${escapeAttr(structure.conclusion||'结构观察')}</div>
       </div>
       <div class="timeline" role="img" aria-label="结构阶段路径：${escapeAttr(structure.stage_label||'未知')}">${timeline}</div>
@@ -383,11 +465,11 @@ function renderTokenList() {
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
   }).filter(t=>stageMatches(structureOf(t.token_address)?.stage,stageFilter));
-  document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币`;
-  document.getElementById('listSummary').textContent = searchTerm ? `匹配 ${filtered.length} 个代币` : `显示前 ${Math.min(filtered.length,50)} 条`;
+  const visible = watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered;
+  document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币 · 自选 ${watchlist.size}`;
   renderStageFilter();
 
-  const html=filtered.slice(0,50).map(t=>{
+  const html=visible.map(t=>{
       const score=t.indicator_score;
       const cls=score>=60?'tag-high':score>=40?'tag-mid':'tag-low';
       const sel=t.token_address===selectedToken?' selected':'';
@@ -447,39 +529,59 @@ function renderDetail() {
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
+  const previousTimes=sameToken?['oiTime','trendTime','depthTime','whaleTime','transferTime'].map(id=>document.getElementById(id)?.textContent):[];
   const oiExpanded=document.querySelector('#oiBody details')?.open;
   const risks=marketRisks(t.signal_risk_flags);
+  const structureTime=structure?.updated_at?new Date(structure.updated_at*1000).toISOString():null;
+  const state=structureState(structure);
+  const guidance=structureGuidance(structure);
+  const turnover=t.liquidity_usd>0?t.volume_h1/t.liquidity_usd:null;
+  const whaleFlow=whaleFlowCache.get(String(t.token_address||'').toLowerCase());
   document.getElementById('detailPanel').innerHTML=`
   <div class="detail-section">
     <div class="section-header">
       <span class="section-heading">${escapeAttr(t.token_symbol)}</span>
-      <span class="section-copy">已收录 ${t.pools.length} 个池子</span>
+      <span class="section-address">${escapeAttr(t.token_address||'--')}</span>
+      <div class="section-meta">
+        <button class="watch-button${watchlist.has(String(t.token_address||'').toLowerCase())?' active':''}" id="watchButton" type="button" aria-pressed="${watchlist.has(String(t.token_address||'').toLowerCase())}">${watchlist.has(String(t.token_address||'').toLowerCase())?'★ 已自选':'☆ 自选'}</button>
+        <span class="section-copy">已收录 <b>${t.pools.length}</b> 个池子</span>
+        <span class="section-time">${updatedAt(t.observed_at)}</span>
+      </div>
     </div>
-    <div class="identity">合约 ${escapeAttr(t.token_address||'--')}</div>
-    <div class="triage-strip">
-      <div class="triage-item triage-score"><span class="triage-label">活跃度分</span><strong class="triage-value">${t.indicator_score}</strong><span class="triage-note">${t.short_signal_stale?'短周期信号过期，保守估算':'按现有规则排序'}</span></div>
-      <div class="triage-item triage-risk${risks?.length===0?' clear':''}"><span class="triage-label">代币风险观察</span><strong class="triage-value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong><span class="triage-note">合并池子口径 · ${t.signal_at?'信号 '+timeAgo(t.signal_at):'信号时间未知'}</span></div>
-      <div class="triage-item"><span class="triage-label">行情快照</span><strong class="triage-value">${timeAgo(t.observed_at)}</strong><span class="triage-note">主要池</span></div>
+    <div class="trade-summary">
+      <strong>${escapeAttr(state.label)}</strong>
+      <span>建议：<b>${escapeAttr(state.note)}</b></span>
+      <span>触发：<b>${escapeAttr(guidance.trigger)}</b></span>
+      <span>失效：<b>${escapeAttr(guidance.invalidation)}</b></span>
+      <span>1h 换手：<b>${fmtTurnover(turnover)}</b></span>
+      <span>数据：<b>${escapeAttr(timeAgo(t.observed_at))}</b></span>
     </div>
-    <div class="metric-grid">
-      <div class="metric-card"><div class="label">参考价格</div><div class="value">${fmtPrice(t.price_usd)}</div><div class="note">5m ${fmtChange(t.price_change_m5)} · 1h ${fmtChange(t.price_change_h1)}</div></div>
-      <div class="metric-card"><div class="label">池内资产估值</div><div class="value">${fmtMoney(t.liquidity_usd)}</div></div>
-      <div class="metric-card"><div class="label">1h 成交额</div><div class="value">${fmtMoney(t.volume_h1)}</div><div class="note">5m ${fmtMoney(t.volume_m5)}</div></div>
-      <div class="metric-card"><div class="label">1h 买 / 卖笔数</div><div class="value">${t.buys_h1??'--'} / ${t.sells_h1??'--'}</div></div>
+    <div class="overview-grid">
+      <div class="overview-item"><span class="label">参考价格</span><strong class="value">${fmtPrice(t.price_usd)}</strong></div>
+      <div class="overview-item"><span class="label">5m 涨跌</span><strong class="value">${fmtChange(t.price_change_m5)}</strong></div>
+      <div class="overview-item"><span class="label">1h 涨跌</span><strong class="value">${fmtChange(t.price_change_h1)}</strong></div>
+      <div class="overview-item"><span class="label">24h 涨跌</span><strong class="value">${fmtChange(t.price_change_h24)}</strong></div>
+      <div class="overview-item"><span class="label">市值</span><strong class="value">${fmtMoney(t.market_cap)}</strong></div>
+      <div class="overview-item risk${risks?.length===0?' clear':''}"><span class="label">代币风险观察</span><strong class="value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong></div>
+      <div class="overview-item"><span class="label">1h 大额净流入</span><strong class="value" id="whaleFlowValue">${whaleFlow?`${whaleFlow.netUsd>0?'+':''}${fmtMoney(whaleFlow.netUsd)}`:'--'}</strong></div>
+      <div class="overview-item"><span class="label">池内资产估值</span><strong class="value">${fmtMoney(t.liquidity_usd)}</strong></div>
+      <div class="overview-item"><span class="label">5m 成交额</span><strong class="value">${fmtMoney(t.volume_m5)}</strong></div>
+      <div class="overview-item"><span class="label">1h 成交额</span><strong class="value">${fmtMoney(t.volume_h1)}</strong></div>
     </div>
-    <div class="secondary-metrics"><span>24h 涨跌 <b>${fmtChange(t.price_change_h24)}</b></span><span>市值 <b>${fmtMoney(t.market_cap)}</b></span></div>
-    <div class="hint" style="margin-top:10px">未接入卖出限制、税率与持仓集中度校验；以上行情数据不代表代币安全。</div>
   </div>
 
   <div class="context-grid">
     <div class="detail-section structure-section">
-      <div class="section-header"><span class="section-heading">结构阶段</span><span class="section-copy">趋势与成交</span></div>
+      <div class="section-header">
+        <span class="section-heading">结构阶段</span>
+        <div class="section-meta"><span class="section-copy">趋势与成交</span><span class="section-time" id="structureTime">${updatedAt(structureTime)}</span></div>
+      </div>
       ${structureCardHTML(t.token_address)}
     </div>
     <div class="detail-section" id="oiSection">
       <div class="section-header">
         <span class="section-heading">合约持仓 · OI</span>
-        <span class="section-copy">合约市场</span>
+        <div class="section-meta"><span class="section-copy">合约市场</span><span class="section-time" id="oiTime">${previousTimes[0]||'更新中…'}</span></div>
       </div>
       <div id="oiBody">${previous[1]||'<div class="hint">后台获取 OI 数据...</div>'}</div>
     </div>
@@ -488,7 +590,7 @@ function renderDetail() {
   <div class="detail-section" id="trendSection">
     <div class="section-header">
       <span class="section-heading">市场价格对比</span>
-      <span class="section-copy">最近快照</span>
+      <div class="section-meta"><span class="section-copy">最近快照</span><span class="section-time" id="trendTime">${previousTimes[1]||'更新中…'}</span></div>
     </div>
     <div id="trendBody">${previous[2]||'<div class="hint">加载走势数据...</div>'}</div>
   </div>
@@ -496,7 +598,7 @@ function renderDetail() {
   <div class="detail-section">
     <div class="section-header">
       <span class="section-heading">价格区间深度</span>
-      <span class="section-copy">估算</span>
+      <div class="section-meta"><span class="section-copy">估算</span><span class="section-time" id="depthTime">${previousTimes[2]||'更新中…'}</span></div>
     </div>
     <div id="depthBody">${previous[0]||'<div class="hint">后台计算池子深度...</div>'}</div>
   </div>
@@ -504,15 +606,24 @@ function renderDetail() {
   <div class="detail-section">
     <div class="section-header">
       <span class="section-heading">链上大额动向</span>
-      <span class="section-copy">单笔 &gt; $10K</span>
+      <div class="section-meta"><span class="section-copy">单笔 &gt; $10K</span><span class="section-time" id="whaleTime">${previousTimes[3]||'更新中…'}</span></div>
     </div>
     <div id="whaleBody">${previous[3]||'<div class="hint">后台获取大额交易...</div>'}</div>
-    <div class="transfer-panel" id="transferBody">${previous[4]||'<div class="hint">后台获取大额转账...</div>'}</div>
+    <div class="transfer-panel">
+      <div class="section-header transfer-header">
+        <span class="section-heading">大额转账</span>
+        <div class="section-meta"><span class="section-copy">单笔 &gt; 100 万 ${escapeAttr(t.token_symbol)}</span><span class="section-time" id="transferTime">${previousTimes[4]||'更新中…'}</span></div>
+      </div>
+      <div id="transferBody">${previous[4]||'<div class="hint">后台获取大额转账...</div>'}</div>
+    </div>
   </div>
 
   `;
 
+  setSectionTime('structureTime',structureTime);
   renderedKey=key;
+  const watchButton=document.getElementById('watchButton');
+  if(watchButton)watchButton.addEventListener('click',()=>toggleWatchlist(t.token_address));
   loadTrend(t);
   loadOI(t.pair_address, t.price_change_h1, oiExpanded);
   loadDepth(t);
@@ -525,7 +636,7 @@ async function loadTransfers(token) {
   let cached=transferCache.get(pair);
   if(!cached||Date.now()>=cached.expires){
     cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/transfers`).catch(e=>({available:false,reason:e.message})).then(value=>{
-      cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+      cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+120000:Date.now()+60000;
       return value;
     })};
     transferCache.set(pair,cached);
@@ -533,7 +644,8 @@ async function loadTransfers(token) {
   const result=await cached.promise;
   if(selectedToken!==token.token_address)return;
   const body=document.getElementById('transferBody');
-  if(!result.available){body.textContent=`大额转账暂不可用：${result.reason||'数据源请求失败'}`;return;}
+  setSectionTime('transferTime',result.calculated_at);
+  if(!result.available){body.innerHTML=`<div class="hint">大额转账暂不可用：${result.reason||'数据源请求失败'}</div>`;return;}
   const poolAddresses=new Set(token.pools.map(p=>p.pair_address.toLowerCase()));
   const transfers=(result.transfers||[]).filter(x=>!poolAddresses.has(x.from.toLowerCase())&&!poolAddresses.has(x.to.toLowerCase()));
   if(!transfers.length){
@@ -544,8 +656,8 @@ async function loadTransfers(token) {
   const short=address=>`${address.slice(0,6)}…${address.slice(-4)}`;
   const wasOpen=body.querySelector?.('details')?.open;
   body.innerHTML=`<div class="secondary-metrics"><span>大额转账 <b>${transfers.length} 笔</b></span><span>单笔 &gt; 100 万 ${escapeAttr(token.token_symbol)}</span></div>
-    <details><summary>查看 A → B 转账</summary>${transfers.slice(0,8).map(x=>`<div class="whale-row transfer-row"><b>${Number(x.amount).toLocaleString('en-US',{maximumFractionDigits:2})}</b><span>${short(x.from)} → ${short(x.to)}</span><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">交易</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
-    <div class="hint" style="margin-top:8px">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；最近 ${result.sample_count||0} 笔链上转账中仅显示近 24 小时记录；可能包含合约地址，高频代币可能遗漏更早记录。</div>`;
+    <details><summary>查看 A → B 转账</summary>${transfers.slice(0,8).map(x=>`<div class="whale-row transfer-row"><b>${Number(x.amount).toLocaleString('en-US',{maximumFractionDigits:2})}</b><span>≈ ${fmtUsd(Number(x.amount)*token.price_usd)}</span><span>${short(x.from)} → ${short(x.to)}</span><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">交易</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
+    <div class="hint" style="margin-top:8px">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；最近 ${result.sample_count||0} 笔链上转账中仅显示近 24 小时记录；美元价值按当前价格估算；可能包含合约地址，高频代币可能遗漏更早记录。</div>`;
   if(wasOpen)body.querySelector('details').open=true;
 }
 
@@ -559,11 +671,16 @@ async function loadWhales(token) {
     const available=results.filter(x=>x?.available);
     const totalLiquidity=token.pools.reduce((sum,pool)=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
     const coveredLiquidity=token.pools.reduce((sum,pool,i)=>sum+(results[i]?.available?Math.max(0,Number(pool.liquidity_usd)||0):0),0);
+    const liquidityCoverage=totalLiquidity>0?coveredLiquidity/totalLiquidity:0;
     const coverage=totalLiquidity>0?`覆盖流动性 ${Math.round(coveredLiquidity/totalLiquidity*100)}%`:'覆盖流动性未知';
+    setSectionTime('whaleTime',latestTime(available),pending?'更新中…':'更新时间未知');
     if(!available.length){
-      body.textContent=pending?`已查询 ${done}/${token.pools.length} 个池子 · ${coverage} · 其余获取中...`
+      whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:null});
+      const flowValue=document.getElementById('whaleFlowValue');
+      if(flowValue)flowValue.textContent='--';
+      body.innerHTML=`<div class="hint">${pending?`已查询 ${done}/${token.pools.length} 个池子 · ${coverage} · 其余获取中...`
         :results.some(x=>String(x.reason||'').includes('限流'))?'交易数据源限流，稍后自动重试'
-        :'大额交易数据暂不可用，稍后自动重试';
+        :'大额交易数据暂不可用，稍后自动重试'}</div>`;
       return;
     }
     const old=available.some(x=>{const at=Date.parse(x.calculated_at);return !Number.isFinite(at)||Date.now()-at>300000;});
@@ -575,17 +692,23 @@ async function loadWhales(token) {
       if(!previous||trade.usd>previous.usd)byHash.set(trade.hash,trade);
     }
     const trades=[...byHash.values()].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
-    const buys=trades.filter(x=>x.side==='buy'),sells=trades.filter(x=>x.side==='sell');
+    const recentTrades=trades.filter(x=>Date.now()-Date.parse(x.at)<=3600000);
+    const buys=recentTrades.filter(x=>x.side==='buy'),sells=recentTrades.filter(x=>x.side==='sell');
     const sum=rows=>rows.reduce((n,x)=>n+x.usd,0);
-    if(!trades.length){
-      body.innerHTML=`<div class="activity-empty">${note}已查询的池子近 24 小时未查到单笔超过 $10K 的买卖</div>
+    const netUsd=sum(buys)-sum(sells);
+    const flowReady=!pending&&available.length>0&&(totalLiquidity===0?available.length===token.pools.length:liquidityCoverage>=.95);
+    whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:flowReady?netUsd:null,buyUsd:flowReady?sum(buys):null,sellUsd:flowReady?sum(sells):null,at:latestTime(available)});
+    const flowValue=document.getElementById('whaleFlowValue');
+    if(flowValue)flowValue.textContent=flowReady?`${netUsd>0?'+':''}${fmtMoney(netUsd)}`:`-- · ${available.length}/${token.pools.length}池`;
+    if(!recentTrades.length){
+      body.innerHTML=`<div class="activity-empty">${note}已查询的池子近 1 小时未查到单笔超过 $10K 的买卖</div>
         <details class="data-note"><summary>交易样本与统计口径</summary><div class="hint">各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div></details>`;
       return;
     }
     const wasOpen=body.querySelector?.('details')?.open;
-    body.innerHTML=`<div class="secondary-metrics"><span class="trade-buy">买入 <b>${buys.length} 笔 · ${fmtMoney(sum(buys))}</b></span><span class="trade-sell">卖出 <b>${sells.length} 笔 · ${fmtMoney(sum(sells))}</b></span></div>
+    body.innerHTML=`<div class="secondary-metrics"><span class="trade-buy">近1小时买入 <b>${buys.length} 笔 · ${fmtMoney(sum(buys))}</b></span><span class="trade-sell">近1小时卖出 <b>${sells.length} 笔 · ${fmtMoney(sum(sells))}</b></span></div>
       <details><summary>最近大额交易</summary>${trades.slice(0,8).map(x=>`<div class="whale-row"><span class="trade-${x.side}">${x.side==='buy'?'买入':'卖出'}</span><b class="trade-${x.side}">${fmtMoney(x.usd)}</b><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">${x.wallet.slice(0,6)}…${x.wallet.slice(-4)}</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
-      <div class="hint" style="margin-top:8px">${note}近 24 小时各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div>`;
+      <div class="hint" style="margin-top:8px">${note}近 1 小时汇总；下方列表为近 24 小时样本。同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div>`;
     if(wasOpen)body.querySelector('details').open=true;
   };
   await Promise.all(token.pools.map(async (pool,i)=>{
@@ -593,8 +716,8 @@ async function loadWhales(token) {
     const pair=pool.pair_address;
     let cached=whaleCache.get(pair);
     if(!cached||Date.now()>=cached.expires){
-      cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/whales`).catch(e=>({available:false,reason:e.message})).then(value=>{
-        cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+    cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/whales`).catch(e=>({available:false,reason:e.message})).then(value=>{
+      cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+120000:Date.now()+60000;
         return value;
       })};
       whaleCache.set(pair,cached);
@@ -632,7 +755,8 @@ async function loadDepth(token) {
   const body=document.getElementById('depthBody');
   const done=results.filter(Boolean).length, pending=done<pools.length;
   const available=results.filter(x=>x?.depth.available);
-  if(!available.length){body.textContent=!pools.length?'暂无有价格及流动性的池子':pending?`已查询 ${done}/${pools.length} 个池子，其余获取中...`:'区间深度暂不可用：池子报价失败';return;}
+  setSectionTime('depthTime',latestTime(available.map(x=>x.depth)),pending?'更新中…':'更新时间未知');
+  if(!available.length){body.innerHTML=`<div class="hint">${!pools.length?'暂无有价格及流动性的池子':pending?`已查询 ${done}/${pools.length} 个池子，其余获取中...`:'区间深度暂不可用：池子报价失败'}</div>`;return;}
   const recent=available.filter(({depth})=>{const age=Date.now()-Date.parse(depth.calculated_at);return !depth.stale&&Number.isFinite(age)&&age>=0&&age<=300000;});
   const recentLiquidity=recent.reduce((sum,{pool})=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
   const freshCoverage=totalLiquidity>0?`近5分钟覆盖流动性 ${Math.round(recentLiquidity/totalLiquidity*100)}%`:'近5分钟覆盖流动性未知';
@@ -654,7 +778,7 @@ async function loadDepth(token) {
     let cached=depthCache.get(pair);
     if(!cached||Date.now()>=cached.expires){
       cached={expires:Date.now()+60000,promise:fetchReady(`/api/token/${pair}/depth`).catch(e=>({available:false,reason:e.message})).then(value=>{
-        cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+300000:Date.now()+60000;
+        cached.expires=value.available?(Date.parse(value.calculated_at)||Date.now())+120000:Date.now()+60000;
         return value;
       })};
       depthCache.set(pair,cached);
@@ -666,7 +790,7 @@ async function loadDepth(token) {
 
 async function loadOI(pair, priceChangeH1, expanded) {
   let cached=oiCache.get(pair);
-  if(!cached||Date.now()-cached.at>300000){
+  if(!cached||Date.now()-cached.at>60000){
     cached={at:Date.now(),promise:fetchReady(`/api/token/${pair}/oi`).catch(e=>({available:false,reason:e.message}))};
     oiCache.set(pair,cached);
   }
@@ -676,8 +800,9 @@ async function loadOI(pair, priceChangeH1, expanded) {
   const global=oi.global;
   document.getElementById('oiSection').className=!oi.available&&!global?'detail-section oi-empty':'detail-section';
   const globalHtml=global?`<div><span>多交易所 OI</span><b>${fmtMoney(global.oi_usd)}</b></div>`:'';
+  setSectionTime('oiTime',oi.calculated_at);
   if(!oi.available){
-    body.innerHTML=global?`<div class="oi-meta">${globalHtml}</div>`:'';
+    body.innerHTML=`${global?`<div class="oi-meta">${globalHtml}</div>`:''}`;
     const note=document.createElement('div');note.className='hint';note.textContent=`Binance OI：${oi.reason||'暂不可用'}`;body.append(note);
     if(global){const caveat=document.createElement('div');caveat.className='hint';caveat.textContent='仅统计已收录且近期成交的永续合约；同名符号不保证是同一资产。';body.append(caveat);}
     return;
@@ -686,8 +811,7 @@ async function loadOI(pair, priceChangeH1, expanded) {
   const state=delta==null||!priceChangeH1||!delta?'方向未定':
     priceChangeH1>0?(delta>0?'价涨 / OI 增':'价涨 / OI 减'):
     (delta>0?'价跌 / OI 增':'价跌 / OI 减');
-  body.innerHTML=`
-    <div class="oi-main">
+  body.innerHTML=`<div class="oi-main">
       <div class="metric-card"><div class="label">1小时 OI 变化</div><div class="value">${fmtOiPct(oi.change_1h_pct)}</div></div>
       <div class="metric-card"><div class="label">价格 × OI</div><div class="value">${state}</div></div>
     </div>
@@ -714,6 +838,7 @@ async function loadTrend(token) {
         volume:samples.reduce((n,s)=>n+(s.volume_h1||0),0)};
     });
     const show=markets=>{if(selectedToken===token.token_address&&renderedKey===key){
+      setSectionTime('trendTime',merged.at(-1)?.at?new Date(merged.at(-1).at).toISOString():null);
       document.getElementById('trendBody').innerHTML=`<div class="chart-card">${makeMarketChart(merged,markets)}
         <div class="volume-mini"><h4>1 小时成交额走势 · ${fmtMoney(merged.at(-1)?.volume)}</h4>${makeChart(merged.map(x=>({v:x.volume})),'#64748b')}</div></div>
         <div class="hint" style="margin-top:8px">池子按流动性加权；合约来自 Binance 同名 USDT 市场，按符号和价格近似匹配，仍可能误配。各池快照时间略有偏差。</div>`;
@@ -722,15 +847,26 @@ async function loadTrend(token) {
     show(await fetchReady(`/api/token/${token.pools[0].pair_address}/prices`).catch(()=>({})));
   }catch(e){
     if(selectedToken!==token.token_address||renderedKey!==key)return;
+    setSectionTime('trendTime',null);
     document.getElementById('trendBody').innerHTML=`<div class="hint">走势加载失败: ${e.message}</div>`;
   }
 }
 
 document.getElementById('search').addEventListener('input',e=>{searchTerm=e.target.value;renderTokenList();});
-document.getElementById('stageFilter').addEventListener('click',e=>{
-  const button=e.target.closest('button[data-stage]');
-  if(!button)return;
-  stageFilter=button.dataset.stage;
+const watchlistToggle=document.getElementById('watchlistToggle');
+function syncWatchlistToggle(){
+  watchlistToggle.classList.toggle('active',watchlistOnly);
+  watchlistToggle.textContent=watchlistOnly?'只看自选 · 开':'只看自选';
+  watchlistToggle.setAttribute('aria-pressed',String(watchlistOnly));
+}
+syncWatchlistToggle();
+watchlistToggle.addEventListener('click',()=>{watchlistOnly=!watchlistOnly;syncWatchlistToggle();renderTokenList();});
+watchlistToggle.addEventListener('click',()=>localStorage.setItem(WATCHLIST_ONLY_KEY,watchlistOnly?'1':'0'));
+document.getElementById('stageFilter').addEventListener('change',e=>{
+  const input=e.target.closest('input[data-stage]');
+  if(!input)return;
+  if(input.checked)stageFilter.add(input.dataset.stage);
+  else stageFilter.delete(input.dataset.stage);
   renderTokenList();
 });
 const tokenList=document.getElementById('tokenList'), scoreTooltip=document.getElementById('scoreTooltip');
@@ -822,7 +958,6 @@ async function refresh(){
   }catch(e){
     document.getElementById('refreshInfo').textContent=`更新失败: ${e.message}`;
     if(!tokenData.length){
-      document.getElementById('listSummary').textContent='数据暂时不可用';
       document.getElementById('tokenList').innerHTML='<div class="empty-state">加载失败，稍后自动重试</div>';
     }
   }

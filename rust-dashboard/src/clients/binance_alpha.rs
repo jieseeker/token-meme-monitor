@@ -56,7 +56,6 @@ fn parse_bsc_tokens(body: &Value) -> Result<Vec<AlphaToken>, &'static str> {
         .iter()
         .filter(|item| item.get("chainId").and_then(|c| c.as_str()) == Some("56"))
         .filter(|item| item["offline"] != true && item["fullyDelisted"] != true)
-        .filter(|item| item.get("binanceFuturesListed").and_then(|v| v.as_bool()) == Some(true))
         .filter_map(|item| {
             let address = item
                 .get("contractAddress")
@@ -98,7 +97,7 @@ mod tests {
             {"chainId":"56","contractAddress":"0x1111111111111111111111111111111111111111","symbol":"LIVE","offline":false,"binanceFuturesListed":true},
             {"chainId":"56","contractAddress":"0x2222222222222222222222222222222222222222","symbol":"OWL","offline":true,"binanceFuturesListed":true},
             {"chainId":"56","contractAddress":"0x3333333333333333333333333333333333333333","symbol":"OLD","fullyDelisted":true,"binanceFuturesListed":true},
-            {"chainId":"56","contractAddress":"0x5555555555555555555555555555555555555555","symbol":"NOFUT","offline":false,"binanceFuturesListed":false},
+            {"chainId":"56","contractAddress":"0x5555555555555555555555555555555555555555","symbol":"NOFUT","offline":false},
             {"chainId":"1","contractAddress":"0x4444444444444444444444444444444444444444","symbol":"ETH"}
         ]});
         let symbols: Vec<_> = super::parse_bsc_tokens(&body)
@@ -106,6 +105,6 @@ mod tests {
             .into_iter()
             .map(|token| token.symbol)
             .collect();
-        assert_eq!(symbols, ["LIVE"]);
+        assert_eq!(symbols, ["LIVE", "NOFUT"]);
     }
 }

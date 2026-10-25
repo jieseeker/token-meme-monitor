@@ -53,7 +53,7 @@ impl Config {
             worker_loop_seconds: env::var("WORKER_LOOP_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(15),
+                .unwrap_or(10),
             max_pairs_per_cycle: env::var("MAX_PAIRS_PER_CYCLE")
                 .ok()
                 .and_then(|v| v.parse().ok())

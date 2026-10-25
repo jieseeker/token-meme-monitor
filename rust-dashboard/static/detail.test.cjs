@@ -8,7 +8,7 @@ const nodes = new Map();
 const document = {
   querySelector() { return null; },
   getElementById(id) {
-    if (!nodes.has(id)) nodes.set(id, { innerHTML: '', textContent: '', addEventListener() {}, append() {} });
+    if (!nodes.has(id)) nodes.set(id, { innerHTML: '', textContent: '', addEventListener() {}, append() {}, setAttribute() {}, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } } });
     return nodes.get(id);
   },
   createElement() { return { textContent: '', className: '' }; },
@@ -17,13 +17,17 @@ const row = {
   pair_address: '0xpair', token_address: '0xtoken', token_symbol: 'TEST', quote_symbol: 'USDT',
   observed_at: new Date().toISOString(), price_usd: 0.000000012345, price_change_m5: 2,
   price_change_h1: -3, price_change_h24: 8, liquidity_usd: 100000,
-  volume_m5: 1200, volume_h1: 15000, buys_h1: 14, sells_h1: 7,
+  volume_m5: 1200, volume_h1: 15000, buys_h1: 14, sells_h1: 7, market_cap: 12300000,
   signal_score: 65, signal_reasons:'["healthy_liquidity_band","h1_volume_support"]', signal_risk_flags:'["sell_pressure"]', signal_at:new Date().toISOString(), risk_6h_dd30: null, dex_id: 'pancakeswap',
 };
 let depthAt = new Date().toISOString();
 let structureGate = null;
 const calls=[];
-const storage = new Map([['tmm-tokens-v1', JSON.stringify({at:Date.now()-60000,rows:[{token_address:'0xtoken',token_symbol:'CACHED',token_name:'Cached',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:new Date(Date.now()-120000).toISOString()}]})]]);
+const storage = new Map([
+  ['tmm-watchlist-v1', JSON.stringify(['0xtoken'])],
+  ['tmm-watchlist-only-v1','true'],
+  ['tmm-tokens-v1', JSON.stringify({at:Date.now()-60000,rows:[{token_address:'0xtoken',token_symbol:'CACHED',token_name:'Cached',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:new Date(Date.now()-120000).toISOString()}]})]
+]);
 const localStorage = {getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)};
 const fetch = async url => { calls.push(url);
   const at=Date.parse(row.observed_at);
@@ -35,14 +39,17 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
-    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],b_crossed_at:1792753000,b_at:null,c_at:null}
+    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null}
   ]})};}
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
   if(url.endsWith('/prices')) return {ok:true,json:async()=>({symbol:'TESTUSDT',spot:[{at:at-100000,price:row.price_usd*.99},{at:at-40000,price:row.price_usd}],futures:[{at:at-100000,price:row.price_usd*1.01},{at:at-40000,price:row.price_usd*1.02}]})};
+  if(url.endsWith('/oi')) return {ok:true,json:async()=>({available:true,symbol:'TESTUSDT',timestamp:Date.now(),calculated_at:new Date().toISOString(),oi_usd:12000,change_1h_pct:2.5,change_24h_pct:6,history:[{oi_usd:10000},{oi_usd:12000}],global:{oi_usd:30000,market_count:2},long_short:{ratio:1.3,timestamp:Date.now()}})};
   return { ok: true, json: async () => url.startsWith('/api/overview') ? [row, {...row, pair_address:'0xmid', liquidity_usd:50000, volume_h1:5000, signal_score:45, dex_id:'uniswap'}, {...row, token_address:'0xother', pair_address:'0xlow', token_symbol:'OTHER', signal_score:20}, {...row, token_address:'0xzero', pair_address:'0xzero-pair', token_symbol:'ZERO', signal_score:0, signal_reasons:'[]'}] : url.endsWith('/oi') ? { available:true, symbol:'TESTUSDT', timestamp:Date.now(), oi_usd:12000, change_1h_pct:2.5, change_24h_pct:6, history:[{oi_usd:10000},{oi_usd:12000}], global:{oi_usd:30000,market_count:2}, long_short:{ratio:1.3,timestamp:Date.now()} } : url.endsWith('/depth') ? { available:true, calculated_at:depthAt, dex:url.includes('0xmid')?'uniswap':'pancakeswap', type:'v3', block:'0x10', bands_pct:[1,2,5], support_usd:url.includes('0xmid')?[50,100,250]:[100,200,500], pressure_usd:url.includes('0xmid')?[60,120,300]:[120,240,600] } : url.endsWith('/whales') ? {available:true,calculated_at:new Date().toISOString(),trades:url.includes('0xmid')?[{side:'sell',usd:18000,at:new Date().toISOString(),hash:'0xabc',wallet:'0xdef'},{side:'buy',usd:11000,at:new Date().toISOString(),hash:'0xghi',wallet:'0xjkl'}]:[{side:'sell',usd:12000,at:new Date().toISOString(),hash:'0xabc',wallet:'0xdef'}]} : url.endsWith('/transfers') ? {available:true,calculated_at:new Date().toISOString(),sample_count:100,transfers:[{amount:1500000,from:'0xaaaabbbb',to:'0xccccdddd',hash:'0xtransfer',at:new Date().toISOString()},{amount:2000000,from:'0xpair',to:'0xccccdddd',hash:'0xpool',at:new Date().toISOString()}]} : [] }; };
 const context=vm.createContext({ document, fetch, localStorage, window:{addEventListener() {}}, setInterval() {}, Date, Map, console });
 vm.runInContext(script, context);
+assert.equal(vm.runInContext('watchlistOnly',context),true,'legacy boolean watchlist-only state must survive a reload');
+vm.runInContext('watchlistOnly=false; watchlist.clear()',context);
 assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 'recent list cache should render before the network response');
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
@@ -53,6 +60,7 @@ setImmediate(async () => {
   assert.ok(v2Tip.includes('V2阶段：企稳') && v2Tip.includes('数据状态：预热中') && v2Tip.includes('结果：跌破支撑'), 'V2 stages and data states should use Chinese copy');
   assert.ok(!v2Tip.includes('B时间') && !v2Tip.includes('C时间'), 'V2 tooltip should not expose B/C jargon');
   const stateCases=[
+  [{available:true,stage:'inactive',b_crossed_at:null,b_at:null,c_at:null},'未启动'],
     [{available:true,stage:'watch',b_crossed_at:1,b_at:null,c_at:null},'B 候选'],
     [{available:true,stage:'watch',b_crossed_at:null,b_at:null,c_at:null},'A 观察'],
     [{available:true,stage:'first_start',b_crossed_at:1,b_at:2,c_at:null},'B 已启动'],
@@ -64,30 +72,61 @@ setImmediate(async () => {
   for(const [input,expected] of stateCases){
     assert.equal(vm.runInContext(`structureState(${JSON.stringify(input)}).label`,context),expected,`structure state should map ${input.stage} to ${expected}`);
   }
+  assert.equal(vm.runInContext('fmtTurnover(null)',context),'--');
+  assert.equal(vm.runInContext('fmtTurnover(0.1333)',context),'13.3%');
+  assert.equal(vm.runInContext('fmtUsd(1500)',context),'$1.5K');
+  assert.equal(vm.runInContext('fmtUsd(0.0185175)',context),'$0.01852');
+  assert.equal(vm.runInContext("structureGuidance({available:true,stage:'watch'}).trigger",context),'30m 突破 + 量能确认');
+assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
+assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));
+assert.ok(vm.runInContext(`stageMatches('first_start_extended', new Set(['first_start']))`,context));
+assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === stageFilterOptions.length`,context));
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
   assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');
   assert.ok(detail.indexOf('市场价格对比') < detail.indexOf('价格区间深度'), 'trend should be visible before pool depth');
-  assert.ok(detail.includes('活跃度分'));
-  assert.ok(detail.includes('class="triage-strip"'), 'score, market risk and snapshot should lead the detail');
-  assert.ok(detail.indexOf('代币风险观察') < detail.indexOf('参考价格'));
+  assert.ok(detail.indexOf('已收录 <b>2</b> 个池子') < detail.indexOf('更新于 '), 'pool count should sit before the update time');
+  assert.ok(detail.includes('class="overview-grid"'), 'the first card should use one unified stats grid');
+  assert.ok(detail.indexOf('参考价格') < detail.indexOf('5m 涨跌'), 'price should lead its change metrics');
+  assert.ok(detail.indexOf('5m 涨跌') < detail.indexOf('1h 涨跌'), '5m and 1h changes should sit beside price');
+  assert.ok(detail.indexOf('5m 成交额') < detail.indexOf('1h 成交额'), 'volume metrics should be flat siblings');
+  assert.ok(detail.includes('class="trade-summary"'), 'the first card should lead with a trading summary');
+  assert.ok(detail.includes('建议：'), 'the summary should state the current action');
+  assert.ok(detail.includes('触发：') && detail.includes('失效：'), 'the summary should expose structure trigger and invalidation');
+  assert.ok(detail.includes('1h 换手：'), 'the summary should expose turnover');
+  assert.ok(!detail.includes('活跃度分'), 'detail should not repeat the list activity score');
+  assert.ok(detail.includes('1h 大额净流入'), 'the old net-buy slot should use real large-trade flow');
   assert.ok(detail.includes('池内资产估值'), 'pool assets must not be mistaken for near-price depth');
-  assert.ok(detail.includes('代币风险观察') && detail.includes('卖出笔数偏多') && detail.includes('信号 '));
+  assert.ok(detail.includes('代币风险观察') && detail.includes('卖出笔数偏多'));
+  assert.ok(!detail.includes('合并池子口径'), 'the risk card should not repeat merge scope copy');
   assert.ok(!detail.includes('合约安全风险'));
-  for (const expected of ['0xtoken', '快照', '$0.00000001235', '5m +2.0%', '1h -3.0%', '28 / 14', '$20.0K', '未接入卖出限制', '价格区间深度']) {
+  for (const expected of ['0xtoken', '24h 涨跌', '市值', '更新于 ', '$0.00000001235', '5m 涨跌', '+2.0%', '1h 涨跌', '-3.0%', '$2.4K', '$20.0K', '价格区间深度']) {
     assert.ok(detail.includes(expected), `missing ${expected}`);
   }
   for (const removed of ['可控', '上涨概率', '概率预测', '下一步观察', 'pancakeswap', 'uniswap', '0xpair', '0xmid']) {
     assert.ok(!detail.includes(removed), `unexpected ${removed}`);
   }
+  assert.ok(!detail.includes('未接入卖出限制'), 'the first card should not repeat the safety copy');
+  assert.ok(!detail.includes('行情快照'), 'the snapshot age should move to the card header');
+  assert.ok(!detail.includes('数据状态未知 · 风险未知'), 'structure status should not repeat the same state copy');
+  assert.ok(detail.indexOf('class="transfer-panel"') < detail.indexOf('id="transferTime"'), 'transfer time should stay inside the transfer block');
+  assert.ok(html.includes('<details class="stage-filter-details">'), 'stage filtering should use a native disclosure control');
+  assert.ok(html.includes('<summary class="filter-toggle" id="filterToggle">筛选</summary>'), 'the stage filter trigger should remain keyboard accessible');
   assert.ok(!detail.includes('0xlegacy'));
   const list = document.getElementById('tokenList').innerHTML;
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);
   assert.ok(!list.includes('ZERO'));
   assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
   assert.ok(list.includes('B 候选'), 'list should show a B candidate instead of a generic watch state');
-  assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币');
+  assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币 · 自选 0');
+  assert.ok(detail.includes('☆ 自选'));
+  vm.runInContext("toggleWatchlist('0xtoken')",context);
+  assert.ok(JSON.parse(localStorage.getItem('tmm-watchlist-v1')).includes('0xtoken'),'watchlist must persist');
+  assert.ok(document.getElementById('watchButton').textContent.includes('★ 已自选'));
+  vm.runInContext('watchlistOnly=true;renderTokenList()',context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('TEST'));
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('OTHER'),'watchlist filter must hide unwatched tokens');
   assert.ok(document.getElementById('refreshInfo').textContent.startsWith('行情快照最早 '));
   assert.ok(JSON.parse(storage.get('tmm-tokens-v1')).rows.length>1, 'network result replaces the cached list');
   assert.ok(list.includes('data-tip="活跃度分 · 命中标签：流动性适中、1小时成交额达标 · V2阶段：首次启动'));
@@ -120,6 +159,7 @@ setImmediate(async () => {
   assert.ok(!list.includes('list-group-heading'));
   assert.ok(!list.includes('uniswap') && !list.includes('pancakeswap'));
   const trend=document.getElementById('trendBody').innerHTML;
+  assert.ok(document.getElementById('trendTime').textContent.startsWith('更新于 '), 'trend must use the shared header update-time copy');
   assert.equal((trend.match(/<polyline/g)||[]).length,3,`pool and futures prices plus turnover: ${trend}`);
   assert.ok(trend.includes('池子') && trend.includes('合约标记价') && !trend.includes('现货'));
   assert.ok(trend.includes('chart-axis'), 'price chart should show its time range');
@@ -130,6 +170,7 @@ setImmediate(async () => {
   assert.ok(poolOnly.includes('price-scale') && poolOnly.includes('$2.0000') && poolOnly.includes('$1.0000'));
   assert.ok(vm.runInContext('makeMarketChart([{at:1,price:0},{at:2,price:0}],null)',context).includes('价格历史不足'));
   const depth = document.getElementById('depthBody').innerHTML;
+  assert.ok(document.getElementById('depthTime').textContent.startsWith('更新于 '), 'depth must use the shared header update-time copy');
   assert.ok(depth.includes('目标涨跌幅') && depth.includes('跌至该幅度需卖出') && depth.includes('涨至该幅度需买入'));
   assert.ok(depth.includes('更多深度 · 10% / 15% / 20%'));
   assert.ok(depth.includes('<div>10%</div>') && depth.includes('<div>15%</div>') && depth.includes('<div>20%</div>'));
@@ -169,15 +210,22 @@ setImmediate(async () => {
   vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:false,reason:'无同名合约'})})`,context);
   await vm.runInContext(`loadOI('0xpair',-3,false)`,context);
   assert.equal(document.getElementById('oiSection').className,'detail-section oi-empty');
+  assert.equal(document.getElementById('oiTime').textContent,'更新时间未知');
   vm.runInContext(`oiCache.delete('0xpair')`,context);
   await vm.runInContext(`loadOI('0xpair',-3,false)`,context);
+  for (const id of ['structureTime','oiTime','trendTime','depthTime','whaleTime','transferTime']) {
+    assert.ok(document.getElementById(id).textContent.startsWith('更新于 '), `${id} must use the shared header update-time copy`);
+  }
   assert.equal(document.getElementById('oiSection').className,'detail-section');
+  assert.ok(vm.runInContext(`Date.now()-oiCache.get('0xpair').at`,context)<=60000,'fresh OI gets a one-minute expiry');
   vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:true,symbol:'TESTUSDT',timestamp:null,oi_usd:12000,history:[]})})`,context);
   await vm.runInContext(`loadOI('0xpair',-3,false)`,context);
   assert.ok(document.getElementById('oiBody').innerHTML.includes('小时采样 时间未知'));
   vm.runInContext(`oiCache.delete('0xpair')`,context);
   const whales=document.getElementById('whaleBody').innerHTML;
+  assert.equal(document.getElementById('whaleFlowValue').textContent,'-$7.0K','large-trade net flow must dedupe cross-pool trades');
   assert.ok(whales.includes('$18.0K') && whales.includes('$11.0K'));
+  assert.ok(whales.includes('近1小时买入') && whales.includes('近1小时卖出'), 'large-trade summary should use the one-hour window');
   assert.ok(whales.includes('class="trade-buy"') && whales.includes('class="trade-sell"'));
   assert.ok(html.includes('.trade-buy { color:var(--accent); }') && html.includes('.trade-sell { color:#b91c1c; }'));
   assert.ok(!whales.includes('$30.0K'),'one cross-pool transaction must not be double counted');
@@ -188,7 +236,7 @@ setImmediate(async () => {
   const transfers=document.getElementById('transferBody').innerHTML;
   assert.ok(transfers.includes('1,500,000') && transfers.includes('0xaaaa…bbbb') && transfers.includes('0xcccc…dddd'));
   assert.ok(!transfers.includes('2,000,000'),'known pool transfer must not appear as wallet movement');
-  assert.ok(!transfers.includes('$'),'transfer threshold is token quantity, not USD');
+  assert.ok(transfers.includes('≈ $0.0185'),'transfers should expose an approximate USD value');
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
@@ -209,7 +257,7 @@ setImmediate(async () => {
   depthAt=new Date().toISOString();
   await vm.runInContext('refresh()',context);
   await new Promise(setImmediate);
-  assert.ok(vm.runInContext('depthCache.get("0xpair").expires',context)>Date.now(),'fresh depth gets a five-minute expiry');
+  assert.ok(vm.runInContext('depthCache.get("0xpair").expires',context)>Date.now(),'fresh depth gets a two-minute expiry');
   await vm.runInContext(`loadTrend({...selectedDetail,pools:[...selectedDetail.pools,{pair_address:'0xnew'}]})`,context);
   assert.ok(document.getElementById('trendBody').innerHTML.includes('合约标记价'),'a new pool with one snapshot must not erase established price history');
   row.token_symbol='<img src=x onerror=alert(1)>';
@@ -235,6 +283,7 @@ setImmediate(async () => {
   const partial=vm.runInContext('loadWhales(selectedDetail)',context);
   await new Promise(setImmediate);
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('已查询 1/2 个池子'));
+  assert.equal(document.getElementById('whaleFlowValue').textContent,'-- · 1/2池','partial whale coverage must not look like zero flow');
   finishSecondPool({available:true,trades:[]});
   await partial;
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('池子 2/2'));
@@ -250,7 +299,7 @@ setImmediate(async () => {
     for(const pair of selectedDetail.pools.map(p=>p.pair_address))whaleCache.set(pair,{expires:Date.now()+60000,promise:Promise.resolve({available:false,reason:'交易数据源限流，稍后自动重试'})});
     await loadWhales(selectedDetail);
   })()`,context);
-  assert.equal(document.getElementById('whaleBody').textContent,'交易数据源限流，稍后自动重试');
+  assert.ok(document.getElementById('whaleBody').innerHTML.includes('交易数据源限流，稍后自动重试'));
   await vm.runInContext(`(async()=>{
     depthCache.set('0xpair',{expires:Date.now()+60000,promise:Promise.resolve({available:true,stale:true,calculated_at:new Date(Date.now()-360000).toISOString(),support_usd:[100],pressure_usd:[120]})});
     depthCache.set('0xmid',{expires:Date.now()+60000,promise:Promise.resolve({available:false,reason:'限流'})});
