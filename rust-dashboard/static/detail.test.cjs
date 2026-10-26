@@ -76,6 +76,8 @@ setImmediate(async () => {
   assert.equal(vm.runInContext('fmtTurnover(0.1333)',context),'13.3%');
   assert.equal(vm.runInContext('fmtUsd(1500)',context),'$1.5K');
   assert.equal(vm.runInContext('fmtUsd(0.0185175)',context),'$0.01852');
+  assert.equal(vm.runInContext('whaleFlowText({netUsd:0,buyCount:0,sellCount:0})',context),'$0 · 0笔','zero flow must disclose that no large trades were sampled');
+  assert.equal(vm.runInContext('structureState({available:true,stage:"watch",b_crossed_at:1,b_at:null,b_breakout_line:1},1.1).label',context),'B 超出确认窗','a runaway unconfirmed breakout must not look ready for immediate confirmation');
   assert.equal(vm.runInContext("structureGuidance({available:true,stage:'watch'}).trigger",context),'30m 突破 + 量能确认');
 assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
 assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));

@@ -283,6 +283,7 @@ function fmtPrice(v) {
 }
 function fmtOiPct(v){if(v==null||isNaN(v))return'--';return`${v>0?'+':''}${v.toFixed(1)}%`;}
 function fmtTurnover(v){return v==null||isNaN(v)||!isFinite(v)?'--':`${(v*100).toFixed(1)}%`;}
+function whaleFlowText(flow){return !flow||flow.netUsd==null?'--':`${flow.netUsd>0?'+':''}${fmtMoney(flow.netUsd)}${(flow.buyCount||0)+(flow.sellCount||0)===0?' · 0笔':''}`;}
 function fmtUsd(v){
   if(v==null||isNaN(v)||!isFinite(v))return'--';
   const a=Math.abs(v),sign=v<0?'-':'';
@@ -335,7 +336,7 @@ function stageMatches(stage,filter){
   return [...filter].some(key=>key==='first_start'||key==='second_start'?value.startsWith(key):value===key);
 }
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
-function structureState(structure){
+function structureState(structure, price=null){
   if(!structure)return {label:'结构加载中',note:'等待结构数据'};
   if(!structure.available)return {label:structure.stage_label||'未知',note:structure.reason||'暂无结构数据'};
   const stage=String(structure.stage||'');
@@ -345,15 +346,20 @@ function structureState(structure){
   if(stage==='first_wave')return {label:'C 首波',note:'等待回调'};
   if(stage==='pullback')return {label:'C 回调',note:'等待企稳'};
   if(stage==='base')return {label:'C 企稳',note:'等待二次突破'};
-  if(stage==='watch'&&structure.b_crossed_at!=null&&structure.b_at==null)return {label:'B 候选',note:'等待量能确认'};
+  if(stage==='watch'&&structure.b_crossed_at!=null&&structure.b_at==null){
+    const line=Number(structure.b_breakout_line);
+    if(Number.isFinite(price)&&line>0&&price>line*1.08)return {label:'B 超出确认窗',note:'等待回踩后重新突破'};
+    return {label:'B 候选',note:'等待量能确认'};
+  }
   if(stage==='watch')return {label:'A 观察',note:'等待突破候选'};
   if(structure.b_at!=null)return {label:'B 已启动',note:'等待回调或二次启动'};
   if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待量能确认'};
   return {label:structure.stage_label||'未知',note:'结构观察'};
 }
-function structureGuidance(structure){
+function structureGuidance(structure, price=null){
   if(!structure?.available)return {trigger:'等待结构数据',invalidation:'数据不足'};
   const stage=String(structure.stage||'');
+  if(structureState(structure,price).label==='B 超出确认窗')return {trigger:'回踩后重新突破',invalidation:'跌破观察线或确认失败'};
   if(stage==='inactive')return {trigger:'30m 突破候选',invalidation:'数据断档'};
   if(stage==='watch')return {trigger:'30m 突破 + 量能确认',invalidation:'突破失败或量能不足'};
   if(stage.startsWith('first_start'))return {trigger:'首次启动确认',invalidation:'回撤超过 8%'};
@@ -476,7 +482,7 @@ function renderTokenList() {
       const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
       const v2Tip=v2TipText(v2);
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
-      const state=structureState(structureOf(t.token_address));
+      const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
@@ -533,8 +539,8 @@ function renderDetail() {
   const oiExpanded=document.querySelector('#oiBody details')?.open;
   const risks=marketRisks(t.signal_risk_flags);
   const structureTime=structure?.updated_at?new Date(structure.updated_at*1000).toISOString():null;
-  const state=structureState(structure);
-  const guidance=structureGuidance(structure);
+  const state=structureState(structure,Number(t.price_usd));
+  const guidance=structureGuidance(structure,Number(t.price_usd));
   const turnover=t.liquidity_usd>0?t.volume_h1/t.liquidity_usd:null;
   const whaleFlow=whaleFlowCache.get(String(t.token_address||'').toLowerCase());
   document.getElementById('detailPanel').innerHTML=`
@@ -563,7 +569,7 @@ function renderDetail() {
       <div class="overview-item"><span class="label">24h 涨跌</span><strong class="value">${fmtChange(t.price_change_h24)}</strong></div>
       <div class="overview-item"><span class="label">市值</span><strong class="value">${fmtMoney(t.market_cap)}</strong></div>
       <div class="overview-item risk${risks?.length===0?' clear':''}"><span class="label">代币风险观察</span><strong class="value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong></div>
-      <div class="overview-item"><span class="label">1h 大额净流入</span><strong class="value" id="whaleFlowValue">${whaleFlow?`${whaleFlow.netUsd>0?'+':''}${fmtMoney(whaleFlow.netUsd)}`:'--'}</strong></div>
+      <div class="overview-item"><span class="label">1h 大额净流入</span><strong class="value" id="whaleFlowValue">${whaleFlowText(whaleFlow)}</strong></div>
       <div class="overview-item"><span class="label">池内资产估值</span><strong class="value">${fmtMoney(t.liquidity_usd)}</strong></div>
       <div class="overview-item"><span class="label">5m 成交额</span><strong class="value">${fmtMoney(t.volume_m5)}</strong></div>
       <div class="overview-item"><span class="label">1h 成交额</span><strong class="value">${fmtMoney(t.volume_h1)}</strong></div>
@@ -697,9 +703,9 @@ async function loadWhales(token) {
     const sum=rows=>rows.reduce((n,x)=>n+x.usd,0);
     const netUsd=sum(buys)-sum(sells);
     const flowReady=!pending&&available.length>0&&(totalLiquidity===0?available.length===token.pools.length:liquidityCoverage>=.95);
-    whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:flowReady?netUsd:null,buyUsd:flowReady?sum(buys):null,sellUsd:flowReady?sum(sells):null,at:latestTime(available)});
+    whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:flowReady?netUsd:null,buyUsd:flowReady?sum(buys):null,sellUsd:flowReady?sum(sells):null,buyCount:flowReady?buys.length:null,sellCount:flowReady?sells.length:null,at:latestTime(available)});
     const flowValue=document.getElementById('whaleFlowValue');
-    if(flowValue)flowValue.textContent=flowReady?`${netUsd>0?'+':''}${fmtMoney(netUsd)}`:`-- · ${available.length}/${token.pools.length}池`;
+    if(flowValue)flowValue.textContent=flowReady?whaleFlowText({netUsd,buyCount:buys.length,sellCount:sells.length}):`-- · ${available.length}/${token.pools.length}池`;
     if(!recentTrades.length){
       body.innerHTML=`<div class="activity-empty">${note}已查询的池子近 1 小时未查到单笔超过 $10K 的买卖</div>
         <details class="data-note"><summary>交易样本与统计口径</summary><div class="hint">各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div></details>`;
