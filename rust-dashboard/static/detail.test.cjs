@@ -54,11 +54,8 @@ assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 're
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
   await new Promise(setImmediate);
-  assert.equal(vm.runInContext('viewMode',context),'simple','first visit should default to the novice view');
-  assert.equal(storage.get('tmm-view-mode-v1'),undefined,'the default novice choice does not need storage');
-  assert.ok(document.getElementById('detailPanel').innerHTML.includes('极简视图 · 新手决策'),'detail should render the novice card');
   await vm.runInContext('refreshStructure()',context);
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('信息不足'),'simple list must stay honest when the overview omits price');
+  assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('V2阶段：首次启动'), 'V2 tooltip should use Chinese copy');
@@ -100,15 +97,14 @@ setImmediate(async () => {
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
-  vm.runInContext("setViewMode('pro')",context);
-  assert.equal(storage.get('tmm-view-mode-v1'),'pro','view choice should persist');
-  assert.equal(document.getElementById('proViewButton').getAttribute('aria-pressed'),'true');
   await new Promise(setImmediate);
 assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
 assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));
 assert.ok(vm.runInContext(`stageMatches('first_start_extended', new Set(['first_start']))`,context));
 assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === stageFilterOptions.length`,context));
   const detail = document.getElementById('detailPanel').innerHTML;
+  assert.ok(detail.includes('class="novice-card"'),'the novice decision card should stay embedded in the full detail page');
+  assert.ok(detail.indexOf('class="novice-card"') < detail.indexOf('class="detail-section"'),'the novice decision should lead the detail page');
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
   assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');

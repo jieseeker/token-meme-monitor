@@ -24,9 +24,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .toolbar-title { font-size:22px; font-weight:850; letter-spacing:-.3px; }
 .toolbar-subtitle { margin-top:3px; font-size:12px; color:var(--muted); }
 .top-right { display:flex; align-items:center; gap:14px; white-space:nowrap; }
-.view-switch { display:flex; padding:3px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
-.view-switch button { min-width:48px; min-height:28px; border:0; border-radius:7px; background:transparent; color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; }
-.view-switch button.active { background:var(--accent); color:#fff; }
 .token-count { padding-right:14px; border-right:1px solid var(--line); font-size:12px; color:var(--muted); }
 .refresh-badge { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
 .refresh-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
@@ -130,7 +127,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .secondary-metrics b { color:var(--text); }
 .detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
 .detail-panel summary { cursor:pointer; }
-.simple-detail { display:grid; gap:12px; }
 .novice-card { display:grid; gap:16px; padding:18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); box-shadow:var(--shadow-card); }
 .novice-card.stale { border-color:rgba(180,83,9,.35); background:rgba(180,83,9,.025); }
 .novice-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
@@ -149,7 +145,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .novice-facts span { display:block; font-size:11px; color:var(--muted); }
 .novice-facts b { display:block; margin-top:3px; font-size:13px; overflow-wrap:anywhere; }
 .novice-action { padding:11px 13px; border-radius:10px; background:var(--accent-soft); color:var(--accent-strong); font-size:13px; font-weight:750; }
-.pro-link { justify-self:start; padding:9px 13px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--muted); font-size:13px; font-weight:650; cursor:pointer; }
 @media(max-width:600px){ .novice-facts { grid-template-columns:1fr; } .buy-axis-labels { font-size:10px; } }
 
 /* Metric cards */
@@ -223,10 +218,6 @@ svg.chart.price-chart { height:104px; }
     </div>
   </div>
   <div class="top-right">
-    <div class="view-switch" role="group" aria-label="视图模式">
-      <button type="button" id="simpleViewButton">极简</button>
-      <button type="button" id="proViewButton">专业</button>
-    </div>
     <div class="token-count" id="tokenCount">统计中...</div>
     <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
   </div>
@@ -256,7 +247,6 @@ const REFRESH_MS = 15000;
 const OVERVIEW_CACHE_KEY = 'tmm-tokens-v1';
 const WATCHLIST_KEY = 'tmm-watchlist-v1';
 const WATCHLIST_ONLY_KEY = 'tmm-watchlist-only-v1';
-const VIEW_MODE_KEY = 'tmm-view-mode-v1';
 let allData = [];
 let tokenData = [];
 let selectedDetail = null;
@@ -274,26 +264,6 @@ const whaleCache = new Map();
 const transferCache = new Map();
 const detailCache = new Map();
 const whaleFlowCache = new Map();
-let viewMode = loadViewMode();
-
-function loadViewMode() {
-  try { return localStorage.getItem(VIEW_MODE_KEY) === 'pro' ? 'pro' : 'simple'; } catch { return 'simple'; }
-}
-function syncViewMode() {
-  const simple=document.getElementById('simpleViewButton'), pro=document.getElementById('proViewButton');
-  simple.classList.toggle('active',viewMode==='simple');
-  pro.classList.toggle('active',viewMode==='pro');
-  simple.setAttribute('aria-pressed',String(viewMode==='simple'));
-  pro.setAttribute('aria-pressed',String(viewMode==='pro'));
-}
-function setViewMode(mode) {
-  if(mode!=='simple'&&mode!=='pro')return;
-  viewMode=mode;
-  try{localStorage.setItem(VIEW_MODE_KEY,mode);}catch{}
-  syncViewMode();
-  renderTokenList();
-  renderDetail();
-}
 
 function saveWatchlist() {
   localStorage.setItem(WATCHLIST_KEY, JSON.stringify([...watchlist]));
@@ -454,21 +424,11 @@ function buyPointAxisHTML(distance){
 function noviceCardHTML(token, structure){
   const state=noviceState(token,structure), risk=noviceRisk(token,structure), guidance=structureGuidance(structure,Number(token.price_usd));
   const distance=buyPointDistance(token,structure);
-  return `<div class="simple-detail">
-    <div class="detail-section">
-      <div class="section-header">
-        <span class="section-heading">${escapeAttr(token.token_symbol)}</span>
-        <span class="section-address">${escapeAttr(token.token_address||'--')}</span>
-        <div class="section-meta"><span class="section-copy">极简视图 · 新手决策</span><span class="section-time">${updatedAt(token.observed_at)}</span></div>
-      </div>
-    </div>
-    <div class="novice-card${state.key==='data_stale'?' stale':''}">
-      <div class="novice-head"><div><div class="novice-state ${state.tone}">${state.label}</div><div class="novice-reason">${escapeAttr(state.reason)}</div></div><div class="novice-price">价格 ${fmtPrice(token.price_usd)}</div></div>
-      ${distance==null?'<div class="novice-reason">等待结构形成，暂不画买点距离。</div>':buyPointAxisHTML(distance)}
-      <div class="novice-facts"><div><span>风险</span><b>${escapeAttr(risk.label)}</b></div><div><span>池内资产</span><b>${fmtMoney(token.liquidity_usd)}</b></div><div><span>失效位置</span><b>${escapeAttr(guidance.invalidation)}</b></div></div>
-      <div class="novice-action">建议：${escapeAttr(state.action)}</div>
-    </div>
-    <button class="pro-link" type="button">查看专业指标</button>
+  return `<div class="novice-card${state.key==='data_stale'?' stale':''}">
+    <div class="novice-head"><div><div class="novice-state ${state.tone}">${state.label}</div><div class="novice-reason">${escapeAttr(state.reason)}</div></div><div class="novice-price">价格 ${fmtPrice(token.price_usd)}</div></div>
+    ${distance==null?'<div class="novice-reason">等待结构形成，暂不画买点距离。</div>':buyPointAxisHTML(distance)}
+    <div class="novice-facts"><div><span>风险</span><b>${escapeAttr(risk.label)}</b></div><div><span>池内资产</span><b>${fmtMoney(token.liquidity_usd)}</b></div><div><span>失效位置</span><b>${escapeAttr(guidance.invalidation)}</b></div></div>
+    <div class="novice-action">建议：${escapeAttr(state.action)}</div>
   </div>`;
 }
 function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
@@ -585,9 +545,8 @@ function renderTokenList() {
       const v2Tip=v2TipText(v2);
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
-      const listState=viewMode==='simple'?noviceState(t,structureOf(t.token_address)):state;
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');
@@ -634,15 +593,6 @@ function renderDetail() {
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
   if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
   const structure=structureOf(t.token_address);
-  if(viewMode==='simple'){
-    const simpleKey=`simple|${t.token_address}|${t.observed_at}|${t.signal_risk_flags}|${t.price_usd}|${structure?`${structure.stage}:${structure.updated_at}:${structure.risk_status}`:''}`;
-    if(simpleKey!==renderedKey){
-      renderedKey=simpleKey;
-      document.getElementById('detailPanel').innerHTML=noviceCardHTML(t,structure);
-      document.querySelector('.pro-link')?.addEventListener('click',()=>setViewMode('pro'));
-    }
-    return;
-  }
   const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'');
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
@@ -656,6 +606,7 @@ function renderDetail() {
   const turnover=t.liquidity_usd>0?t.volume_h1/t.liquidity_usd:null;
   const whaleFlow=whaleFlowCache.get(String(t.token_address||'').toLowerCase());
   document.getElementById('detailPanel').innerHTML=`
+  ${noviceCardHTML(t,structure)}
   <div class="detail-section">
     <div class="section-header">
       <span class="section-heading">${escapeAttr(t.token_symbol)}</span>
@@ -1052,9 +1003,6 @@ try{
   if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
 }catch{}
 renderStageFilter();
-syncViewMode();
-document.getElementById('simpleViewButton').addEventListener('click',()=>setViewMode('simple'));
-document.getElementById('proViewButton').addEventListener('click',()=>setViewMode('pro'));
 
 function refreshStructure(){
   if(structureRefreshPromise)return structureRefreshPromise;
