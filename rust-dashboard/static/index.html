@@ -432,10 +432,12 @@ function noviceRisk(token, structure){
 }
 function noviceState(token, structure){
   const price=Number(token?.price_usd);
-  if(!Number.isFinite(Date.parse(token?.observed_at))||!Number.isFinite(price)||price<=0||!structure?.available)return {key:'unknown',label:'信息不足',tone:'neutral',reason:'价格或结构数据还不完整，先不要判断。',action:'等待数据补齐'};
+  if(!Number.isFinite(Date.parse(token?.observed_at))||!structure?.available)return {key:'unknown',label:'信息不足',tone:'neutral',reason:'行情或结构数据还不完整，先不要判断。',action:'等待数据补齐'};
   if(Date.now()-Date.parse(token.observed_at)>120000||(structure.updated_at&&Date.now()-structure.updated_at*1000>180000))return {key:'data_stale',label:'数据过期',tone:'risk',reason:'行情或结构数据滞后，当前画面不能当作实时状态。',action:'等数据恢复新鲜后再看'};
   const risk=noviceRisk(token,structure);
   if(risk.blocked)return {key:'risk_block',label:'不碰',tone:'risk',reason:`风险阻断：${risk.label}`,action:'先排除风险，不参与'};
+  if(structure.data_status==='warming_up')return {key:'data_warmup',label:'数据预热',tone:'neutral',reason:'V2 结构还需要连续历史样本建立基线，暂时没有可靠买点。',action:'等基线形成后再判断'};
+  if(!Number.isFinite(price)||price<=0)return {key:'unknown',label:'信息不足',tone:'neutral',reason:'当前价格数据不完整，先不要判断。',action:'等待价格补齐'};
   const distance=buyPointDistance(token,structure), stage=String(structure.stage||'');
   if(structure.b_crossed_at!=null&&structure.b_at==null&&distance!=null&&distance>.08)return {key:'too_far',label:'已涨远',tone:'risk',reason:`价格高于观察线 ${fmtChange(distance)}，已超过 +8% 确认窗。`,action:'等待回踩，不追高'};
   if(structure.b_crossed_at!=null&&distance!=null&&distance>=0&&distance<=.08)return {key:'wait_volume',label:'等待量能',tone:'safe',reason:'价格已进入突破确认窗，但量能还没确认。',action:'只观察，等量能确认'};

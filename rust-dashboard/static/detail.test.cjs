@@ -99,6 +99,7 @@ setImmediate(async () => {
   const noLine=vm.runInContext(`noviceCardHTML({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000)})`,context);
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
+  assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
   vm.runInContext("setViewMode('pro')",context);
   assert.equal(storage.get('tmm-view-mode-v1'),'pro','view choice should persist');
   assert.equal(document.getElementById('proViewButton').getAttribute('aria-pressed'),'true');
