@@ -16,6 +16,16 @@ fn counters(keys: &[&str]) -> Counts {
     keys.iter().map(|key| ((*key).into(), 0)).collect()
 }
 const HORIZONS: [(&str, i64); 3] = [("15m", 900), ("1h", 3600), ("4h", 14400)];
+const PATH_HORIZON_SECONDS: i64 = 14_400;
+const PATH_GRACE_SECONDS: i64 = 300;
+const PATH_TARGET_PCT: f64 = 10.0;
+const PATH_STOP_PCT: f64 = -10.0;
+const PATH_ASSUMED_ROUND_TRIP_COST_PCT: f64 = 2.0;
+const EXIT_STRATEGY_NAMES: [&str; 3] = [
+    "fixed_take_profit",
+    "no_fixed_take_profit",
+    "ladder_take_profit",
+];
 const B_COHORTS: [&str; 9] = [
     "all",
     "pass",
@@ -60,6 +70,111 @@ impl Outcome {
         self.max_sampled_return_pct = Some(self.max_sampled_return_pct.unwrap_or(value).max(value));
     }
 }
+
+#[derive(Default, Serialize)]
+struct PathOutcome {
+    denominator: u64,
+    resolved: u64,
+    target_first: u64,
+    stop_first: u64,
+    timeout: u64,
+    unresolved: u64,
+    endpoint_missing: u64,
+    wins: u64,
+    losses: u64,
+    mean_gross_return_pct: Option<f64>,
+    mean_net_return_pct: Option<f64>,
+    total_net_profit_pct: f64,
+    total_net_loss_pct: f64,
+    profit_factor: Option<f64>,
+}
+impl PathOutcome {
+    fn record_exit(&mut self, kind: &'static str, gross_return_pct: f64) {
+        self.resolved += 1;
+        match kind {
+            "target_first" => self.target_first += 1,
+            "stop_first" => self.stop_first += 1,
+            _ => self.timeout += 1,
+        }
+        let net_return_pct = gross_return_pct - PATH_ASSUMED_ROUND_TRIP_COST_PCT;
+        if net_return_pct > 0.0 {
+            self.wins += 1;
+        } else if net_return_pct < 0.0 {
+            self.losses += 1;
+        }
+        if net_return_pct > 0.0 {
+            self.total_net_profit_pct += net_return_pct;
+        } else if net_return_pct < 0.0 {
+            self.total_net_loss_pct += -net_return_pct;
+        }
+        let mean_gross = self.mean_gross_return_pct.unwrap_or(0.0);
+        self.mean_gross_return_pct =
+            Some(mean_gross + (gross_return_pct - mean_gross) / self.resolved as f64);
+        let mean_net = self.mean_net_return_pct.unwrap_or(0.0);
+        self.mean_net_return_pct =
+            Some(mean_net + (net_return_pct - mean_net) / self.resolved as f64);
+        self.profit_factor = if self.total_net_loss_pct > 0.0 {
+            Some(self.total_net_profit_pct / self.total_net_loss_pct)
+        } else {
+            None
+        };
+    }
+}
+
+#[derive(Default, Serialize)]
+struct ExitStrategyOutcome {
+    denominator: u64,
+    resolved: u64,
+    target_first: u64,
+    stop: u64,
+    timeout: u64,
+    first_target: u64,
+    second_target: u64,
+    trailing_stop: u64,
+    unresolved: u64,
+    endpoint_missing: u64,
+    wins: u64,
+    losses: u64,
+    mean_gross_return_pct: Option<f64>,
+    mean_net_return_pct: Option<f64>,
+    total_net_profit_pct: f64,
+    total_net_loss_pct: f64,
+    profit_factor: Option<f64>,
+}
+impl ExitStrategyOutcome {
+    fn record_milestone(&mut self, kind: &str) {
+        match kind {
+            "first_target" => self.first_target += 1,
+            "second_target" => self.second_target += 1,
+            _ => {}
+        }
+    }
+    fn record_exit(&mut self, kind: &str, gross_return_pct: f64) {
+        self.resolved += 1;
+        match kind {
+            "target_first" => self.target_first += 1,
+            "stop" | "stop_first" => self.stop += 1,
+            "trailing_stop" => self.trailing_stop += 1,
+            _ => self.timeout += 1,
+        }
+        let net_return_pct = gross_return_pct - PATH_ASSUMED_ROUND_TRIP_COST_PCT;
+        if net_return_pct > 0.0 {
+            self.wins += 1;
+            self.total_net_profit_pct += net_return_pct;
+        } else if net_return_pct < 0.0 {
+            self.losses += 1;
+            self.total_net_loss_pct += -net_return_pct;
+        }
+        let mean_gross = self.mean_gross_return_pct.unwrap_or(0.0);
+        self.mean_gross_return_pct =
+            Some(mean_gross + (gross_return_pct - mean_gross) / self.resolved as f64);
+        let mean_net = self.mean_net_return_pct.unwrap_or(0.0);
+        self.mean_net_return_pct =
+            Some(mean_net + (net_return_pct - mean_net) / self.resolved as f64);
+        self.profit_factor = (self.total_net_loss_pct > 0.0)
+            .then_some(self.total_net_profit_pct / self.total_net_loss_pct);
+    }
+}
 #[derive(Serialize)]
 struct Hits {
     events: u64,
@@ -68,6 +183,8 @@ struct Hits {
     risk_status: Counts,
     data_status: Counts,
     forward: BTreeMap<String, Outcome>,
+    path: PathOutcome,
+    exit_strategies: BTreeMap<String, ExitStrategyOutcome>,
 }
 impl Default for Hits {
     fn default() -> Self {
@@ -80,6 +197,11 @@ impl Default for Hits {
             forward: HORIZONS
                 .iter()
                 .map(|(name, _)| ((*name).into(), Outcome::default()))
+                .collect(),
+            path: PathOutcome::default(),
+            exit_strategies: EXIT_STRATEGY_NAMES
+                .into_iter()
+                .map(|name| (name.into(), ExitStrategyOutcome::default()))
                 .collect(),
         }
     }
@@ -99,6 +221,11 @@ struct Pending {
     price: f64,
     previous: (DateTime<Utc>, f64),
     remaining: Vec<(&'static str, i64)>,
+    path_exit: Option<(&'static str, f64)>,
+    strategy_exits: BTreeMap<String, Option<(&'static str, f64)>>,
+    ladder_high_pct: f64,
+    ladder_first: bool,
+    ladder_second: bool,
 }
 
 /// Opens the source read-only before any application startup, migration, or persistence.
@@ -353,7 +480,10 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
             "legacy_comparison":"exact contemporaneous stored signals, one token decision per response; unknown historical configurations",
             "forward":"same frozen pool; first positive sampled price in [trigger+horizon,trigger+horizon+300s], previous sample at/before target and bracketing gap <=300s; otherwise unavailable",
             "forward_denominator":"all structural stage events, split into eligible, endpoint_missing, right_censored; right censor if replay ends before target+300s without a usable endpoint",
-            "returns":"sampled endpoint price change only; no execution, profit, fees, slippage, or path/extrema labels"
+            "returns":"sampled endpoint price change only; no execution, profit, fees, slippage, or path/extrema labels",
+            "path":"observed snapshot path after each structural event; first observed +10% or -10% decides target/stop within 4h+300s, otherwise the first later observation exits at timeout; a single jumped observation is assigned to its observed side and cannot prove intraperiod ordering",
+            "profit":"target and stop gross returns are fixed at +10%/-10%; timeout uses sampled price change; all exits subtract an explicitly assumed 2% round-trip cost; no venue fill, actual fee, slippage, or position size is claimed",
+            "exit_strategies":"fixed_take_profit exits fully at +10%; no_fixed_take_profit holds until -10% stop or timeout; ladder_take_profit sells 30% at +10%, 30% at +25%, then exits the remainder at the greater of +8% or a 20% drawdown from the observed high, with timeout as fallback",
         },
         "limitations":["all upstream source times unverified", "metadata verifies individual recorded rows, not response completeness; partial-write survivors may be replayed", "collected-input replay does not reproduce runtime skips from retirement failure, shadow mode/cooldown, observe/save failure or subsequent recovery", "historical request failures and original selected-pool sets unavailable for legacy rows", "proxy numeric presence and response identity unverified; zero legacy volumes unknown", "risk and score use stored contemporaneous evidence only; missing/conflicting evidence holds", "no current pairs or active-universe selection; four case identities remain unverified", "endpoint sampling does not establish continuous tradeable price coverage"]
     }))
@@ -785,6 +915,10 @@ impl TokenReplay {
                 for outcome in hit.forward.values_mut() {
                     outcome.denominator += 1;
                 }
+                hit.path.denominator += 1;
+                for outcome in hit.exit_strategies.values_mut() {
+                    outcome.denominator += 1;
+                }
             }
             pending.push(Pending {
                 keys,
@@ -793,6 +927,14 @@ impl TokenReplay {
                 price: current.price.unwrap(),
                 previous: (at, current.price.unwrap()),
                 remaining: HORIZONS.to_vec(),
+                path_exit: None,
+                strategy_exits: EXIT_STRATEGY_NAMES
+                    .into_iter()
+                    .map(|name| (name.into(), None))
+                    .collect(),
+                ladder_high_pct: 0.0,
+                ladder_first: false,
+                ladder_second: false,
             });
         }
         history.push_back(current.clone());
@@ -803,6 +945,35 @@ impl TokenReplay {
     }
     fn finish(&mut self, end: DateTime<Utc>, hits: &mut BTreeMap<String, Hits>) {
         for pending in self.pending.drain(..) {
+            let deadline =
+                pending.at + Duration::seconds(PATH_HORIZON_SECONDS + PATH_GRACE_SECONDS);
+            if pending.path_exit.is_none() {
+                for key in &pending.keys {
+                    let path = &mut hits.get_mut(key).unwrap().path;
+                    if end < deadline {
+                        path.unresolved += 1;
+                    } else {
+                        path.endpoint_missing += 1;
+                    }
+                }
+            }
+            for (name, exit) in &pending.strategy_exits {
+                if exit.is_none() {
+                    for key in &pending.keys {
+                        let strategy = hits
+                            .get_mut(key)
+                            .unwrap()
+                            .exit_strategies
+                            .get_mut(name)
+                            .unwrap();
+                        if end < deadline {
+                            strategy.unresolved += 1;
+                        } else {
+                            strategy.endpoint_missing += 1;
+                        }
+                    }
+                }
+            }
             for (name, horizon) in pending.remaining {
                 for key in &pending.keys {
                     let outcome = hits.get_mut(key).unwrap().forward.get_mut(name).unwrap();
@@ -860,10 +1031,153 @@ fn labels(
             resolved.is_none()
         });
         if let Some(price) = current {
+            let deadline = event.at + Duration::seconds(PATH_HORIZON_SECONDS + PATH_GRACE_SECONDS);
+            let gross_return_pct = (price / event.price - 1.0) * 100.0;
+            let fixed_was_new = event.path_exit.is_some();
+            let no_target_was_set = event
+                .strategy_exits
+                .get("no_fixed_take_profit")
+                .is_some_and(Option::is_some);
+            let ladder_was_set = event
+                .strategy_exits
+                .get("ladder_take_profit")
+                .is_some_and(Option::is_some);
+            if event.path_exit.is_none() {
+                event.path_exit = if now > deadline {
+                    Some(("timeout", gross_return_pct))
+                } else if gross_return_pct >= PATH_TARGET_PCT {
+                    Some(("target_first", PATH_TARGET_PCT))
+                } else if gross_return_pct <= PATH_STOP_PCT {
+                    Some(("stop_first", PATH_STOP_PCT))
+                } else {
+                    None
+                };
+                if let Some((kind, gross_return_pct)) = event.path_exit {
+                    for key in &event.keys {
+                        hits.get_mut(key)
+                            .unwrap()
+                            .path
+                            .record_exit(kind, gross_return_pct);
+                    }
+                }
+            }
+            if let Some(exit) = event.path_exit {
+                let fixed = event.strategy_exits.get_mut("fixed_take_profit").unwrap();
+                if fixed.is_none() {
+                    *fixed = Some(exit);
+                }
+            }
+            let no_target = if now > deadline {
+                Some(("timeout", gross_return_pct))
+            } else if gross_return_pct <= PATH_STOP_PCT {
+                Some(("stop", PATH_STOP_PCT))
+            } else {
+                None
+            };
+            if no_target.is_some() {
+                *event
+                    .strategy_exits
+                    .get_mut("no_fixed_take_profit")
+                    .unwrap() = no_target;
+            }
+            if event
+                .strategy_exits
+                .get("ladder_take_profit")
+                .is_some_and(Option::is_none)
+            {
+                event.ladder_high_pct = event.ladder_high_pct.max(gross_return_pct);
+                let mut milestones = Vec::new();
+                if !event.ladder_first {
+                    if gross_return_pct <= PATH_STOP_PCT {
+                        *event.strategy_exits.get_mut("ladder_take_profit").unwrap() =
+                            Some(("stop", PATH_STOP_PCT));
+                    } else if gross_return_pct >= PATH_TARGET_PCT {
+                        event.ladder_first = true;
+                        milestones.push("first_target");
+                    } else if now > deadline {
+                        *event.strategy_exits.get_mut("ladder_take_profit").unwrap() =
+                            Some(("timeout", gross_return_pct));
+                    }
+                }
+                if event
+                    .strategy_exits
+                    .get("ladder_take_profit")
+                    .is_some_and(Option::is_none)
+                    && event.ladder_first
+                {
+                    if !event.ladder_second && gross_return_pct >= 25.0 {
+                        event.ladder_second = true;
+                        milestones.push("second_target");
+                    }
+                    let stop_line_pct = if event.ladder_second {
+                        (event.ladder_high_pct - 20.0).max(8.0)
+                    } else {
+                        0.0
+                    };
+                    if gross_return_pct <= stop_line_pct {
+                        let locked_pct = if event.ladder_second { 10.5 } else { 3.0 };
+                        let remaining_pct = if event.ladder_second { 0.4 } else { 0.7 };
+                        let blended_pct = locked_pct + remaining_pct * stop_line_pct;
+                        *event.strategy_exits.get_mut("ladder_take_profit").unwrap() =
+                            Some(("trailing_stop", blended_pct));
+                    } else if now > deadline {
+                        let locked_pct = if event.ladder_second { 10.5 } else { 3.0 };
+                        let remaining_pct = if event.ladder_second { 0.4 } else { 0.7 };
+                        let blended_pct = locked_pct + remaining_pct * gross_return_pct;
+                        *event.strategy_exits.get_mut("ladder_take_profit").unwrap() =
+                            Some(("timeout", blended_pct));
+                    }
+                }
+                for milestone in milestones {
+                    for key in &event.keys {
+                        hits.get_mut(key)
+                            .unwrap()
+                            .exit_strategies
+                            .get_mut("ladder_take_profit")
+                            .unwrap()
+                            .record_milestone(milestone);
+                    }
+                }
+            }
+            let newly_exits = [
+                (
+                    "fixed_take_profit",
+                    !fixed_was_new && event.path_exit.is_some(),
+                ),
+                (
+                    "no_fixed_take_profit",
+                    !no_target_was_set
+                        && event
+                            .strategy_exits
+                            .get("no_fixed_take_profit")
+                            .is_some_and(Option::is_some),
+                ),
+                (
+                    "ladder_take_profit",
+                    !ladder_was_set
+                        && event
+                            .strategy_exits
+                            .get("ladder_take_profit")
+                            .is_some_and(Option::is_some),
+                ),
+            ];
+            for (name, is_new) in newly_exits {
+                if is_new {
+                    let exit = event.strategy_exits.get(name).unwrap().unwrap();
+                    for key in &event.keys {
+                        hits.get_mut(key)
+                            .unwrap()
+                            .exit_strategies
+                            .get_mut(name)
+                            .unwrap()
+                            .record_exit(exit.0, exit.1);
+                    }
+                }
+            }
             event.previous = (now, price);
         }
     }
-    pending.retain(|event| !event.remaining.is_empty());
+    pending.retain(|event| !event.remaining.is_empty() || event.path_exit.is_none());
 }
 
 #[cfg(test)]
@@ -1022,6 +1336,64 @@ mod tests {
         assert_eq!(out["positive_sampled_return_rate_pct"], 100.0);
         assert!((out["mean_sampled_return_pct"].as_f64().unwrap() - 10.0).abs() < 1e-10);
         assert_eq!(after["opportunity_eligible_events"], 0);
+    }
+    #[test]
+    fn replay_path_outcome_separates_target_and_stop_before_changing_win_rate() {
+        for (later_price, outcome, net, profit_factor) in [
+            (112.0, "target_first", 8.0, None),
+            (89.0, "stop_first", -12.0, Some(0.0)),
+        ] {
+            let db = Database::new();
+            breakout(&db);
+            db.insert(T + 480, "a", later_price, 1.0, 1.0, true);
+            let report = db.replay(false);
+            let path = &report["structural_hits"]["B"]["path"];
+            assert_eq!(path["denominator"], 1, "{later_price}");
+            assert_eq!(path[outcome], 1, "{later_price}");
+            assert_eq!(path["resolved"], 1, "{later_price}");
+            assert!((path["mean_net_return_pct"].as_f64().unwrap() - net).abs() < 1e-9);
+            assert_eq!(
+                path["profit_factor"].as_f64(),
+                profit_factor,
+                "{later_price}"
+            );
+        }
+    }
+    #[test]
+    fn replay_exit_strategies_compare_fixed_no_target_and_ladder_rules() {
+        let db = Database::new();
+        breakout(&db);
+        for (time, price) in [
+            (T + 480, 112.0),
+            (T + 600, 130.0),
+            (T + 720, 100.0),
+            (T + 15_000, 120.0),
+        ] {
+            db.insert(time, "a", price, 1.0, 1.0, true);
+        }
+        let report = db.replay(false);
+        let strategies = &report["structural_hits"]["B"]["exit_strategies"];
+        assert_eq!(strategies["fixed_take_profit"]["target_first"], 1);
+        let no_target = &strategies["no_fixed_take_profit"];
+        assert_eq!(no_target["timeout"], 1);
+        assert_eq!(no_target["stop"], 0);
+        assert!(no_target["mean_net_return_pct"].as_f64().unwrap() > 0.0);
+        let ladder = &strategies["ladder_take_profit"];
+        assert_eq!(ladder["first_target"], 1);
+        assert_eq!(ladder["second_target"], 1);
+        assert_eq!(ladder["trailing_stop"], 1);
+        assert!(ladder["mean_net_return_pct"].as_f64().unwrap() > 0.0);
+    }
+    #[test]
+    fn ladder_exits_at_timeout_even_when_the_first_target_is_never_reached() {
+        let db = Database::new();
+        breakout(&db);
+        db.insert(T + 15_000, "a", 100.0, 1.0, 1.0, true);
+        let ladder =
+            &db.replay(false)["structural_hits"]["B"]["exit_strategies"]["ladder_take_profit"];
+        assert_eq!(ladder["timeout"], 1);
+        assert_eq!(ladder["first_target"], 0);
+        assert!(ladder["mean_net_return_pct"].as_f64().unwrap() < 0.0);
     }
     #[test]
     fn replay_b_recent_volume_tests_share_retention_and_missing_separately() {

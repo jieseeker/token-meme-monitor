@@ -383,7 +383,9 @@ function structureGuidance(structure, price=null){
   return {trigger:'结构确认',invalidation:'数据不足'};
 }
 function buyPointDistance(token, structure){
-  const price=Number(token?.price_usd), line=Number(structure?.b_breakout_line);
+  const stage=String(structure?.stage||'');
+  const line=Number(stage.startsWith('second_start')?structure?.c_breakout_line:structure?.b_breakout_line);
+  const price=Number(token?.price_usd);
   return Number.isFinite(price)&&price>0&&Number.isFinite(line)&&line>0?price/line-1:null;
 }
 function noviceRisk(token, structure){
@@ -403,11 +405,16 @@ function noviceState(token, structure){
   if(structure.data_status==='warming_up')return {key:'data_warmup',label:'数据预热',tone:'neutral',reason:'V2 结构还需要连续历史样本建立基线，暂时没有可靠买点。',action:'等基线形成后再判断'};
   if(!Number.isFinite(price)||price<=0)return {key:'unknown',label:'信息不足',tone:'neutral',reason:'当前价格数据不完整，先不要判断。',action:'等待价格补齐'};
   const distance=buyPointDistance(token,structure), stage=String(structure.stage||'');
+  if((stage==='first_start'||stage==='second_start')&&distance!=null&&distance>=0&&distance<=.08)return {key:stage==='first_start'?'breakout_ready':'second_ready',label:'可执行候选',tone:'safe',reason:`${stage==='first_start'?'首次':'二次'}启动已确认，价格仍在观察线上 0% 到 8% 的执行窗口。`,action:'固定规则成立；止损 -10%，风险自担'};
   if(structure.b_crossed_at!=null&&structure.b_at==null&&distance!=null&&distance>.08)return {key:'too_far',label:'已涨远',tone:'risk',reason:`价格高于观察线 ${fmtChange(distance)}，已超过 +8% 确认窗。`,action:'等待回踩，不追高'};
   if(structure.b_crossed_at!=null&&distance!=null&&distance>=0&&distance<=.08)return {key:'wait_volume',label:'等待量能',tone:'safe',reason:'价格已进入突破确认窗，但量能还没确认。',action:'只观察，等量能确认'};
   if(distance!=null&&distance>=-.05&&distance<0)return {key:'near_buy',label:'接近买点',tone:'safe',reason:`价格距离观察线 ${fmtChange(distance)}，接近观察区。`,action:'进入观察区，不是买入指令'};
   if(distance!=null&&distance>.08)return {key:'wait_setup',label:'等待买点',tone:'neutral',reason:'结构已启动且价格偏高，原买点不再适合作新手参照。',action:'等待回调，不追高'};
   return {key:'wait_setup',label:'等待买点',tone:'neutral',reason:stage==='inactive'?'还没有形成有效突破候选。':'结构还在形成或回调，未到保守观察区。',action:'等待结构形成'};
+}
+function candidatePriority(token,structure){
+  const key=noviceState(token,structure).key;
+  return key==='breakout_ready'||key==='second_ready'?1:0;
 }
 function buyPointAxisHTML(distance){
   if(distance==null)return '';
@@ -527,7 +534,8 @@ function renderTokenList() {
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
   }).filter(t=>stageMatches(structureOf(t.token_address)?.stage,stageFilter));
-  const visible = watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered;
+  const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
+    .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币 · 自选 ${watchlist.size}`;
   renderStageFilter();
 
@@ -539,8 +547,9 @@ function renderTokenList() {
       const v2Tip=v2TipText(v2);
       const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
+      const novice=noviceState(t,structureOf(t.token_address));
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(state.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
+        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(candidatePriority(t,structureOf(t.token_address))?novice.label:state.label)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');

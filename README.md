@@ -43,6 +43,8 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 每个端点新增 `positive`、`negative`、`flat` 和 `positive_sampled_return_rate_pct`；上涨比例的分母仅为可用端点，缺失、右删失单列，零样本为 null。该比例不是交易胜率或扣费收益；按日分组也不自动构成独立验证。上述固定初值用于比较，回放不调参、不改变线上规则、不自动晋级信号；影子采集仍须持续验证数据与效果。
 
+每个结构事件另输出 `path` 与 `exit_strategies` 路径研究，窗口为 4 小时 +5 分钟，收益统一扣除 **2% 假设往返成本**，并给出净收益均值、盈利/亏损笔数和 profit factor。三套固定退出规则分别为：`+10%` 全出、不设固定止盈仅 `-10%` 止损或超时、以及 `+10%` 卖 30%、`+25%` 再卖 30%、剩余仓位按 `max(+8%, 高点回撤20%)` 退出。该结果是只读影子回测，不代表真实成交价格、手续费、滑点、仓位或投资建议；若一个观测点跳过阈值，只能按观测侧归类，无法证明分钟内路径先后。
+
 ## Factor v1 只读回放
 
 ```bash
@@ -70,7 +72,7 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 日志由 systemd/journald 收集：
 
 ```bash
-ssh ubuntu@43.133.91.45 'sudo journalctl -u tmm.service -f -n 100'
+ssh ubuntu@43.131.242.70 'sudo journalctl -u tmm.service -f -n 100'
 ```
 
 ## 检查

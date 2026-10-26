@@ -87,6 +87,8 @@ setImmediate(async () => {
     [{token_symbol:'STALE',token_address:'0xstale',price_usd:.99,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date(Date.now()-180000).toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'data_stale','数据过期'],
     [{token_symbol:'FAR',token_address:'0xfar',price_usd:1.42,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'too_far','已涨远'],
     [{token_symbol:'NEAR',token_address:'0xnear',price_usd:.98,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'near_buy','接近买点'],
+    [{token_symbol:'BREADY',token_address:'0xbready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'["fdv_liquidity_stretched"]',observed_at:new Date().toISOString()},{available:true,stage:'first_start',risk_status:'WARN',data_status:'current',b_crossed_at:1,b_at:2,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'breakout_ready','可执行候选'],
+    [{token_symbol:'CREADY',token_address:'0xcready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_crossed_at:1,b_at:2,c_at:3,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'second_ready','可执行候选'],
     [{token_symbol:'UNKNOWN',token_address:'0xunknown',price_usd:1,liquidity_usd:1000,signal_risk_flags:'broken',observed_at:new Date().toISOString()},null,'unknown','信息不足']
   ];
   for(const [token,structure,key,label] of noviceCases){
@@ -97,6 +99,8 @@ setImmediate(async () => {
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
+assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),1,'confirmed executable candidates must sort above ordinary activity scores');
+assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',updated_at:Math.floor(Date.now()/1000)})`,context),0);
   await new Promise(setImmediate);
 assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
 assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));

@@ -263,12 +263,9 @@ fn volume_hit(current: Option<f64>, baseline: Option<f64>, ratio: f64, minimum: 
 }
 fn risk_status(sample: &Sample, risks: &[String]) -> String {
     if sample.liquidity_usd == Some(0.0)
-        || risks.iter().any(|r| {
-            matches!(
-                r.as_str(),
-                "BLOCK" | "liquidity_near_zero" | "fdv_liquidity_stretched"
-            )
-        })
+        || risks
+            .iter()
+            .any(|r| matches!(r.as_str(), "BLOCK" | "liquidity_near_zero"))
     {
         "BLOCK"
     } else if sample.price.is_none()
@@ -1102,10 +1099,11 @@ mod tests {
         let mut s = watch();
         for (flags, want) in [
             (vec!["sell_pressure"], "WARN"),
+            (vec!["fdv_liquidity_stretched"], "WARN"),
             (vec!["liquidity_withdrawal", "sell_pressure"], "HOLD"),
             (
                 vec!["fdv_liquidity_stretched", "liquidity_withdrawal"],
-                "BLOCK",
+                "HOLD",
             ),
         ] {
             let mut input = sample(s.updated_at + 60, 100.1);
@@ -1459,7 +1457,7 @@ mod tests {
     fn missing_price_holds_risk_without_overriding_a_blocker() {
         for (flags, want) in [
             (vec![], "HOLD"),
-            (vec!["fdv_liquidity_stretched".into()], "BLOCK"),
+            (vec!["fdv_liquidity_stretched".into()], "HOLD"),
         ] {
             let mut s = watch();
             let mut input = sample(T + 120, 100.1);
