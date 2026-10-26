@@ -8,7 +8,7 @@ const nodes = new Map();
 const document = {
   querySelector() { return null; },
   getElementById(id) {
-    if (!nodes.has(id)) nodes.set(id, { innerHTML: '', textContent: '', addEventListener() {}, append() {}, setAttribute() {}, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } } });
+    if (!nodes.has(id)) nodes.set(id, { innerHTML: '', textContent: '', addEventListener() {}, append() {}, setAttribute(name,value) { this[name] = value; }, getAttribute(name) { return this[name]; }, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } } });
     return nodes.get(id);
   },
   createElement() { return { textContent: '', className: '' }; },
@@ -39,7 +39,7 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
-    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null}
+    {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}
   if(url.endsWith('/summary'))return {ok:true,json:async()=>url.includes('0xtoken')?[row,{...row,pair_address:'0xmid',liquidity_usd:50000,volume_h1:5000,signal_score:45,dex_id:'uniswap'}]:[{...row,token_address:'0xother',pair_address:'0xlow',token_symbol:'OTHER',signal_score:20}]};
   if(url.includes('/snapshots?limit=36')) return {ok:true,json:async()=>[0,1,2].slice(0,url.includes('0xnew')?1:3).map(i=>({observed_at:new Date(at-i*60000).toISOString(),price_usd:row.price_usd*(1-i*.01),liquidity_usd:100000,volume_h1:(url.includes('0xmid')?5000:15000)-i*1000}))};
@@ -53,6 +53,12 @@ vm.runInContext('watchlistOnly=false; watchlist.clear()',context);
 assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 'recent list cache should render before the network response');
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
+  await new Promise(setImmediate);
+  assert.equal(vm.runInContext('viewMode',context),'simple','first visit should default to the novice view');
+  assert.equal(storage.get('tmm-view-mode-v1'),undefined,'the default novice choice does not need storage');
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('极简视图 · 新手决策'),'detail should render the novice card');
+  await vm.runInContext('refreshStructure()',context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('信息不足'),'simple list must stay honest when the overview omits price');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('V2阶段：首次启动'), 'V2 tooltip should use Chinese copy');
@@ -79,6 +85,24 @@ setImmediate(async () => {
   assert.equal(vm.runInContext('whaleFlowText({netUsd:0,buyCount:0,sellCount:0})',context),'$0 · 0笔','zero flow must disclose that no large trades were sampled');
   assert.equal(vm.runInContext('structureState({available:true,stage:"watch",b_crossed_at:1,b_at:null,b_breakout_line:1},1.1).label',context),'B 超出确认窗','a runaway unconfirmed breakout must not look ready for immediate confirmation');
   assert.equal(vm.runInContext("structureGuidance({available:true,stage:'watch'}).trigger",context),'30m 突破 + 量能确认');
+  const noviceCases=[
+    [{token_symbol:'RISK',token_address:'0xrisk',price_usd:1.1,liquidity_usd:1000,signal_risk_flags:'["liquidity_withdrawal"]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000),risk_status:'PASS'},'risk_block','不碰'],
+    [{token_symbol:'STALE',token_address:'0xstale',price_usd:.99,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date(Date.now()-180000).toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'data_stale','数据过期'],
+    [{token_symbol:'FAR',token_address:'0xfar',price_usd:1.42,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'too_far','已涨远'],
+    [{token_symbol:'NEAR',token_address:'0xnear',price_usd:.98,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'near_buy','接近买点'],
+    [{token_symbol:'UNKNOWN',token_address:'0xunknown',price_usd:1,liquidity_usd:1000,signal_risk_flags:'broken',observed_at:new Date().toISOString()},null,'unknown','信息不足']
+  ];
+  for(const [token,structure,key,label] of noviceCases){
+    const result=vm.runInContext(`noviceState(${JSON.stringify(token)},${JSON.stringify(structure)})`,context);
+    assert.equal(result.key,key);assert.equal(result.label,label);
+  }
+  const noLine=vm.runInContext(`noviceCardHTML({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000)})`,context);
+  assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
+  assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
+  vm.runInContext("setViewMode('pro')",context);
+  assert.equal(storage.get('tmm-view-mode-v1'),'pro','view choice should persist');
+  assert.equal(document.getElementById('proViewButton').getAttribute('aria-pressed'),'true');
+  await new Promise(setImmediate);
 assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
 assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));
 assert.ok(vm.runInContext(`stageMatches('first_start_extended', new Set(['first_start']))`,context));
