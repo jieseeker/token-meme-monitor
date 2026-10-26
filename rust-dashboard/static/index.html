@@ -127,25 +127,19 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .secondary-metrics b { color:var(--text); }
 .detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
 .detail-panel summary { cursor:pointer; }
-.novice-card { display:grid; gap:16px; padding:18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); box-shadow:var(--shadow-card); }
-.novice-card.stale { border-color:rgba(180,83,9,.35); background:rgba(180,83,9,.025); }
-.novice-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
-.novice-state { font-size:20px; font-weight:850; letter-spacing:-.2px; }
-.novice-state.safe { color:var(--accent-strong); }
-.novice-state.risk { color:var(--danger); }
-.novice-price { font-size:16px; font-weight:750; color:var(--text); font-variant-numeric:tabular-nums; }
-.novice-reason { font-size:13px; color:var(--muted); line-height:1.5; }
+.structure-summary { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:9px 11px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.025); font-size:12px; line-height:1.45; }
+.structure-summary.stale { border-color:rgba(180,83,9,.3); background:rgba(180,83,9,.025); }
+.structure-summary strong { color:var(--text); font-weight:800; }
+.structure-summary strong.safe { color:var(--accent-strong); }
+.structure-summary strong.risk { color:var(--danger); }
+.structure-summary span { color:var(--muted); }
+.structure-summary b { color:var(--text); }
 .buy-axis { display:grid; gap:7px; }
 .buy-axis-scale { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); height:8px; overflow:hidden; border-radius:999px; background:rgba(107,114,128,.14); }
 .buy-axis-scale span { height:100%; }
 .buy-axis-scale span.active { background:var(--accent); }
 .buy-axis-labels { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; font-size:11px; color:var(--muted); text-align:center; }
-.novice-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-.novice-facts div { min-width:0; padding:10px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.025); }
-.novice-facts span { display:block; font-size:11px; color:var(--muted); }
-.novice-facts b { display:block; margin-top:3px; font-size:13px; overflow-wrap:anywhere; }
-.novice-action { padding:11px 13px; border-radius:10px; background:var(--accent-soft); color:var(--accent-strong); font-size:13px; font-weight:750; }
-@media(max-width:600px){ .novice-facts { grid-template-columns:1fr; } .buy-axis-labels { font-size:10px; } }
+@media(max-width:600px){ .buy-axis-labels { font-size:10px; } }
 
 /* Metric cards */
 .metric-card { min-width:0; padding:0 14px; border-right:1px solid var(--line); }
@@ -421,16 +415,6 @@ function buyPointAxisHTML(distance){
   const labels=['等待买点','接近观察区','突破确认窗','已涨远'];
   return `<div class="buy-axis"><div class="buy-axis-scale">${labels.map((_,i)=>`<span class="${i===active?'active':''}"></span>`).join('')}</div><div class="buy-axis-labels">${labels.map((label,i)=>`<span>${i===active?`<b>${label}</b>`:label}</span>`).join('')}</div></div>`;
 }
-function noviceCardHTML(token, structure){
-  const state=noviceState(token,structure), risk=noviceRisk(token,structure), guidance=structureGuidance(structure,Number(token.price_usd));
-  const distance=buyPointDistance(token,structure);
-  return `<div class="novice-card${state.key==='data_stale'?' stale':''}">
-    <div class="novice-head"><div><div class="novice-state ${state.tone}">${state.label}</div><div class="novice-reason">${escapeAttr(state.reason)}</div></div><div class="novice-price">价格 ${fmtPrice(token.price_usd)}</div></div>
-    ${distance==null?'<div class="novice-reason">等待结构形成，暂不画买点距离。</div>':buyPointAxisHTML(distance)}
-    <div class="novice-facts"><div><span>风险</span><b>${escapeAttr(risk.label)}</b></div><div><span>池内资产</span><b>${fmtMoney(token.liquidity_usd)}</b></div><div><span>失效位置</span><b>${escapeAttr(guidance.invalidation)}</b></div></div>
-    <div class="novice-action">建议：${escapeAttr(state.action)}</div>
-  </div>`;
-}
 function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
 function factorProgress(value,kind){
   if(value==null||isNaN(value))return 0;
@@ -444,11 +428,15 @@ function factorItemHTML(key,label,factor){
   return `<div class="factor-item" data-tip="${escapeAttr(factor.help||label)}"><div class="factor-label"><span>${label}</span><span>${escapeAttr(factor.status_label||'中性')}</span></div><div class="factor-value ${cls}">${escapeAttr(factor.display||'--')}</div><div class="factor-bar"><span class="${cls}" style="width:${factorProgress(factor.value,key).toFixed(1)}%"></span></div></div>`;
 }
 function structureCardHTML(token){
-  const structure=structureOf(token);
+  const address=String(token?.token_address||'');
+  const structure=structureOf(address);
   if(!structure)return '<div class="hint">结构数据加载中...</div>';
-  const state=structureState(structure);
+  const price=Number(token?.price_usd);
+  const state=structureState(structure,price);
   if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div></div></div>`;
   const factors=structure.factors||{};
+  const novice=noviceState(token,structure);
+  const distance=buyPointDistance(token,structure);
   const activeIndex=(structure.timeline||[]).findIndex(x=>x.active);
   const timeline=(structure.timeline||[]).map((x,index)=>`<span class="${x.active?'active':index<activeIndex?'done':''}" title="${escapeAttr(x.label)}${x.active?'（当前阶段）':''}"></span>`).join('');
   return `<div class="structure-card">
@@ -459,6 +447,12 @@ function structureCardHTML(token){
       </div>
       <div class="timeline" role="img" aria-label="结构阶段路径：${escapeAttr(structure.stage_label||'未知')}">${timeline}</div>
     </div>
+    <div class="structure-summary${novice.key==='data_stale'?' stale':''}">
+      <strong class="${novice.tone}">${novice.label}</strong>
+      <span>${escapeAttr(novice.reason)}</span>
+      <span>建议：<b>${escapeAttr(novice.action)}</b></span>
+    </div>
+    ${distance==null?'<div class="hint">等待结构形成，暂不画买点距离。</div>':buyPointAxisHTML(distance)}
     <div class="factor-grid">
       ${factorItemHTML('breakout_30m','30m突破',factors.breakout_30m)}
       ${factorItemHTML('relative_volume_30m','相对成交量',factors.relative_volume_30m)}
@@ -606,7 +600,6 @@ function renderDetail() {
   const turnover=t.liquidity_usd>0?t.volume_h1/t.liquidity_usd:null;
   const whaleFlow=whaleFlowCache.get(String(t.token_address||'').toLowerCase());
   document.getElementById('detailPanel').innerHTML=`
-  ${noviceCardHTML(t,structure)}
   <div class="detail-section">
     <div class="section-header">
       <span class="section-heading">${escapeAttr(t.token_symbol)}</span>
@@ -645,7 +638,7 @@ function renderDetail() {
         <span class="section-heading">结构阶段</span>
         <div class="section-meta"><span class="section-copy">趋势与成交</span><span class="section-time" id="structureTime">${updatedAt(structureTime)}</span></div>
       </div>
-      ${structureCardHTML(t.token_address)}
+      ${structureCardHTML(t)}
     </div>
     <div class="detail-section" id="oiSection">
       <div class="section-header">

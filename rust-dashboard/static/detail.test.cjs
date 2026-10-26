@@ -93,7 +93,7 @@ setImmediate(async () => {
     const result=vm.runInContext(`noviceState(${JSON.stringify(token)},${JSON.stringify(structure)})`,context);
     assert.equal(result.key,key);assert.equal(result.label,label);
   }
-  const noLine=vm.runInContext(`noviceCardHTML({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000)})`,context);
+  const noLine=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000),factors:{},timeline:[]});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()})`,context);
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
@@ -103,8 +103,9 @@ assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,contex
 assert.ok(vm.runInContext(`stageMatches('first_start_extended', new Set(['first_start']))`,context));
 assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === stageFilterOptions.length`,context));
   const detail = document.getElementById('detailPanel').innerHTML;
-  assert.ok(detail.includes('class="novice-card"'),'the novice decision card should stay embedded in the full detail page');
-  assert.ok(detail.indexOf('class="novice-card"') < detail.indexOf('class="detail-section"'),'the novice decision should lead the detail page');
+  assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
+  assert.ok(detail.includes('class="structure-summary"'),'the novice summary should be embedded in the structure card');
+  assert.ok(detail.indexOf('class="structure-card"') < detail.indexOf('class="structure-summary"') && detail.indexOf('class="structure-summary"') < detail.indexOf('class="factor-grid"'),'the novice summary should sit inside the structure card before factors');
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
   assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');
