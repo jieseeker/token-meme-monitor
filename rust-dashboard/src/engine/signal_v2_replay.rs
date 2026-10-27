@@ -20,12 +20,13 @@ const PATH_HORIZON_SECONDS: i64 = 14_400;
 const PATH_GRACE_SECONDS: i64 = 300;
 const PATH_TARGET_PCT: f64 = 10.0;
 const PATH_STOP_PCT: f64 = -10.0;
-const PATH_ASSUMED_ROUND_TRIP_COST_PCT: f64 = 2.0;
+const PATH_ASSUMED_ROUND_TRIP_COST_PCT: f64 = 0.0;
 const EXIT_STRATEGY_NAMES: [&str; 3] = [
     "fixed_take_profit",
     "no_fixed_take_profit",
     "ladder_take_profit",
 ];
+const A_ENTRY_DELAYS_SECONDS: [i64; 3] = [60, 180, 300];
 const B_COHORTS: [&str; 9] = [
     "all",
     "pass",
@@ -226,6 +227,12 @@ struct Pending {
     ladder_high_pct: f64,
     ladder_first: bool,
     ladder_second: bool,
+}
+
+struct DelayedEntry {
+    key: String,
+    pair: String,
+    target: DateTime<Utc>,
 }
 
 /// Opens the source read-only before any application startup, migration, or persistence.
@@ -474,6 +481,8 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         },
         "methods":{
             "ordering":"stream by token and SQLite millisecond time, exact RFC3339 sort within ties; independent stored request groups; engine clock is Unix seconds",
+            "a_entry_filters":"A/pass requires contemporaneous risk PASS; pass_recent_volume additionally requires positive current m5 >= current h1/12; pass_near_breakout uses the then-known frozen line when present; cohorts without sufficient trigger evidence remain absent rather than guessed",
+            "entry_timing":"A/delay_60s, A/delay_180s, and A/delay_300s start at the first valid future observation in [A+delay,A+delay+300s], using that observation's price; no delayed event is invented when coverage is missing",
             "reference":"first eligible stored response group, highest liquidity then lowest pool address, frozen prospectively",
             "history":"only prior positive-price reference-pool samples within the replay window and 24h, 4096 raw observations maximum; overflow cancels evidence",
             "legacy_grouping":"same token and exact observed_at proxy request identity; only empty metadata eligible for proxy fallback",
@@ -482,7 +491,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
             "forward_denominator":"all structural stage events, split into eligible, endpoint_missing, right_censored; right censor if replay ends before target+300s without a usable endpoint",
             "returns":"sampled endpoint price change only; no execution, profit, fees, slippage, or path/extrema labels",
             "path":"observed snapshot path after each structural event; first observed +10% or -10% decides target/stop within 4h+300s, otherwise the first later observation exits at timeout; a single jumped observation is assigned to its observed side and cannot prove intraperiod ordering",
-            "profit":"target and stop gross returns are fixed at +10%/-10%; timeout uses sampled price change; all exits subtract an explicitly assumed 2% round-trip cost; no venue fill, actual fee, slippage, or position size is claimed",
+            "profit":"target and stop gross returns are fixed at +10%/-10%; timeout uses sampled price change; net return currently deducts no fee or slippage; no venue fill, actual fee, slippage, or position size is claimed",
             "exit_strategies":"fixed_take_profit exits fully at +10%; no_fixed_take_profit holds until -10% stop or timeout; ladder_take_profit sells 30% at +10%, 30% at +25%, then exits the remainder at the greater of +8% or a 20% drawdown from the observed high, with timeout as fallback",
         },
         "limitations":["all upstream source times unverified", "metadata verifies individual recorded rows, not response completeness; partial-write survivors may be replayed", "collected-input replay does not reproduce runtime skips from retirement failure, shadow mode/cooldown, observe/save failure or subsequent recovery", "historical request failures and original selected-pool sets unavailable for legacy rows", "proxy numeric presence and response identity unverified; zero legacy volumes unknown", "risk and score use stored contemporaneous evidence only; missing/conflicting evidence holds", "no current pairs or active-universe selection; four case identities remain unverified", "endpoint sampling does not establish continuous tradeable price coverage"]
@@ -667,6 +676,69 @@ fn b_cohorts(
     (names, recent)
 }
 
+fn a_cohorts(state: &State, current: &Sample) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if state.risk_status != "PASS" {
+        return names;
+    }
+    names.push("pass");
+    let recent = current
+        .volume_m5
+        .zip(current.volume_h1)
+        .map(|(m5, h1)| m5 > 0.0 && h1 > 0.0 && m5 >= h1 / 12.0);
+    let line = state.reference_upper.map(|upper| upper * 1.005);
+    let near = current
+        .price
+        .zip(line)
+        .map(|(price, upper)| price <= upper * 1.03)
+        .unwrap_or(false);
+    if recent == Some(true) {
+        names.push("pass_recent_volume");
+    }
+    if near {
+        names.push("pass_near_breakout");
+    }
+    if recent == Some(true) && near {
+        names.push("pass_both");
+    }
+    names
+}
+
+fn new_pending(keys: Vec<String>, at: DateTime<Utc>, pair: &str, price: f64) -> Pending {
+    Pending {
+        keys,
+        at,
+        pair: pair.into(),
+        price,
+        previous: (at, price),
+        remaining: HORIZONS.to_vec(),
+        path_exit: None,
+        strategy_exits: EXIT_STRATEGY_NAMES
+            .into_iter()
+            .map(|name| (name.into(), None))
+            .collect(),
+        ladder_high_pct: 0.0,
+        ladder_first: false,
+        ladder_second: false,
+    }
+}
+
+fn record_event_start(hits: &mut BTreeMap<String, Hits>, keys: &[String], sample: &Sample) {
+    for key in keys {
+        let hit = hits.entry(key.clone()).or_default();
+        hit.events += 1;
+        hit.first_at = Some(hit.first_at.unwrap_or(sample.at).min(sample.at));
+        hit.last_at = Some(hit.last_at.unwrap_or(sample.at).max(sample.at));
+        for outcome in hit.forward.values_mut() {
+            outcome.denominator += 1;
+        }
+        hit.path.denominator += 1;
+        for outcome in hit.exit_strategies.values_mut() {
+            outcome.denominator += 1;
+        }
+    }
+}
+
 #[derive(Default)]
 struct TokenReplay {
     from: i64,
@@ -676,6 +748,7 @@ struct TokenReplay {
     overflow_until: Option<i64>,
     previous_reference: Option<DateTime<Utc>>,
     pending: Vec<Pending>,
+    delayed: Vec<DelayedEntry>,
 }
 fn flush(
     conn: &Connection,
@@ -736,6 +809,7 @@ impl TokenReplay {
             overflow_until,
             previous_reference,
             pending,
+            delayed,
         } = self;
         let at = group[0].at;
         count(input, "groups");
@@ -744,6 +818,37 @@ impl TokenReplay {
         }
         // Forward labels consume later data separately; detection receives no future rows.
         labels(pending, group, at, hits);
+        delayed.retain(|entry| {
+            if at < entry.target {
+                return true;
+            }
+            if at > entry.target + Duration::seconds(PATH_GRACE_SECONDS) {
+                return false;
+            }
+            if let Some(sample) = group
+                .iter()
+                .find(|row| row.pair == entry.pair)
+                .and_then(|row| row.sample.as_ref())
+                .filter(|sample| sample.price.is_some_and(|price| price > 0.0))
+            {
+                let key = entry.key.clone();
+                pending.push(new_pending(
+                    vec![key.clone()],
+                    at,
+                    &entry.pair,
+                    sample.price.unwrap(),
+                ));
+                record_event_start(hits, &[key], sample);
+                if let Some(state) = state.as_ref() {
+                    if let Some(hit) = hits.get_mut(&entry.key) {
+                        count(&mut hit.risk_status, &state.risk_status);
+                        count(&mut hit.data_status, &state.data_status);
+                    }
+                }
+                return false;
+            }
+            true
+        });
         if state
             .as_ref()
             .is_some_and(|s| at.timestamp().saturating_sub(s.first_seen_at) >= 7 * 86400)
@@ -883,6 +988,18 @@ impl TokenReplay {
                 continue;
             }
             let mut keys = vec![stage.to_string()];
+            if stage == "A" {
+                for name in a_cohorts(state, current) {
+                    keys.push(format!("A/{name}"));
+                }
+                for delay in A_ENTRY_DELAYS_SECONDS {
+                    delayed.push(DelayedEntry {
+                        key: format!("A/delay_{delay}s"),
+                        pair: state.pair_address.clone(),
+                        target: at + Duration::seconds(delay),
+                    });
+                }
+            }
             if stage == "B" {
                 let baseline = if state.risk_status == "PASS" {
                     crossing_m5(conn, token, state, proxy)?
@@ -907,35 +1024,16 @@ impl TokenReplay {
             }
             for key in &keys {
                 let hit = hits.entry(key.clone()).or_default();
-                hit.events += 1;
-                hit.first_at = Some(hit.first_at.unwrap_or(current.at).min(current.at));
-                hit.last_at = Some(hit.last_at.unwrap_or(current.at).max(current.at));
                 count(&mut hit.risk_status, &state.risk_status);
                 count(&mut hit.data_status, &state.data_status);
-                for outcome in hit.forward.values_mut() {
-                    outcome.denominator += 1;
-                }
-                hit.path.denominator += 1;
-                for outcome in hit.exit_strategies.values_mut() {
-                    outcome.denominator += 1;
-                }
             }
-            pending.push(Pending {
+            record_event_start(hits, &keys, current);
+            pending.push(new_pending(
                 keys,
                 at,
-                pair: state.pair_address.clone(),
-                price: current.price.unwrap(),
-                previous: (at, current.price.unwrap()),
-                remaining: HORIZONS.to_vec(),
-                path_exit: None,
-                strategy_exits: EXIT_STRATEGY_NAMES
-                    .into_iter()
-                    .map(|name| (name.into(), None))
-                    .collect(),
-                ladder_high_pct: 0.0,
-                ladder_first: false,
-                ladder_second: false,
-            });
+                &state.pair_address,
+                current.price.unwrap(),
+            ));
         }
         history.push_back(current.clone());
         if history.len() > 4097 {
@@ -1301,7 +1399,7 @@ mod tests {
         conn.execute("UPDATE snapshots SET volume_m5=3000", [])
             .unwrap();
         let before = db.replay(false);
-        assert_eq!(before["structural_hits"].as_object().unwrap().len(), 3);
+        assert_eq!(before["structural_hits"]["A"]["events"], 1);
         assert_eq!(before["structural_hits"]["B"]["events"], 1);
         for cohort in [
             "all",
@@ -1338,10 +1436,51 @@ mod tests {
         assert_eq!(after["opportunity_eligible_events"], 0);
     }
     #[test]
+    fn replay_a_cohorts_use_trigger_evidence_without_waiting_for_b() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["A"]["events"], 1);
+        for cohort in ["pass", "pass_recent_volume"] {
+            assert_eq!(
+                report["structural_hits"][format!("A/{cohort}")]["events"],
+                1,
+                "{cohort}"
+            );
+        }
+    }
+    #[test]
+    fn replay_a_delayed_entries_sample_the_future_price_once() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        for delay in [60, 180, 300] {
+            db.insert(T - 86_400 + delay, "a", 102.0, 30000.0, 70003.0, true);
+            db.insert(T - 86_400 + delay + 900, "a", 112.0, 30000.0, 70004.0, true);
+            db.insert(T - 86_400 + delay + 600, "a", 103.0, 30000.0, 70005.0, true);
+        }
+        let report = db.replay(false);
+        for delay in [60, 180, 300] {
+            let cohort = &report["structural_hits"][format!("A/delay_{delay}s")];
+            assert_eq!(cohort["events"], 1, "{delay}");
+            assert_eq!(cohort["forward"]["15m"]["denominator"], 1, "{delay}");
+            let expected = (112.0 / 102.0 - 1.0) * 100.0;
+            let actual = cohort["forward"]["15m"]["mean_sampled_return_pct"]
+                .as_f64()
+                .unwrap();
+            assert!((actual - expected).abs() < 1e-9, "{delay}");
+        }
+    }
+    #[test]
     fn replay_path_outcome_separates_target_and_stop_before_changing_win_rate() {
         for (later_price, outcome, net, profit_factor) in [
-            (112.0, "target_first", 8.0, None),
-            (89.0, "stop_first", -12.0, Some(0.0)),
+            (112.0, "target_first", 10.0, None),
+            (89.0, "stop_first", -10.0, Some(0.0)),
         ] {
             let db = Database::new();
             breakout(&db);
