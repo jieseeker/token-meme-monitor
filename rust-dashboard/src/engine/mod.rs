@@ -1,3 +1,4 @@
+pub mod alpha_discovery;
 pub mod factor_v1;
 pub mod factor_v1_replay;
 pub mod features;

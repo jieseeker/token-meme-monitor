@@ -43,6 +43,21 @@ async fn main() {
         return;
     }
 
+    if mode == "alpha-discovery-audit" {
+        let top_n = args
+            .get(2)
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(20);
+        match engine::alpha_discovery::audit(&db_path, top_n) {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("alpha-discovery-audit: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // Ensure parent dir
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
         let _ = std::fs::create_dir_all(parent);

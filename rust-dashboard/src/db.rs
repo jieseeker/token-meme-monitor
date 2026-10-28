@@ -186,6 +186,24 @@ pub fn init_schema(path: &str) -> Result<(), rusqlite::Error> {
         CREATE INDEX IF NOT EXISTS idx_snapshots_pair ON snapshots(pair_address, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_token ON snapshots(token_address, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at ON snapshots(observed_at);
+        CREATE TABLE IF NOT EXISTS alpha_universe_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bucket_start TEXT NOT NULL,
+            token_address TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            price_usd REAL,
+            price_change_h24 REAL,
+            volume_h24 REAL,
+            liquidity_usd REAL,
+            market_cap REAL,
+            holders INTEGER,
+            futures_listed INTEGER NOT NULL DEFAULT 0,
+            raw_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(token_address, bucket_start)
+        );
+        CREATE INDEX IF NOT EXISTS idx_alpha_universe_time ON alpha_universe_snapshots(observed_at);
         CREATE TABLE IF NOT EXISTS signal_v2_state (
             token_address TEXT PRIMARY KEY,
             pair_address TEXT NOT NULL,
@@ -254,6 +272,7 @@ pub fn prune_history(path: &str) -> Result<bool, rusqlite::Error> {
     tx.execute("DELETE FROM signal_v2_state WHERE token_address IN (SELECT token_address FROM signal_v2_state WHERE first_seen_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
     tx.execute("DELETE FROM signal_v2_changes WHERE id IN (SELECT id FROM signal_v2_changes WHERE recorded_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
     tx.execute("DELETE FROM detail_cache WHERE updated_at < ?1", [&cutoff])?;
+    tx.execute("DELETE FROM alpha_universe_snapshots WHERE id IN (SELECT id FROM alpha_universe_snapshots WHERE observed_at < ?1 LIMIT 10000)", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_signals AS SELECT id FROM signals WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_snapshots AS SELECT id FROM snapshots WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
     for table in [

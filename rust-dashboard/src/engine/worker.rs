@@ -7,6 +7,7 @@ use crate::clients::binance_alpha::BinanceAlphaClient;
 use crate::clients::dexscreener::DexScreenerClient;
 use crate::config::{Config, SignalV2Mode};
 use crate::db;
+use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -65,6 +66,25 @@ pub async fn run_worker(db_path: &str) {
             match alpha.fetch_bsc_tokens().await {
                 Ok(tokens) if !tokens.is_empty() => {
                     if let Some(symbols) = binance_futures_symbols().await {
+                        let futures_addresses: HashSet<String> = tokens
+                            .iter()
+                            .filter(|token| {
+                                symbols.contains(&format!("{}USDT", token.symbol.to_uppercase()))
+                            })
+                            .map(|token| token.address.clone())
+                            .collect();
+                        if let Err(error) = super::alpha_discovery::record_snapshots(
+                            db_path,
+                            &tokens,
+                            &futures_addresses,
+                            Utc::now(),
+                        ) {
+                            crate::logging::event(
+                                "error",
+                                "alpha_universe_audit_save_failed",
+                                serde_json::json!({"error":error.to_string()}),
+                            );
+                        }
                         let listed = futures_listed_tokens(tokens, &symbols);
                         if !listed.is_empty() {
                             let active: Vec<String> =

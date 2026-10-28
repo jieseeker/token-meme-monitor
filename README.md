@@ -47,6 +47,14 @@ A 信号同步输出风险 PASS、近期量能、贴近突破线等入场分组�
 
 每个结构事件另输出 `path` 与 `exit_strategies` 路径研究，窗口为 4 小时 +5 分钟；当前净收益口径**不扣除手续费和滑点**，并给出净收益均值、盈利/亏损笔数和 profit factor。三套固定退出规则分别为：`+10%` 全出、不设固定止盈仅 `-10%` 止损或超时、以及 `+10%` 卖 30%、`+25%` 再卖 30%、剩余仓位按 `max(+8%, 高点回撤20%)` 退出。该结果是只读影子回测，不代表真实成交价格、手续费、滑点、仓位或投资建议；若一个观测点跳过阈值，只能按观测侧归类，无法证明分钟内路径先后。
 
+## Alpha 潜力漏抓审计
+
+```bash
+MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm alpha-discovery-audit [top_n]
+```
+
+Worker 在 Binance 合约过滤前保存全量 BSC Alpha 列表，按代币和 5 分钟桶去重，保留 7 天。审计按已存储的最大 24h 涨幅输出 Top N，并将每个头部代币分为 `monitored`、`futures_listed_unmonitored`、`not_futures_listed`，用于判断高潜力币是在源头被合约过滤、进入后未形成活跃池，还是已被当前页面覆盖。该口径只做发现漏斗审计，不代表可交易信号。
+
 ## Factor v1 只读回放
 
 ```bash
