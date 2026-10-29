@@ -753,6 +753,78 @@ fn persisted_calibration(db_path: &str) -> Option<Value> {
     }))
 }
 
+pub fn history(db_path: &str, limit: usize) -> Result<Value> {
+    let database = std::path::Path::new(db_path);
+    let parent = database.parent().ok_or("invalid database path")?;
+    let root = if parent.file_name().is_some_and(|name| name == "data") {
+        parent.parent().ok_or("invalid database parent")?
+    } else {
+        parent
+    };
+    let directory = root.join("monitoring-runtime/continuous/early-warning");
+    let mut files: Vec<_> = std::fs::read_dir(&directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "json")
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("early-warning-"))
+        })
+        .collect();
+    files.sort_by_key(|entry| {
+        entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+    });
+    let reports = files
+        .into_iter()
+        .rev()
+        .take(limit)
+        .map(|entry| -> Result<Value> {
+            let report: Value = serde_json::from_str(&std::fs::read_to_string(entry.path())?)?;
+            let rate = |rule: &str, count: &str| -> Option<f64> {
+                let outcome = &report["rules"][rule]["forward"]["4h"];
+                let eligible = outcome["eligible"].as_u64()?;
+                (eligible > 0).then_some(outcome[count].as_u64()? as f64 / eligible as f64 * 100.0)
+            };
+            let ladder = &report["rules"]["volume"]["exit_strategies"]["ladder_take_profit"];
+            let cost = |value: f64| -> Option<f64> {
+                ladder
+                    .as_array()
+                    .and_then(|items| items.iter().find(|item| item["cost_pct"].as_f64() == Some(value)))
+                    .and_then(|item| item["mean_net_return_pct"].as_f64())
+            };
+            Ok(json!({
+                "report":entry.file_name(),
+                "replay_until":report["window"]["replay_until"],
+                "volume_events":report["rules"]["volume"]["events"],
+                "volume_tokens":report["rules"]["volume"]["tokens"],
+                "volume_followed_by_a":report["rules"]["volume"].get("followed_by_a").cloned().unwrap_or_else(|| json!(null)),
+                "a_lead_median_seconds":report["rules"]["volume"].get("a_lead_median_seconds").cloned().unwrap_or_else(|| json!(null)),
+                "volume_gt_5pct":rate("volume","gt_5pct"),
+                "volume_gt_10pct":rate("volume","gt_10pct"),
+                "baseline_gt_5pct":rate("baseline","gt_5pct"),
+                "baseline_gt_10pct":rate("baseline","gt_10pct"),
+                "ladder_net_0_3pct":cost(0.3),
+                "ladder_net_0_5pct":cost(0.5)
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json!({
+        "source_time_unverified":true,"reports":reports,
+        "methods":{"source":"persisted early-warning replay reports","order":"newest first"}
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,5 +960,33 @@ mod tests {
         assert_eq!(calibration["baseline_gt_5pct_pct"], 10.0);
         std::fs::remove_file(&report_path).unwrap();
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn history_summarizes_persisted_reports() {
+        let root = std::env::temp_dir().join("tmm-early-warning-history-check");
+        let directory = root.join("monitoring-runtime/continuous/early-warning");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let database = root.join("data/monitor.db");
+        crate::db::init_schema(database.to_str().unwrap()).unwrap();
+        let report = json!({
+            "window":{"replay_until":"2026-01-01T12:00:00Z"},
+            "rules":{
+                "volume":{"events":10,"followed_by_a":2,"a_lead_median_seconds":600,"forward":{"4h":{"eligible":10,"gt_5pct":3,"gt_10pct":1}},"exit_strategies":{"ladder_take_profit":[{"cost_pct":0.3,"mean_net_return_pct":1.2,"profit_factor":1.3},{"cost_pct":0.5,"mean_net_return_pct":0.4,"profit_factor":1.05}]}},
+                "baseline":{"forward":{"4h":{"eligible":100,"gt_5pct":10,"gt_10pct":3}}}
+            }
+        });
+        let report_path = directory.join("early-warning-test.json");
+        std::fs::write(&report_path, report.to_string()).unwrap();
+        let history = history(database.to_str().unwrap(), 10).unwrap();
+        assert_eq!(history["reports"].as_array().unwrap().len(), 1);
+        let item = &history["reports"][0];
+        assert_eq!(item["volume_events"], 10);
+        assert_eq!(item["volume_gt_5pct"], 30.0);
+        assert_eq!(item["baseline_gt_5pct"], 10.0);
+        assert_eq!(item["ladder_net_0_3pct"], 1.2);
+        assert_eq!(item["ladder_net_0_5pct"], 0.4);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

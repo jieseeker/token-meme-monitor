@@ -69,6 +69,8 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 顶部“自选提醒”可申请浏览器通知权限。仅自选代币出现活跃前置异动时提醒，同一代币同一状态 15 分钟内去重；通知文案始终标明“预测观察，不是买入指令”。
 
+“预测趋势”浮层通过 `GET /api/early-warning/history?limit=12` 读取最近的持续回放报告，展示每轮事件数、4h >5% 命中率、基线、0.3%/0.5% 成本后净收益与 A 提前量。
+
 ### 已监控高涨幅币复盘
 
 ```bash

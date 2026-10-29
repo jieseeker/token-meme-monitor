@@ -29,6 +29,12 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .refresh-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
 .notify-toggle { flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); cursor:pointer; }
 .notify-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
+.history-panel { position:fixed; z-index:80; right:20px; top:78px; width:min(760px,calc(100vw - 32px)); max-height:min(520px,calc(100vh - 100px)); overflow:auto; padding:16px 18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); box-shadow:0 18px 48px rgba(15,23,42,.22); }
+.history-panel[hidden] { display:none; }
+.history-table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
+.history-table th,.history-table td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+.history-table th:first-child,.history-table td:first-child { text-align:left; }
+.history-table th { color:var(--muted); font-weight:650; }
 @media(max-width:600px){ .top-bar { align-items:flex-start; flex-direction:column; gap:10px; padding:12px 14px; } .toolbar-subtitle { line-height:1.5; } .top-right { flex-wrap:wrap; row-gap:8px; } }
 
 .main { display:grid; grid-template-columns:minmax(260px,300px) minmax(0,1fr); gap:20px; padding:20px 24px 40px; max-width:118rem; margin:auto; }
@@ -226,6 +232,7 @@ svg.chart.price-chart { height:104px; }
   <div class="top-right">
     <div class="token-count" id="tokenCount">统计中...</div>
     <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
+    <button class="notify-toggle" id="historyToggle" type="button">预测趋势</button>
     <button class="notify-toggle" id="notifyToggle" type="button">自选提醒</button>
   </div>
 </div>
@@ -248,6 +255,13 @@ svg.chart.price-chart { height:104px; }
   </div>
 </div>
 <div id="scoreTooltip" class="score-tooltip" role="tooltip" hidden></div>
+<div class="history-panel" id="earlyHistoryPanel" hidden>
+  <div class="section-header">
+    <span class="section-heading">预测趋势</span>
+    <div class="section-meta"><span class="section-copy">滚动回放</span><button class="watch-button" id="earlyHistoryClose" type="button">关闭</button></div>
+  </div>
+  <div id="earlyHistoryBody"><div class="hint">加载历史回放...</div></div>
+</div>
 
 <script>
 const REFRESH_MS = 15000;
@@ -1045,6 +1059,8 @@ try{
 }catch{}
 renderStageFilter();
 updateNotifyToggle();
+document.getElementById('historyToggle')?.addEventListener('click',()=>toggleEarlyHistory());
+document.getElementById('earlyHistoryClose')?.addEventListener('click',()=>toggleEarlyHistory(false));
 document.getElementById('notifyToggle')?.addEventListener('click',enableEarlyWarningNotifications);
 
 function refreshStructure(){
@@ -1102,6 +1118,41 @@ function notifyEarlyWarnings(){
     });
   }
   try{localStorage.setItem(EARLY_WARNING_NOTIFY_KEY,JSON.stringify(sent));}catch{}
+}
+
+function fmtSignedPct(value){return value==null||isNaN(value)?'--':`${value>0?'+':''}${value.toFixed(2)}%`;}
+function fmtDuration(seconds){
+  if(seconds==null||!Number.isFinite(seconds))return '--';
+  if(seconds<60)return`${Math.round(seconds)}秒`;
+  if(seconds<3600)return`${Math.round(seconds/60)}分钟`;
+  return`${(seconds/3600).toFixed(1)}小时`;
+}
+function earlyHistoryHTML(result){
+  const rows=(result?.reports||[]).map(item=>`<tr>
+    <td>${escapeAttr(new Date(item.replay_until).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</td>
+    <td>${Number(item.volume_events||0)}</td>
+    <td>${escapeAttr(fmtSignedPct(item.volume_gt_5pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.ladder_net_0_3pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.ladder_net_0_5pct))}</td>
+    <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
+  </tr>`).join('');
+  return rows?`<table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>4h&gt;5%</th><th>基线</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>A提前量</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">暂无历史回放报告。</div>';
+}
+
+async function toggleEarlyHistory(force){
+  const panel=document.getElementById('earlyHistoryPanel');
+  if(!panel)return;
+  const open=force===true?true:force===false?false:panel.hidden!==false;
+  panel.hidden=!open;
+  if(!open)return;
+  const body=document.getElementById('earlyHistoryBody');
+  try{
+    const result=await fetchJSON('/api/early-warning/history?limit=12');
+    body.innerHTML=earlyHistoryHTML(result);
+  }catch(e){
+    body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
+  }
 }
 
 async function refresh(){

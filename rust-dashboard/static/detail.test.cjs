@@ -47,6 +47,9 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString()}
   ],historical_calibration:{volume_anomaly_gt_5pct_pct:13.68,baseline_gt_5pct_pct:7.31,strong_anomaly_gt_5pct_pct:15.12}})};
+  if(url==='/api/early-warning/history?limit=12')return {ok:true,json:async()=>({reports:[
+    {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01}
+  ]})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}
@@ -70,6 +73,10 @@ setImmediate(async () => {
   assert.ok(TestNotification.instances[0].title.includes('TEST'),'notification should identify the token');
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.equal(TestNotification.instances.length,1,'the same early warning state must not notify again within 15 minutes');
+  await vm.runInContext('toggleEarlyHistory(true)',context);
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('13.68%'),'history must show volume hit rate');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('7.31%'),'history must show baseline hit rate');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('+0.21%'),'history must show 0.3% cost result');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
