@@ -2641,7 +2641,7 @@ async fn market_state_handler(
                 Json(serde_json::json!({"error": e.to_string()})),
             )
         })?;
-    let report = market_state(list_overview(rows));
+    let report = market_state(display_overview(rows));
     let mut response = Json(report).into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,
