@@ -684,19 +684,72 @@ pub fn current(path: &str) -> Result<Value> {
         )
     });
     let items: Vec<Value> = items.into_iter().map(|(_, _, item)| item).collect();
+    let historical_calibration = persisted_calibration(path).unwrap_or(json!({
+        "window_days":7,"horizon":"4h",
+        "volume_anomaly_gt_5pct_pct":13.68,"baseline_gt_5pct_pct":7.31,
+        "volume_anomaly_gt_10pct_pct":6.71,"baseline_gt_10pct_pct":3.19,
+        "strong_anomaly_gt_5pct_pct":15.12,"strong_anomaly_gt_10pct_pct":5.81
+    }));
     Ok(json!({
         "source_time_unverified":true,"items":items,
-        "historical_calibration":{
-            "window_days":7,"horizon":"4h",
-            "volume_anomaly_gt_5pct_pct":13.68,"baseline_gt_5pct_pct":7.31,
-            "volume_anomaly_gt_10pct_pct":6.71,"baseline_gt_10pct_pct":3.19,
-            "strong_anomaly_gt_5pct_pct":15.12,"strong_anomaly_gt_10pct_pct":5.81
-        },
+        "historical_calibration":historical_calibration,
         "methods":{
             "window":"current sample plus positive m5 history within 30m; duplicate unchanged polling values within 60s are removed",
             "status":"strong_anomaly requires volume>=2x median, buy pressure>=65%, m5/liquidity>=1.5%, and 5m return 0-3%; volume_anomaly requires 2x volume and 1% liquidity efficiency with 5m return -1-3%",
             "prediction":"historical probabilities describe similar past observations; no guarantee or trading instruction is claimed"
         }
+    }))
+}
+
+fn persisted_calibration(db_path: &str) -> Option<Value> {
+    let database = std::path::Path::new(db_path);
+    let parent = database.parent()?;
+    let root = if parent.file_name().is_some_and(|name| name == "data") {
+        parent.parent()?
+    } else {
+        parent
+    };
+    let directory = root.join("monitoring-runtime/continuous/early-warning");
+    let latest = std::fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "json")
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("early-warning-"))
+        })
+        .max_by_key(|entry| {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .map(|time| {
+                    time.duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default()
+        })?;
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(latest.path()).ok()?).ok()?;
+    let rate = |rule: &str, count: &str| -> Option<f64> {
+        let outcome = &report["rules"][rule]["forward"]["4h"];
+        let eligible = outcome["eligible"].as_u64()?;
+        (eligible > 0).then_some(outcome[count].as_u64()? as f64 / eligible as f64 * 100.0)
+    };
+    Some(json!({
+        "window_days":report["window"]["max_days"],
+        "horizon":"4h",
+        "volume_anomaly_gt_5pct_pct":rate("volume","gt_5pct")?,
+        "baseline_gt_5pct_pct":rate("baseline","gt_5pct")?,
+        "volume_anomaly_gt_10pct_pct":rate("volume","gt_10pct")?,
+        "baseline_gt_10pct_pct":rate("baseline","gt_10pct")?,
+        "strong_anomaly_gt_5pct_pct":rate("strong","gt_5pct")?,
+        "strong_anomaly_gt_10pct_pct":rate("strong","gt_10pct")?
     }))
 }
 
@@ -802,6 +855,38 @@ mod tests {
         assert!((item["buy_pressure"].as_f64().unwrap() - 0.8).abs() < 1e-9);
         assert_eq!(item["evidence_count"], 6);
         assert!((item["return_5m_pct"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn current_report_prefers_latest_persisted_calibration() {
+        let path = database("calibration");
+        let conn = Connection::open(&path).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for offset in [1800, 1500, 1200, 900, 300] {
+            insert(&conn, now - offset, 100.0, 100.0, 50, 50);
+        }
+        insert(&conn, now, 101.0, 100.0, 50, 50);
+        let report_path = std::env::temp_dir().join(
+            "monitoring-runtime/continuous/early-warning/early-warning-current-calibration.json",
+        );
+        std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
+        let report = json!({
+            "rules":{
+                "volume":{"forward":{"4h":{"eligible":100,"gt_5pct":20,"gt_10pct":10}}},
+                "strong":{"forward":{"4h":{"eligible":50,"gt_5pct":12,"gt_10pct":6}}},
+                "baseline":{"forward":{"4h":{"eligible":1000,"gt_5pct":100,"gt_10pct":30}}}
+            }
+        });
+        std::fs::write(&report_path, report.to_string()).unwrap();
+        let current = current(&path).unwrap();
+        let calibration = &current["historical_calibration"];
+        assert_eq!(calibration["volume_anomaly_gt_5pct_pct"], 20.0);
+        assert_eq!(calibration["volume_anomaly_gt_10pct_pct"], 10.0);
+        assert_eq!(calibration["strong_anomaly_gt_5pct_pct"], 24.0);
+        assert_eq!(calibration["strong_anomaly_gt_10pct_pct"], 12.0);
+        assert_eq!(calibration["baseline_gt_5pct_pct"], 10.0);
+        std::fs::remove_file(&report_path).unwrap();
         std::fs::remove_file(&path).unwrap();
     }
 }
