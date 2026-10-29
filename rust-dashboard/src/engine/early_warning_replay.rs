@@ -343,8 +343,7 @@ pub fn current(path: &str) -> Result<Value> {
                 s.liquidity_usd,s.buys_m5,s.sells_m5
          FROM snapshots s JOIN pairs p ON p.pair_address=s.pair_address
          WHERE p.chain_id='bsc' AND p.active=1 AND s.price_usd IS NOT NULL
-           AND s.observed_at >= ?1
-         ORDER BY s.token_address,s.pair_address,s.observed_at",
+           AND s.observed_at >= ?1",
     )?;
     let rows = query.query_map([cutoff], |row| {
         Ok((
