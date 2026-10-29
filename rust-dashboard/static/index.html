@@ -455,12 +455,16 @@ function confirmationState(token){
   const warning=earlyWarningRows.get(address);
   const ageSeconds=Number.isFinite(v2?.first_seen_at)?Math.max(0,Math.floor(Date.now()/1000-v2.first_seen_at)):null;
   const candidate=v2?.stage==='watch'&&v2?.risk_status==='PASS'&&warning?.is_active===true&&ageSeconds!=null;
-  const active=candidate&&ageSeconds<=300;
-  const label=!candidate?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
+  const slippage=warning?.slippage_estimates?.estimates||[];
+  const slippage100=slippage.find(row=>Number(row.order_usd)===100)?.buy_slippage_pct;
+  const slippage1000=slippage.find(row=>Number(row.order_usd)===1000)?.buy_slippage_pct;
+  const highSlippage=Number(slippage1000)>0.5||Number(slippage100)>0.3;
+  const active=candidate&&ageSeconds<=300&&!highSlippage;
+  const label=highSlippage?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:!candidate?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
   return {
     active,
     label,
-    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
+    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
