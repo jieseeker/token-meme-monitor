@@ -77,6 +77,8 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 强确认还受深度缓存滑点准入约束：`$100` 估算买入滑点超过 `0.30%` 或 `$1K` 超过 `0.50%` 时显示“滑点过高”，不再获得强确认排序。深度缓存缺失时显示 `--`，不虚构滑点。
 
+`scripts/confirmation_shadow.py` 每 5 分钟读取实时 `/api/signal-v2` 与 `/api/early-warning`，把页面当时的 `strong / aging / slippage_blocked / stale` 状态、A 年龄、量能、买压、滑点和入场价写入 `confirmation_shadow_events`，并从同池快照回填 15m/1h/4h 采样结果。同一 A 事件同一状态只保留首见记录；状态迁移会形成独立影子事件，用于验证页面展示信号的真实效果。
+
 “预测趋势”浮层通过 `GET /api/early-warning/history?limit=12` 读取最近的持续回放报告，展示每轮事件数、4h >5% 命中率、基线、0.3%/0.5% 成本后净收益与 A 提前量。
 
 前置预测卡片同时读取同池最近深度缓存，按 `1%/2%/5%` 压力档位插值估算 `$100` 与 `$1000` 买入滑点；深度缓存缺失时显示 `--`，不会为此发起新的链上请求。
