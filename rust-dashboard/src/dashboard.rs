@@ -235,7 +235,7 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
     }
     let mut statement = connection
         .prepare(
-            "SELECT classification,outcome_state,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct
+            "SELECT classification,outcome_state,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct,market_state
              FROM confirmation_shadow_events",
         )
         .map_err(|error| error.to_string())?;
@@ -247,6 +247,7 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
                 row.get::<_, Option<f64>>(2)?,
                 row.get::<_, Option<f64>>(3)?,
                 row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(|error| error.to_string())?
@@ -254,15 +255,21 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         .map_err(|error| error.to_string())?;
     let mut grouped: BTreeMap<String, Vec<(String, Option<f64>, Option<f64>, Option<f64>)>> =
         BTreeMap::new();
+    let mut market_grouped: BTreeMap<String, Vec<(String, Option<f64>, Option<f64>, Option<f64>)>> =
+        BTreeMap::new();
     let mut events = 0;
-    for (classification, state, outcome_15m, outcome_1h, outcome_4h) in rows {
+    for (classification, state, outcome_15m, outcome_1h, outcome_4h, market_state) in rows {
         events += 1;
         grouped.entry(classification).or_default().push((
-            state,
+            state.clone(),
             outcome_15m,
             outcome_1h,
             outcome_4h,
         ));
+        market_grouped
+            .entry(market_state.unwrap_or_else(|| "unknown".into()))
+            .or_default()
+            .push((state.clone(), outcome_15m, outcome_1h, outcome_4h));
     }
     let mut result = BTreeMap::new();
     for (classification, rows) in grouped {
@@ -297,11 +304,143 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         }
         result.insert(classification, item);
     }
+    let mut market_result = BTreeMap::new();
+    for (market_state, rows) in market_grouped {
+        let mut item = serde_json::json!({
+            "events":rows.len(),
+            "resolved":rows.iter().filter(|row| row.0 == "resolved").count(),
+        });
+        for (label, index) in [("15m", 1usize), ("1h", 2), ("4h", 3)] {
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|row| match index {
+                    1 => row.1,
+                    2 => row.2,
+                    _ => row.3,
+                })
+                .collect();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            item[&format!("mean_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(mean)
+            };
+            item[&format!("positive_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(
+                    values.iter().filter(|value| **value > 0.0).count() as f64
+                        / values.len() as f64
+                        * 100.0
+                )
+            };
+        }
+        market_result.insert(market_state, item);
+    }
     Ok(serde_json::json!({
         "events":events,
         "by_classification":result,
+        "by_market_state":market_result,
         "methods":{"source":"live page confirmation shadow logger","outcome":"same-pool first sampled price in the configured forward window"}
     }))
+}
+
+fn market_state(rows: Vec<serde_json::Value>) -> serde_json::Value {
+    let mut changes: Vec<f64> = rows
+        .iter()
+        .filter_map(|row| row["price_change_h1"].as_f64())
+        .filter(|value| value.is_finite())
+        .collect();
+    changes.sort_by(f64::total_cmp);
+    let eligible = changes.len();
+    let up_count = changes.iter().filter(|value| **value > 0.0).count();
+    let up_ratio = up_count as f64 / eligible.max(1) as f64;
+    let median = (!changes.is_empty()).then(|| changes[eligible / 2]);
+    let state = if eligible == 0 {
+        "neutral"
+    } else if up_ratio >= 0.55 && median.is_some_and(|value| value > 0.0) {
+        "risk_on"
+    } else if up_ratio <= 0.45 || median.is_some_and(|value| value < 0.0) {
+        "risk_off"
+    } else {
+        "neutral"
+    };
+    serde_json::json!({
+        "state":state,
+        "tokens":rows.len(),
+        "eligible":eligible,
+        "up_count":up_count,
+        "up_ratio":up_ratio,
+        "median_change_h1_pct":median,
+        "total_volume_h1_usd":rows.iter().filter_map(|row| row["volume_h1"].as_f64()).sum::<f64>(),
+        "total_liquidity_usd":rows.iter().filter_map(|row| row["liquidity_usd"].as_f64()).sum::<f64>(),
+        "methods":{
+            "state":"risk_on requires >=55% monitored tokens with positive 1h change and positive median; risk_off uses <=45% breadth or negative median",
+            "source":"currently active contract-filtered tokens"
+        }
+    })
+}
+
+fn continuous_job_status(
+    base: &std::path::Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    let root = base.join("monitoring-runtime/continuous");
+    let mut result = BTreeMap::new();
+    for (name, prefix, interval_seconds) in [
+        ("structure", "structure-*", 900_i64),
+        ("exit-replay", "exit-replay-*.json", 10_800),
+        ("early-warning", "early-warning-*.json", 10_800),
+        ("monitored-movers", "monitored-movers-*.json", 3_600),
+    ] {
+        let directory = root.join(name);
+        let entries = std::fs::read_dir(&directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|file_name| glob_match(prefix, file_name))
+            })
+            .collect::<Vec<_>>();
+        let latest_age = entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| now.timestamp() - duration.as_secs() as i64)
+            })
+            .min();
+        let state = match latest_age {
+            None => "no_reports",
+            Some(age) if age <= interval_seconds * 3 / 2 => "active",
+            Some(_) => "stale",
+        };
+        result.insert(
+            name.to_string(),
+            serde_json::json!({
+                "state":state,
+                "files":entries.len(),
+                "latest_age_seconds":latest_age,
+                "expected_interval_seconds":interval_seconds,
+            }),
+        );
+    }
+    serde_json::json!(result)
+}
+
+fn glob_match(pattern: &str, value: &str) -> bool {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        return pattern == value;
+    };
+    value.len() >= prefix.len() + suffix.len()
+        && value.starts_with(prefix)
+        && value.ends_with(suffix)
 }
 
 async fn signal_v2_diagnostics(
@@ -486,6 +625,7 @@ pub async fn serve(db_path: &str) {
             "/api/confirmation-shadow/summary",
             get(confirmation_shadow_summary_handler),
         )
+        .route("/api/market-state", get(market_state_handler))
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/signal-v2", get(signal_v2_diagnostics))
@@ -1479,6 +1619,40 @@ async fn global_oi_for(
 #[cfg(test)]
 mod oi_tests {
     #[test]
+    fn continuous_job_status_reports_fresh_file_outputs() {
+        let root = std::env::temp_dir().join(format!(
+            "tmm-continuous-status-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let directory = root.join("monitoring-runtime/continuous/structure");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("structure-test.json"), "{}").unwrap();
+        let status = super::continuous_job_status(&root, chrono::Utc::now());
+        assert_eq!(status["structure"]["state"], "active");
+        assert_eq!(status["structure"]["files"], 1);
+        assert_eq!(status["exit-replay"]["state"], "no_reports");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn market_state_classifies_breadth_and_median_momentum() {
+        let rows = vec![
+            serde_json::json!({"token_address":"a","price_change_h1":2.0,"volume_h1":100.0,"liquidity_usd":1000.0}),
+            serde_json::json!({"token_address":"b","price_change_h1":1.0,"volume_h1":200.0,"liquidity_usd":2000.0}),
+            serde_json::json!({"token_address":"c","price_change_h1":-1.0,"volume_h1":300.0,"liquidity_usd":3000.0}),
+            serde_json::json!({"token_address":"d","price_change_h1":null,"volume_h1":null,"liquidity_usd":null}),
+        ];
+        let state = super::market_state(rows);
+        assert_eq!(state["state"], "risk_on");
+        assert_eq!(state["eligible"], 3);
+        assert_eq!(state["up_ratio"], 2.0 / 3.0);
+        assert_eq!(state["median_change_h1_pct"], 1.0);
+        assert_eq!(state["total_volume_h1_usd"], 600.0);
+        assert_eq!(state["total_liquidity_usd"], 6000.0);
+    }
+
+    #[test]
     fn confirmation_shadow_summary_groups_live_outcome_quality() {
         let path = std::env::temp_dir().join(format!(
             "tmm-confirmation-shadow-summary-{}-{}.db",
@@ -1487,8 +1661,8 @@ mod oi_tests {
         ));
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch(
-            "CREATE TABLE confirmation_shadow_events(classification TEXT,outcome_state TEXT,outcome_15m_pct REAL,outcome_1h_pct REAL,outcome_4h_pct REAL);
-             INSERT INTO confirmation_shadow_events VALUES ('strong','resolved',1.0,2.0,3.0),('strong','pending',-1.0,NULL,NULL),('aging','pending',NULL,NULL,NULL);",
+            "CREATE TABLE confirmation_shadow_events(classification TEXT,outcome_state TEXT,outcome_15m_pct REAL,outcome_1h_pct REAL,outcome_4h_pct REAL,market_state TEXT);
+             INSERT INTO confirmation_shadow_events VALUES ('strong','resolved',1.0,2.0,3.0,'risk_on'),('strong','pending',-1.0,NULL,NULL,'risk_on'),('aging','pending',NULL,NULL,NULL,'risk_off');",
         )
         .unwrap();
         connection
@@ -1508,6 +1682,8 @@ mod oi_tests {
             summary["by_classification"]["aging"]["mean_4h_pct"],
             serde_json::Value::Null
         );
+        assert_eq!(summary["by_market_state"]["risk_on"]["events"], 2);
+        assert_eq!(summary["by_market_state"]["risk_on"]["mean_15m_pct"], 0.0);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -2450,6 +2626,28 @@ async fn confirmation_shadow_summary_handler(
             )
         })?;
     Ok(Json(report))
+}
+
+async fn market_state_handler(
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let path = state.db_path.as_ref().clone();
+    let rows = tokio::task::spawn_blocking(move || crate::db::overview(&path, 5000))
+        .await
+        .map_err(axum_error)?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+    let report = market_state(list_overview(rows));
+    let mut response = Json(report).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=15"),
+    );
+    Ok(response)
 }
 
 async fn token_summary(
@@ -3475,12 +3673,19 @@ async fn status(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let db_path = state.db_path.as_ref().clone();
-    let result = tokio::task::spawn_blocking(move || crate::db::status(&db_path))
+    let status_path = db_path.clone();
+    let result = tokio::task::spawn_blocking(move || crate::db::status(&status_path))
         .await
         .map_err(axum_error)?;
     match result {
         Ok(mut v) => {
             v["detail_jobs"] = serde_json::json!({});
+            if let Some(base) = std::path::Path::new(&db_path)
+                .parent()
+                .and_then(std::path::Path::parent)
+            {
+                v["continuous_jobs"] = continuous_job_status(base, chrono::Utc::now());
+            }
             let whale_priority = state.whale_priority.lock().await.clone();
             for (name, cache) in [
                 ("oi", &state.oi_cache),

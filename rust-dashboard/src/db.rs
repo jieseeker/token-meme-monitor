@@ -728,17 +728,49 @@ pub fn status(path: &str) -> Result<Value, rusqlite::Error> {
         conn.query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |r| r.get(0))
             .unwrap_or(0)
     };
+    let optional_count = |table: &str| -> i64 {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if exists {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {}", table), [], |r| r.get(0))
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    };
     let latest: Option<String> = conn
         .query_row("SELECT MAX(observed_at) FROM snapshots", [], |r| r.get(0))
         .unwrap_or(None);
+    let confirmation_latest: Option<i64> = if optional_count("confirmation_shadow_events") > 0 {
+        conn.query_row(
+            "SELECT MAX(observed_at) FROM confirmation_shadow_events",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(None)
+    } else {
+        None
+    };
+    let database_bytes = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     Ok(json!({
         "tables": {
             "pairs": count("pairs"),
             "snapshots": count("snapshots"),
             "signals": count("signals"),
             "signal_predictions": count("signal_predictions"),
+            "alpha_universe_snapshots": optional_count("alpha_universe_snapshots"),
+            "confirmation_shadow_events": optional_count("confirmation_shadow_events"),
         },
         "latest_snapshot_at": latest,
+        "latest_confirmation_shadow_at": confirmation_latest,
+        "database_bytes": database_bytes,
     }))
 }
 

@@ -298,6 +298,10 @@ if (( ! healthy )); then
   exit 1
 fi
 "${sudo_cmd[@]}" systemctl status --no-pager --lines=5 tmm.service
+TMM_BASE="$remote_dir" TMM_SOURCE="$source_dir" /bin/bash "$source_dir/scripts/install_continuous_services.sh"
+for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow; do
+  printf '%s=%s\n' "tmm-$service" "$(systemctl is-active "tmm-$service.service")"
+done
 REMOTE
 
 echo "Deployed to $target:$remote_dir"

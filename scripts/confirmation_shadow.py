@@ -82,6 +82,7 @@ def init_schema(connection):
             volume_to_liquidity REAL,
             slippage_100_pct REAL,
             slippage_1000_pct REAL,
+            market_state TEXT,
             outcome_15m_pct REAL,
             outcome_1h_pct REAL,
             outcome_4h_pct REAL,
@@ -90,6 +91,9 @@ def init_schema(connection):
         )
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(confirmation_shadow_events)")}
+    if "market_state" not in columns:
+        connection.execute("ALTER TABLE confirmation_shadow_events ADD COLUMN market_state TEXT")
     connection.commit()
 
 
@@ -99,12 +103,12 @@ def record_event(connection, event):
         INSERT OR IGNORE INTO confirmation_shadow_events
         (token_address,pair_address,first_seen_at,observed_at,classification,age_seconds,
          entry_price_usd,volume_acceleration,buy_pressure,volume_to_liquidity,
-         slippage_100_pct,slippage_1000_pct)
+         slippage_100_pct,slippage_1000_pct,market_state)
         VALUES (:token_address,:pair_address,:first_seen_at,:observed_at,:classification,
                 :age_seconds,:entry_price_usd,:volume_acceleration,:buy_pressure,
-                :volume_to_liquidity,:slippage_100_pct,:slippage_1000_pct)
+                :volume_to_liquidity,:slippage_100_pct,:slippage_1000_pct,:market_state)
         """,
-        event,
+        {**event, "market_state": event.get("market_state")},
     )
     connection.commit()
 
@@ -187,6 +191,7 @@ def fetch_json(base_url, path):
 def capture(api, connection):
     signals = fetch_json(api, "/api/signal-v2?limit=500").get("summaries", [])
     warnings = fetch_json(api, "/api/early-warning").get("items", [])
+    market_state = fetch_json(api, "/api/market-state").get("state")
     signal_by_token = {str(row.get("token_address", "")).lower(): row for row in signals}
     now = int(time.time())
     for warning in warnings:
@@ -213,6 +218,7 @@ def capture(api, connection):
                 "first_seen_at": int(signal["first_seen_at"]),
                 "observed_at": now,
                 "entry_price_usd": price_row[0],
+                "market_state": market_state,
             },
         )
     resolve_outcomes(connection, now)

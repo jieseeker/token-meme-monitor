@@ -19,3 +19,4 @@ reports/
 *.proxy.yml
 .private/
 .DS_Store
+__pycache__/

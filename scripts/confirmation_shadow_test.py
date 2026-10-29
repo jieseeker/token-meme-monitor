@@ -66,6 +66,7 @@ class ConfirmationShadowTest(unittest.TestCase):
                     "volume_to_liquidity": 0.02,
                     "slippage_100_pct": 0.1,
                     "slippage_1000_pct": 0.2,
+                    "market_state": "risk_on",
                 },
             )
             for horizon, price in [(900, 101.0), (3600, 103.0), (14400, 106.0)]:
@@ -78,6 +79,10 @@ class ConfirmationShadowTest(unittest.TestCase):
             confirmation_shadow.resolve_outcomes(connection, observed_at + 14400 + 301)
             summary = confirmation_shadow.summarize(connection)
             self.assertEqual(summary["by_classification"]["strong"]["events"], 1)
+            stored_state = connection.execute(
+                "SELECT market_state FROM confirmation_shadow_events WHERE classification='strong'"
+            ).fetchone()[0]
+            self.assertEqual(stored_state, "risk_on")
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_15m_pct"], 1.0)
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_1h_pct"], 3.0)
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_4h_pct"], 6.0)

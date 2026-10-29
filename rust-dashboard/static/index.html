@@ -42,21 +42,13 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 /* ============ LEFT: Token List ============ */
 .list-panel { display:flex; flex-direction:column; gap:12px; position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); padding:16px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
 .section-title { font-size:20px; font-weight:750; letter-spacing:-.2px; }
-.filter-row { display:flex; align-items:flex-start; gap:8px; }
-.search-input { width:100%; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
+.filter-row { display:flex; align-items:center; gap:8px; }
+.search-input { flex:1; min-width:0; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
 .search-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
-.watchlist-toggle { flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); cursor:pointer; }
+.watchlist-toggle { flex:none; width:36px; height:36px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:18px; color:var(--muted); cursor:pointer; }
 .watchlist-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
-.stage-filter-details { position:relative; flex:0 0 auto; }
-.filter-toggle { display:flex; align-items:center; justify-content:center; min-width:68px; min-height:38px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--muted); font-size:13px; font-weight:650; cursor:pointer; padding:0 12px; list-style:none; }
-.filter-toggle::-webkit-details-marker { display:none; }
-.filter-toggle:hover,.filter-toggle:focus-visible { border-color:var(--line-strong); color:var(--accent-strong); }
-.stage-filter-details[open] > .filter-toggle { border-color:var(--accent); color:var(--accent-strong); background:var(--accent-soft); }
+.watchlist-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .list-summary { font-size:12px; color:var(--subtle); }
-.stage-filter { position:absolute; right:0; top:calc(100% + 8px); z-index:30; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; width:230px; padding:8px; border:1px solid var(--line); border-radius:10px; background:var(--panel); box-shadow:0 12px 28px rgba(17,24,39,.16); }
-.stage-option { display:flex; align-items:center; gap:6px; min-height:30px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--muted); font-size:12px; cursor:pointer; padding:5px 8px; }
-.stage-option input { accent-color:var(--accent); }
-.stage-option.checked { border-color:var(--accent); color:var(--accent-strong); background:var(--accent-soft); }
 .list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
 @media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
 .token-btn { display:flex; flex-shrink:0; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
@@ -80,6 +72,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:start; }
 .context-grid .detail-section { min-width:0; }
 .detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
+.structure-section { container-type:inline-size; }
 .detail-section.oi-empty { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 16px; padding:12px 20px; }
 .oi-empty .section-header { margin-bottom:0; }
 .oi-empty .section-copy { display:none; }
@@ -112,16 +105,17 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .structure-stage { font-size:13px; font-weight:750; color:var(--text); }
 .structure-meta { margin-top:4px; font-size:12px; color:var(--muted); line-height:1.5; }
 .structure-conclusion { margin-top:8px; font-size:13px; color:var(--text); line-height:1.5; }
-.early-warning-strip { display:grid; grid-template-columns:minmax(140px,1.1fr) repeat(4,minmax(72px,.7fr)) minmax(180px,1.4fr); gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(15,118,110,.035); }
+.early-warning-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(15,118,110,.035); }
 .early-warning-strip.active { border-color:rgba(15,118,110,.35); background:rgba(15,118,110,.075); }
-.early-warning-main { min-width:0; }
+.early-warning-main,.early-warning-evidence { grid-column:1/-1; min-width:0; }
 .early-warning-label { font-size:13px; font-weight:800; color:var(--accent-strong); }
 .early-warning-note { margin-top:3px; font-size:12px; color:var(--muted); line-height:1.35; }
 .early-warning-metric { min-width:0; }
 .early-warning-metric span { display:block; font-size:11px; color:var(--muted); white-space:nowrap; }
 .early-warning-metric b { display:block; margin-top:2px; font-size:14px; color:var(--text); font-variant-numeric:tabular-nums; }
-.early-warning-evidence { min-width:0; font-size:12px; color:var(--muted); line-height:1.45; }
+.early-warning-evidence { font-size:12px; color:var(--muted); line-height:1.45; }
 .early-warning-evidence b { color:var(--text); }
+@container (max-width:520px){ .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .factor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .factor-item { min-width:0; }
 .factor-label { display:flex; justify-content:space-between; gap:6px; font-size:12px; color:var(--muted); }
@@ -193,6 +187,7 @@ svg.chart.price-chart { height:104px; }
 .volume-mini { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; }
 .volume-mini svg.chart { height:50px; }
 .depth-scroll { overflow-x:auto; }
+#earlyHistoryBody { overflow-x:auto; }
 .depth-grid { display:grid; grid-template-columns:minmax(76px,.45fr) repeat(2,minmax(0,1fr)); min-width:560px; gap:0; font-size:12px; }
 .depth-grid > div { padding:7px 5px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
 .depth-grid > div:nth-child(3n+2) { color:var(--accent); }
@@ -242,11 +237,7 @@ svg.chart.price-chart { height:104px; }
     <div class="section-title">代币列表</div>
     <div class="filter-row">
       <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
-      <details class="stage-filter-details">
-        <summary class="filter-toggle" id="filterToggle">筛选</summary>
-        <div class="stage-filter" id="stageFilter"></div>
-      </details>
-      <button class="watchlist-toggle" id="watchlistToggle" type="button">只看自选</button>
+      <button class="watchlist-toggle" id="watchlistToggle" type="button" aria-label="只看自选" aria-pressed="false" title="只看自选">☆</button>
     </div>
     <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
   </div>
@@ -357,26 +348,6 @@ const retiredReasons=new Set(['project_metadata_present','partial_metadata_prese
 function scoreTags(raw){
   try { const tags=typeof raw==='string'?JSON.parse(raw):raw;const live=Array.isArray(tags)?tags.filter(x=>!retiredReasons.has(x)):[];return live.length?live.map(x=>reasonLabels[x]||String(x)).join('、'):'暂无命中标签'; }
   catch { return '暂无命中标签'; }
-}
-const stageFilterOptions=[
-  {key:'inactive',label:'未启动'},
-  {key:'watch',label:'观察'},
-  {key:'first_wave',label:'第一波'},
-  {key:'pullback',label:'回调'},
-  {key:'base',label:'企稳'},
-  {key:'first_start',label:'首次启动'},
-  {key:'second_start',label:'二次启动'}
-];
-let stageFilter = new Set(stageFilterOptions.map(option=>option.key));
-function renderStageFilter(){
-  document.getElementById('stageFilter').innerHTML=stageFilterOptions.map(option=>`<label class="stage-option ${stageFilter.has(option.key)?'checked':''}"><input type="checkbox" data-stage="${option.key}" ${stageFilter.has(option.key)?'checked':''}><span>${option.label}</span></label>`).join('');
-  const toggle=document.getElementById('filterToggle');
-  toggle.textContent=stageFilter.size===stageFilterOptions.length?'筛选':`筛选 ${stageFilter.size}`;
-}
-function stageMatches(stage,filter){
-  if(filter.size===stageFilterOptions.length)return true;
-  const value=String(stage||'');
-  return [...filter].some(key=>key==='first_start'||key==='second_start'?value.startsWith(key):value===key);
 }
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
 function earlyWarningOf(token){return earlyWarningRows.get(String(token||'').toLowerCase())||null;}
@@ -605,11 +576,10 @@ function renderTokenList() {
     if(!searchTerm)return true;
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
-  }).filter(t=>stageMatches(structureOf(t.token_address)?.stage,stageFilter));
+  });
   const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
     .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   document.getElementById('tokenCount').textContent = `入榜 ${tokenData.length} 个代币 · 自选 ${watchlist.size}`;
-  renderStageFilter();
 
   const html=visible.map(t=>{
       const score=t.indicator_score;
@@ -1004,19 +974,12 @@ document.getElementById('search').addEventListener('input',e=>{searchTerm=e.targ
 const watchlistToggle=document.getElementById('watchlistToggle');
 function syncWatchlistToggle(){
   watchlistToggle.classList.toggle('active',watchlistOnly);
-  watchlistToggle.textContent=watchlistOnly?'只看自选 · 开':'只看自选';
+  watchlistToggle.textContent=watchlistOnly?'★':'☆';
   watchlistToggle.setAttribute('aria-pressed',String(watchlistOnly));
 }
 syncWatchlistToggle();
 watchlistToggle.addEventListener('click',()=>{watchlistOnly=!watchlistOnly;syncWatchlistToggle();renderTokenList();});
 watchlistToggle.addEventListener('click',()=>localStorage.setItem(WATCHLIST_ONLY_KEY,watchlistOnly?'1':'0'));
-document.getElementById('stageFilter').addEventListener('change',e=>{
-  const input=e.target.closest('input[data-stage]');
-  if(!input)return;
-  if(input.checked)stageFilter.add(input.dataset.stage);
-  else stageFilter.delete(input.dataset.stage);
-  renderTokenList();
-});
 const tokenList=document.getElementById('tokenList'), scoreTooltip=document.getElementById('scoreTooltip');
 function showScoreTooltip(score){
   scoreTooltip.textContent=score.dataset.tip;
@@ -1081,7 +1044,6 @@ try{
   const cached=JSON.parse(localStorage.getItem(OVERVIEW_CACHE_KEY)||'null');
   if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
 }catch{}
-renderStageFilter();
 updateNotifyToggle();
 document.getElementById('historyToggle')?.addEventListener('click',()=>toggleEarlyHistory());
 document.getElementById('earlyHistoryClose')?.addEventListener('click',()=>toggleEarlyHistory(false));
@@ -1131,13 +1093,18 @@ function notifyEarlyWarnings(){
   const symbols=new Map(tokenData.map(token=>[String(token.token_address||'').toLowerCase(),token.token_symbol||token.token_name||token.token_address]));
   for(const warning of earlyWarningRows.values()){
     if(!warning.is_active||!watchlist.has(String(warning.token_address||'').toLowerCase()))continue;
+    const confirmation=confirmationState({token_address:warning.token_address});
+    if(!confirmation.active)continue;
     const key=String(warning.token_address||'').toLowerCase()+':'+warning.status;
     if(Number.isFinite(sent[key])&&now-sent[key]<900000)continue;
     sent[key]=now;
     const symbol=symbols.get(String(warning.token_address||'').toLowerCase())||'代币';
     const acceleration=Number(warning.volume_acceleration);
-    new Notification(`${symbol} ${earlyWarningLabel(warning)}`,{
-      body:`量能 ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x':'--'} · 预测观察，不是买入指令`,
+    const pressure=Number(warning.buy_pressure);
+    const slippage1000=Number((warning.slippage_estimates?.estimates||[]).find(row=>Number(row.order_usd)===1000)?.buy_slippage_pct);
+    const age=confirmation.label.split(' · ')[1]||'--';
+    new Notification(`${symbol} ${confirmation.label}`,{
+      body:`A 年龄：${age} · 量能：${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x':'--'} · 买压：${Number.isFinite(pressure)?Math.round(pressure*100)+'%':'--'} · $1K滑点：${Number.isFinite(slippage1000)?slippage1000.toFixed(2)+'%':'--'} · 预测观察，不是买入指令`,
       tag:key
     });
   }
@@ -1180,6 +1147,16 @@ function confirmationShadowHTML(summary){
     </div>${rows?`<table class="history-table"><thead><tr><th>分类</th><th>事件</th><th>已结算</th><th>15m</th><th>1h</th><th>4h</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">影子日志积累中，暂无可结算样本。</div>'}`;
 }
 
+function marketStateHTML(state){
+  if(!state)return '';
+  const labels={risk_on:'Risk On',neutral:'Neutral',risk_off:'Risk Off'};
+  const label=labels[state.state]||'未知';
+  return `<div class="section-header" style="margin-top:14px">
+      <span class="section-heading">市场状态</span>
+      <div class="section-meta"><span class="section-copy">当前监控币</span></div>
+    </div><div class="early-warning-evidence"><b>${escapeAttr(label)}</b> · 1h上涨占比 <b>${state.up_ratio==null?'--':`${(state.up_ratio*100).toFixed(1)}%`}</b> · 中位数 <b>${escapeAttr(fmtChange(state.median_change_h1_pct))}</b> · 1h成交额 <b>${fmtMoney(state.total_volume_h1_usd)}</b> · 流动性 <b>${fmtMoney(state.total_liquidity_usd)}</b></div>`;
+}
+
 function livePortfolioHTML(){
   const states=tokenData.map(token=>confirmationState(token));
   const count=key=>states.filter(state=>state.classification===key).length;
@@ -1198,11 +1175,12 @@ async function toggleEarlyHistory(force){
   if(!open)return;
   const body=document.getElementById('earlyHistoryBody');
   try{
-    const [result,shadow]=await Promise.all([
+    const [result,shadow,market]=await Promise.all([
       fetchJSON('/api/early-warning/history?limit=12'),
-      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null)
+      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null),
+      fetchJSON('/api/market-state').catch(()=>null)
     ]);
-    body.innerHTML=confirmationShadowHTML(shadow)+livePortfolioHTML()+earlyHistoryHTML(result);
+    body.innerHTML=marketStateHTML(market)+confirmationShadowHTML(shadow)+livePortfolioHTML()+earlyHistoryHTML(result);
   }catch(e){
     body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
   }

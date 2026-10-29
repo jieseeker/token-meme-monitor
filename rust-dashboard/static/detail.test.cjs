@@ -42,10 +42,12 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xother',token_symbol:'OTHER',token_name:'Other',indicator_score:20,indicator_reasons:'[]',observed_at:new Date(Date.now()-180000).toISOString()},
     {token_address:'0xzero',token_symbol:'ZERO',token_name:'Zero',indicator_score:0,indicator_reasons:'[]'}]};
   if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
-    {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
+    calls.filter(call=>call==='/api/signal-v2?limit=50').length<=1
+      ? {token_address:'0xtoken',stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-240,b_at:null,c_at:null,c_reason:null}
+      : {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
   if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
-    {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.12},{order_usd:500,buy_slippage_pct:.62},{order_usd:1000,buy_slippage_pct:1.25}]}}
+    {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.12},{order_usd:500,buy_slippage_pct:.18},{order_usd:1000,buy_slippage_pct:.25}]}}
   ],historical_calibration:{volume_anomaly_gt_5pct_pct:13.636363636363635,baseline_gt_5pct_pct:7.285546415981199,strong_anomaly_gt_5pct_pct:15.123456}})};
   if(url==='/api/early-warning/history?limit=12')return {ok:true,json:async()=>({reports:[
     {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01}
@@ -54,6 +56,7 @@ const fetch = async url => { calls.push(url);
     strong:{events:1,resolved:1,mean_15m_pct:1,mean_1h_pct:2,mean_4h_pct:3,positive_15m_pct:100},
     slippage_blocked:{events:1,resolved:0,mean_15m_pct:null,mean_1h_pct:null,mean_4h_pct:null,positive_15m_pct:null}
   }})};
+  if(url==='/api/market-state')return {ok:true,json:async()=>({state:'risk_on',tokens:67,eligible:65,up_count:40,up_ratio:.6154,median_change_h1_pct:.4,total_volume_h1_usd:123456,total_liquidity_usd:456789})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}
@@ -75,8 +78,16 @@ setImmediate(async () => {
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.equal(TestNotification.instances.length,1,'watchlisted active early warnings should notify once');
   assert.ok(TestNotification.instances[0].title.includes('TEST'),'notification should identify the token');
+  assert.ok(TestNotification.instances[0].title.includes('A + PASS + 量能确认'),'notification should identify strong confirmation');
+  assert.ok(TestNotification.instances[0].options.body.includes('A 年龄：4分钟'),'notification should expose A age');
+  assert.ok(TestNotification.instances[0].options.body.includes('量能：2.4x'),'notification should expose acceleration');
+  assert.ok(TestNotification.instances[0].options.body.includes('买压：67%'),'notification should expose buy pressure');
+  assert.ok(TestNotification.instances[0].options.body.includes('$1K滑点：0.25%'),'notification should expose slippage');
+  assert.ok(TestNotification.instances[0].options.body.includes('预测观察'),'notification must not claim a buy instruction');
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.equal(TestNotification.instances.length,1,'the same early warning state must not notify again within 15 minutes');
+  vm.runInContext(`signalV2Rows.set('0xtoken',{stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null});renderedKey='';renderDetail()`,context);
+  await new Promise(setImmediate);
   await vm.runInContext('toggleEarlyHistory(true)',context);
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('13.68%'),'history must show volume hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('7.31%'),'history must show baseline hit rate');
@@ -84,6 +95,8 @@ setImmediate(async () => {
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时信号质量'),'history panel must show live shadow quality');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Strong'),'history panel must show strong confirmation quality');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时组合槽位'),'history panel must show live portfolio slots');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Risk On'),'history panel must label risk-on state');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
@@ -139,16 +152,12 @@ assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_s
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-3601});confirmationState({token_address:'0xconfirm'}).active`,context),false,'an A event older than 60 minutes must leave the strongest confirmation cohort');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'WARN',data_status:'current'});confirmationState({token_address:'0xconfirm'}).active`,context),false,'risk WARN must not enter the strongest confirmation cohort');
   await new Promise(setImmediate);
-assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
-assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));
-assert.ok(vm.runInContext(`stageMatches('first_start_extended', new Set(['first_start']))`,context));
-assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === stageFilterOptions.length`,context));
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
   assert.ok(detail.includes('class="structure-summary"'),'the novice summary should be embedded in the structure card');
   assert.ok(detail.includes('13.64% / 基线 7.29%'),'early warning calibration must render at most two decimals');
   assert.ok(!detail.includes('13.636363'),'early warning calibration must not leak full floating-point precision');
-  assert.ok(detail.includes('$100 买入滑点') && detail.includes('0.12%') && detail.includes('1.25%'),'early warning must expose cached depth slippage');
+  assert.ok(detail.includes('$100 买入滑点') && detail.includes('0.12%') && detail.includes('0.25%'),'early warning must expose cached depth slippage');
   assert.ok(detail.indexOf('class="structure-card"') < detail.indexOf('class="structure-summary"') && detail.indexOf('class="structure-summary"') < detail.indexOf('class="factor-grid"'),'the novice summary should sit inside the structure card before factors');
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
@@ -179,8 +188,10 @@ assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === s
   assert.ok(!detail.includes('行情快照'), 'the snapshot age should move to the card header');
   assert.ok(!detail.includes('数据状态未知 · 风险未知'), 'structure status should not repeat the same state copy');
   assert.ok(detail.indexOf('class="transfer-panel"') < detail.indexOf('id="transferTime"'), 'transfer time should stay inside the transfer block');
-  assert.ok(html.includes('<details class="stage-filter-details">'), 'stage filtering should use a native disclosure control');
-  assert.ok(html.includes('<summary class="filter-toggle" id="filterToggle">筛选</summary>'), 'the stage filter trigger should remain keyboard accessible');
+  assert.ok(!html.includes('id="stageFilter"'), 'stage filter should be removed');
+  assert.ok(html.includes('id="watchlistToggle"'), 'watchlist filter should remain');
+  assert.ok(html.includes('aria-label="只看自选"'), 'icon-only watchlist filter needs an accessible name');
+  assert.equal(document.getElementById('watchlistToggle').textContent,'★','active watchlist filter should use the same filled star as detail');
   assert.ok(!detail.includes('0xlegacy'));
   const list = document.getElementById('tokenList').innerHTML;
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);

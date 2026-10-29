@@ -81,6 +81,10 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 “预测趋势”浮层通过 `GET /api/confirmation-shadow/summary` 展示实时影子日志的事件数、结算数与 15m/1h/4h 平均收益，并显示当前强确认占用的实时组合槽位。强确认最多显示 3 个观察槽位；该槽位仅表示风险预算，不自动下单。
 
+`GET /api/market-state` 用当前合约过滤后代币的 1h 上涨占比和中位数划分 `risk_on / neutral / risk_off`，并输出 1h 成交额与流动性合计。预测趋势浮层同步展示该状态，影子日志也会把当时市场状态写入 `market_state` 字段。
+
+`GET /api/status` 汇总数据库大小、Alpha 全量快照、影子日志数量以及结构验证、止盈回放、前置回放、高涨幅复盘等持续任务的文件新鲜度。`scripts/install_continuous_services.sh` 会在部署时统一安装并重启这些 systemd 任务，避免服务器重装后漏配。
+
 “预测趋势”浮层通过 `GET /api/early-warning/history?limit=12` 读取最近的持续回放报告，展示每轮事件数、4h >5% 命中率、基线、0.3%/0.5% 成本后净收益与 A 提前量。
 
 前置预测卡片同时读取同池最近深度缓存，按 `1%/2%/5%` 压力档位插值估算 `$100` 与 `$1000` 买入滑点；深度缓存缺失时显示 `--`，不会为此发起新的链上请求。
