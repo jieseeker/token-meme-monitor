@@ -50,6 +50,10 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/early-warning/history?limit=12')return {ok:true,json:async()=>({reports:[
     {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01}
   ]})};
+  if(url==='/api/confirmation-shadow/summary')return {ok:true,json:async()=>({events:2,by_classification:{
+    strong:{events:1,resolved:1,mean_15m_pct:1,mean_1h_pct:2,mean_4h_pct:3,positive_15m_pct:100},
+    slippage_blocked:{events:1,resolved:0,mean_15m_pct:null,mean_1h_pct:null,mean_4h_pct:null,positive_15m_pct:null}
+  }})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}
@@ -77,6 +81,9 @@ setImmediate(async () => {
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('13.68%'),'history must show volume hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('7.31%'),'history must show baseline hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('+0.21%'),'history must show 0.3% cost result');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时信号质量'),'history panel must show live shadow quality');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Strong'),'history panel must show strong confirmation quality');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时组合槽位'),'history panel must show live portfolio slots');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');

@@ -463,6 +463,7 @@ function confirmationState(token){
   const label=highSlippage?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:!candidate?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
   return {
     active,
+    classification:highSlippage?'slippage_blocked':active?'strong':ageSeconds<=900?'aging':ageSeconds<=3600?'stale':'none',
     label,
     reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
@@ -1163,6 +1164,32 @@ function earlyHistoryHTML(result){
   return rows?`<table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>4h&gt;5%</th><th>基线</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>A提前量</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">暂无历史回放报告。</div>';
 }
 
+function confirmationShadowHTML(summary){
+  const labels={strong:'Strong',aging:'Aging',slippage_blocked:'滑点阻断',stale:'过期'};
+  const rows=(summary?.by_classification?Object.entries(summary.by_classification):[]).map(([name,item])=>`<tr>
+    <td>${escapeAttr(labels[name]||name)}</td>
+    <td>${Number(item.events||0)}</td>
+    <td>${Number(item.resolved||0)}</td>
+    <td>${escapeAttr(fmtSignedPct(item.mean_15m_pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.mean_1h_pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.mean_4h_pct))}</td>
+  </tr>`).join('');
+  return `<div class="section-header" style="margin-top:14px">
+      <span class="section-heading">实时信号质量</span>
+      <div class="section-meta"><span class="section-copy">页面影子日志</span></div>
+    </div>${rows?`<table class="history-table"><thead><tr><th>分类</th><th>事件</th><th>已结算</th><th>15m</th><th>1h</th><th>4h</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">影子日志积累中，暂无可结算样本。</div>'}`;
+}
+
+function livePortfolioHTML(){
+  const states=tokenData.map(token=>confirmationState(token));
+  const count=key=>states.filter(state=>state.classification===key).length;
+  const occupied=Math.min(count('strong'),3);
+  return `<div class="section-header" style="margin-top:14px">
+      <span class="section-heading">实时组合槽位</span>
+      <div class="section-meta"><span class="section-copy">建议最多 3 个</span></div>
+    </div><div class="history-table"><div class="early-warning-evidence">强确认 <b>${occupied}/3</b> · 新鲜度下降 <b>${count('aging')}</b> · 滑点阻断 <b>${count('slippage_blocked')}</b> · 已过期 <b>${count('stale')}</b><br>强确认才占用观察槽位；这是风险预算展示，不是自动买入指令。</div></div>`;
+}
+
 async function toggleEarlyHistory(force){
   const panel=document.getElementById('earlyHistoryPanel');
   if(!panel)return;
@@ -1171,8 +1198,11 @@ async function toggleEarlyHistory(force){
   if(!open)return;
   const body=document.getElementById('earlyHistoryBody');
   try{
-    const result=await fetchJSON('/api/early-warning/history?limit=12');
-    body.innerHTML=earlyHistoryHTML(result);
+    const [result,shadow]=await Promise.all([
+      fetchJSON('/api/early-warning/history?limit=12'),
+      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null)
+    ]);
+    body.innerHTML=confirmationShadowHTML(shadow)+livePortfolioHTML()+earlyHistoryHTML(result);
   }catch(e){
     body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
   }

@@ -9,7 +9,7 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::error::Error as _;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -215,6 +215,95 @@ fn signal_v2_diagnostic(
     )
 }
 
+fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> {
+    let connection =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())?;
+    let table_exists = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='confirmation_shadow_events')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !table_exists {
+        return Ok(serde_json::json!({
+            "events":0,
+            "by_classification":{},
+            "methods":{"source":"live page confirmation shadow logger"}
+        }));
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT classification,outcome_state,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct
+             FROM confirmation_shadow_events",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut grouped: BTreeMap<String, Vec<(String, Option<f64>, Option<f64>, Option<f64>)>> =
+        BTreeMap::new();
+    let mut events = 0;
+    for (classification, state, outcome_15m, outcome_1h, outcome_4h) in rows {
+        events += 1;
+        grouped.entry(classification).or_default().push((
+            state,
+            outcome_15m,
+            outcome_1h,
+            outcome_4h,
+        ));
+    }
+    let mut result = BTreeMap::new();
+    for (classification, rows) in grouped {
+        let mut item = serde_json::json!({
+            "events":rows.len(),
+            "resolved":rows.iter().filter(|row| row.0 == "resolved").count(),
+        });
+        for (label, index) in [("15m", 1usize), ("1h", 2), ("4h", 3)] {
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|row| match index {
+                    1 => row.1,
+                    2 => row.2,
+                    _ => row.3,
+                })
+                .collect();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            item[&format!("mean_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(mean)
+            };
+            item[&format!("positive_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(
+                    values.iter().filter(|value| **value > 0.0).count() as f64
+                        / values.len() as f64
+                        * 100.0
+                )
+            };
+        }
+        result.insert(classification, item);
+    }
+    Ok(serde_json::json!({
+        "events":events,
+        "by_classification":result,
+        "methods":{"source":"live page confirmation shadow logger","outcome":"same-pool first sampled price in the configured forward window"}
+    }))
+}
+
 async fn signal_v2_diagnostics(
     State(state): State<AppState>,
     Query(params): Query<SignalV2Params>,
@@ -393,6 +482,10 @@ pub async fn serve(db_path: &str) {
         .route("/api/structure", get(structure))
         .route("/api/early-warning", get(early_warning))
         .route("/api/early-warning/history", get(early_warning_history))
+        .route(
+            "/api/confirmation-shadow/summary",
+            get(confirmation_shadow_summary_handler),
+        )
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/signal-v2", get(signal_v2_diagnostics))
@@ -1386,6 +1479,39 @@ async fn global_oi_for(
 #[cfg(test)]
 mod oi_tests {
     #[test]
+    fn confirmation_shadow_summary_groups_live_outcome_quality() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-confirmation-shadow-summary-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch(
+            "CREATE TABLE confirmation_shadow_events(classification TEXT,outcome_state TEXT,outcome_15m_pct REAL,outcome_1h_pct REAL,outcome_4h_pct REAL);
+             INSERT INTO confirmation_shadow_events VALUES ('strong','resolved',1.0,2.0,3.0),('strong','pending',-1.0,NULL,NULL),('aging','pending',NULL,NULL,NULL);",
+        )
+        .unwrap();
+        connection
+            .execute("VACUUM INTO ?1", [&path.to_string_lossy()])
+            .unwrap();
+        drop(connection);
+        let summary = super::confirmation_shadow_summary(path.to_str().unwrap()).unwrap();
+        assert_eq!(summary["events"], 3);
+        assert_eq!(summary["by_classification"]["strong"]["events"], 2);
+        assert_eq!(summary["by_classification"]["strong"]["resolved"], 1);
+        assert_eq!(summary["by_classification"]["strong"]["mean_15m_pct"], 0.0);
+        assert_eq!(
+            summary["by_classification"]["strong"]["positive_15m_pct"],
+            50.0
+        );
+        assert_eq!(
+            summary["by_classification"]["aging"]["mean_4h_pct"],
+            serde_json::Value::Null
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn expired_five_minute_signal_loses_its_tags_and_score_bonus() {
         let now = chrono::Utc::now();
         let mut row = serde_json::json!({
@@ -2308,6 +2434,22 @@ async fn early_warning_history(
         HeaderValue::from_static("private, max-age=60"),
     );
     Ok(response)
+}
+
+async fn confirmation_shadow_summary_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let path = state.db_path.as_ref().clone();
+    let report = tokio::task::spawn_blocking(move || confirmation_shadow_summary(&path))
+        .await
+        .map_err(axum_error)?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+    Ok(Json(report))
 }
 
 async fn token_summary(
