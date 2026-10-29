@@ -69,6 +69,14 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 顶部“自选提醒”可申请浏览器通知权限。仅自选代币出现活跃前置异动时提醒，同一代币同一状态 15 分钟内去重；通知文案始终标明“预测观察，不是买入指令”。
 
+### 已监控高涨幅币复盘
+
+```bash
+python3 scripts/monitored_mover_audit.py --db /absolute/path/monitor.db --top 20
+```
+
+脚本从 Alpha 全量审计中取 24h 涨幅 Top N，并只保留已通过合约过滤且当前存在活跃池的代币。对每个涨幅峰值回看 24 小时，复算前置量能异动并读取 A 结构变更，输出 `early_and_a`、`early_only`、`a_only`、`missed` 四类漏斗与提前秒数。执行 `--self-test` 可用内置 SQLite 样例验证分类逻辑。
+
 ## Factor v1 只读回放
 
 ```bash
