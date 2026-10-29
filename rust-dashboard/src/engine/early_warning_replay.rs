@@ -804,9 +804,14 @@ pub fn history(db_path: &str, limit: usize) -> Result<Value> {
                     .and_then(|items| items.iter().find(|item| item["cost_pct"].as_f64() == Some(value)))
                     .and_then(|item| item["mean_net_return_pct"].as_f64())
             };
+            let replay_until = report["window"]["replay_until"]
+                .as_i64()
+                .and_then(|seconds| DateTime::from_timestamp(seconds, 0))
+                .map(|at| Value::String(at.to_rfc3339()))
+                .unwrap_or_else(|| report["window"]["replay_until"].clone());
             Ok(json!({
                 "report":entry.file_name(),
-                "replay_until":report["window"]["replay_until"],
+                "replay_until":replay_until,
                 "volume_events":report["rules"]["volume"]["events"],
                 "volume_tokens":report["rules"]["volume"]["tokens"],
                 "volume_followed_by_a":report["rules"]["volume"].get("followed_by_a").cloned().unwrap_or_else(|| json!(null)),
@@ -1049,7 +1054,7 @@ mod tests {
         let database = root.join("data/monitor.db");
         crate::db::init_schema(database.to_str().unwrap()).unwrap();
         let report = json!({
-            "window":{"replay_until":"2026-01-01T12:00:00Z"},
+            "window":{"replay_until":1767268800},
             "rules":{
                 "volume":{"events":10,"followed_by_a":2,"a_lead_median_seconds":600,"forward":{"4h":{"eligible":10,"gt_5pct":3,"gt_10pct":1}},"exit_strategies":{"ladder_take_profit":[{"cost_pct":0.3,"mean_net_return_pct":1.2,"profit_factor":1.3},{"cost_pct":0.5,"mean_net_return_pct":0.4,"profit_factor":1.05}]}},
                 "baseline":{"forward":{"4h":{"eligible":100,"gt_5pct":10,"gt_10pct":3}}}
@@ -1060,6 +1065,7 @@ mod tests {
         let history = history(database.to_str().unwrap(), 10).unwrap();
         assert_eq!(history["reports"].as_array().unwrap().len(), 1);
         let item = &history["reports"][0];
+        assert_eq!(item["replay_until"], "2026-01-01T12:00:00+00:00");
         assert_eq!(item["volume_events"], 10);
         assert_eq!(item["volume_gt_5pct"], 30.0);
         assert_eq!(item["baseline_gt_5pct"], 10.0);
