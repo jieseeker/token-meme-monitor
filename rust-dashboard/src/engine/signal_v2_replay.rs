@@ -21,6 +21,7 @@ const PATH_GRACE_SECONDS: i64 = 300;
 const PATH_TARGET_PCT: f64 = 10.0;
 const PATH_STOP_PCT: f64 = -10.0;
 const PATH_ASSUMED_ROUND_TRIP_COST_PCT: f64 = 0.0;
+const EXIT_COST_SENSITIVITY_PCT: [f64; 4] = [0.0, 0.3, 0.5, 1.0];
 const EXIT_STRATEGY_NAMES: [&str; 3] = [
     "fixed_take_profit",
     "no_fixed_take_profit",
@@ -123,6 +124,39 @@ impl PathOutcome {
 }
 
 #[derive(Default, Serialize)]
+struct ExitCostOutcome {
+    cost_pct: f64,
+    denominator: u64,
+    resolved: u64,
+    unresolved: u64,
+    endpoint_missing: u64,
+    wins: u64,
+    losses: u64,
+    mean_net_return_pct: Option<f64>,
+    total_net_profit_pct: f64,
+    total_net_loss_pct: f64,
+    profit_factor: Option<f64>,
+}
+
+impl ExitCostOutcome {
+    fn record_exit(&mut self, gross_return_pct: f64) {
+        self.resolved += 1;
+        let net_return_pct = gross_return_pct - self.cost_pct;
+        if net_return_pct > 0.0 {
+            self.wins += 1;
+            self.total_net_profit_pct += net_return_pct;
+        } else if net_return_pct < 0.0 {
+            self.losses += 1;
+            self.total_net_loss_pct += -net_return_pct;
+        }
+        let mean = self.mean_net_return_pct.unwrap_or(0.0);
+        self.mean_net_return_pct = Some(mean + (net_return_pct - mean) / self.resolved as f64);
+        self.profit_factor = (self.total_net_loss_pct > 0.0)
+            .then_some(self.total_net_profit_pct / self.total_net_loss_pct);
+    }
+}
+
+#[derive(Default, Serialize)]
 struct ExitStrategyOutcome {
     denominator: u64,
     resolved: u64,
@@ -141,6 +175,8 @@ struct ExitStrategyOutcome {
     total_net_profit_pct: f64,
     total_net_loss_pct: f64,
     profit_factor: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cost_sensitivity: Vec<ExitCostOutcome>,
 }
 impl ExitStrategyOutcome {
     fn record_milestone(&mut self, kind: &str) {
@@ -174,6 +210,34 @@ impl ExitStrategyOutcome {
             Some(mean_net + (net_return_pct - mean_net) / self.resolved as f64);
         self.profit_factor = (self.total_net_loss_pct > 0.0)
             .then_some(self.total_net_profit_pct / self.total_net_loss_pct);
+        for outcome in &mut self.cost_sensitivity {
+            outcome.record_exit(gross_return_pct);
+        }
+    }
+
+    fn record_denominator(&mut self) {
+        if self.cost_sensitivity.is_empty() {
+            self.cost_sensitivity = EXIT_COST_SENSITIVITY_PCT
+                .into_iter()
+                .map(|cost_pct| ExitCostOutcome {
+                    cost_pct,
+                    ..ExitCostOutcome::default()
+                })
+                .collect();
+        }
+        for outcome in &mut self.cost_sensitivity {
+            outcome.denominator += 1;
+        }
+    }
+
+    fn record_incomplete(&mut self, unresolved: bool) {
+        for outcome in &mut self.cost_sensitivity {
+            if unresolved {
+                outcome.unresolved += 1;
+            } else {
+                outcome.endpoint_missing += 1;
+            }
+        }
     }
 }
 #[derive(Serialize)]
@@ -735,6 +799,7 @@ fn record_event_start(hits: &mut BTreeMap<String, Hits>, keys: &[String], sample
         hit.path.denominator += 1;
         for outcome in hit.exit_strategies.values_mut() {
             outcome.denominator += 1;
+            outcome.record_denominator();
         }
     }
 }
@@ -1066,8 +1131,10 @@ impl TokenReplay {
                             .unwrap();
                         if end < deadline {
                             strategy.unresolved += 1;
+                            strategy.record_incomplete(true);
                         } else {
                             strategy.endpoint_missing += 1;
+                            strategy.record_incomplete(false);
                         }
                     }
                 }
@@ -1513,6 +1580,21 @@ mod tests {
         let report = db.replay(false);
         let strategies = &report["structural_hits"]["B"]["exit_strategies"];
         assert_eq!(strategies["fixed_take_profit"]["target_first"], 1);
+        let sensitivity = strategies["fixed_take_profit"]["cost_sensitivity"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sensitivity.len(), 4);
+        for (index, expected_cost) in [0.0, 0.3, 0.5, 1.0].into_iter().enumerate() {
+            assert_eq!(sensitivity[index]["cost_pct"], expected_cost);
+            assert_eq!(sensitivity[index]["denominator"], 1);
+            assert_eq!(sensitivity[index]["resolved"], 1);
+            assert!(
+                (sensitivity[index]["mean_net_return_pct"].as_f64().unwrap()
+                    - (10.0 - expected_cost))
+                    .abs()
+                    < 1e-9
+            );
+        }
         let no_target = &strategies["no_fixed_take_profit"];
         assert_eq!(no_target["timeout"], 1);
         assert_eq!(no_target["stop"], 0);
