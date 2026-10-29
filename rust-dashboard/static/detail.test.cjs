@@ -40,7 +40,7 @@ const fetch = async url => { calls.push(url);
   ]})};
   if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString()}
-  ],historical_calibration:{volume_anomaly_gt_5pct_pct:14.76,baseline_gt_5pct_pct:7.11}})};
+  ],historical_calibration:{volume_anomaly_gt_5pct_pct:13.68,baseline_gt_5pct_pct:7.31,strong_anomaly_gt_5pct_pct:15.12}})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}

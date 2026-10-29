@@ -503,8 +503,9 @@ pub fn current(path: &str) -> Result<Value> {
         "source_time_unverified":true,"items":items,
         "historical_calibration":{
             "window_days":7,"horizon":"4h",
-            "volume_anomaly_gt_5pct_pct":14.76,"baseline_gt_5pct_pct":7.11,
-            "volume_anomaly_gt_10pct_pct":7.58,"baseline_gt_10pct_pct":3.19
+            "volume_anomaly_gt_5pct_pct":13.68,"baseline_gt_5pct_pct":7.31,
+            "volume_anomaly_gt_10pct_pct":6.71,"baseline_gt_10pct_pct":3.19,
+            "strong_anomaly_gt_5pct_pct":15.12,"strong_anomaly_gt_10pct_pct":5.81
         },
         "methods":{
             "window":"current sample plus positive m5 history within 30m; duplicate unchanged polling values within 60s are removed",
