@@ -71,6 +71,10 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .detail-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
 .context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:stretch; }
 .context-grid .detail-section { min-width:0; }
+.context-grid #oiSection:not(.oi-empty) { height:100%; display:flex; flex-direction:column; }
+#oiSection:not(.oi-empty) #oiBody { flex:1; display:flex; flex-direction:column; }
+#oiSection:not(.oi-empty) .chart-card { flex:1; display:flex; flex-direction:column; }
+#oiSection:not(.oi-empty) .chart-card svg { flex:1; height:auto; min-height:96px; }
 .detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
 .structure-section { container-type:inline-size; }
 .detail-section.oi-empty { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 16px; padding:12px 20px; }
