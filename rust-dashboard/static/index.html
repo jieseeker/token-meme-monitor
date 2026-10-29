@@ -447,7 +447,18 @@ function candidatePriority(token,structure){
   const key=noviceState(token,structure).key;
   const warning=earlyWarningOf(token?.token_address);
   const warningPriority=warning?.status==='strong_anomaly'?2:warning?.status==='volume_anomaly'?1.5:warning?.is_active?1:0;
-  return (key==='breakout_ready'||key==='second_ready'?2:0)+warningPriority;
+  return (key==='breakout_ready'||key==='second_ready'?2:0)+warningPriority+(confirmationState(token).active?2:0);
+}
+function confirmationState(token){
+  const address=String(token?.token_address||'').toLowerCase();
+  const v2=signalV2Rows.get(address);
+  const warning=earlyWarningRows.get(address);
+  const active=v2?.stage==='watch'&&v2?.risk_status==='PASS'&&warning?.is_active===true;
+  return {
+    active,
+    label:active?'A + PASS + 量能确认':'未形成强确认',
+    reason:active?'A 形态仍在观察窗，风险 PASS，且前置量能异动活跃。':'A 形态、风险或量能未同时满足。'
+  };
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
 function earlyWarningLabel(state){return earlyWarningLabels[state?.status]||'前置预测';}
@@ -456,9 +467,10 @@ function earlyWarningHTML(token){
   if(!item)return '<div class="hint">前置预测数据加载中...</div>';
   const acceleration=Number(item.volume_acceleration), pressure=Number(item.buy_pressure), efficiency=Number(item.volume_to_liquidity), change=Number(item.return_5m_pct);
   const gt5=item.status==='strong_anomaly'?earlyWarningCalibration?.strong_anomaly_gt_5pct_pct:earlyWarningCalibration?.volume_anomaly_gt_5pct_pct;
+  const confirmation=confirmationState(token);
   const slippage=(item.slippage_estimates?.estimates||[]).reduce((map,row)=>(row.order_usd===100?map[100]=row.buy_slippage_pct:row.order_usd===1000?map[1000]=row.buy_slippage_pct:null,map),{});
   return `<div class="early-warning-strip${item.is_active?' active':''}">
-    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note">同类历史 4h &gt;5%：${gt5!=null?`${gt5}% / 基线 ${earlyWarningCalibration.baseline_gt_5pct_pct}%`:'--'} · 预测观察，不是买入指令</div></div>
+    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note">${confirmation.active?`<b>${escapeAttr(confirmation.label)}</b> · `:''}同类历史 4h &gt;5%：${gt5!=null?`${gt5}% / 基线 ${earlyWarningCalibration.baseline_gt_5pct_pct}%`:'--'} · 预测观察，不是买入指令</div></div>
     <div class="early-warning-metric"><span>量能倍数</span><b>${acceleration==null||isNaN(acceleration)?'--':acceleration.toFixed(1)+'x'}</b></div>
     <div class="early-warning-metric"><span>5m买压</span><b>${pressure==null||isNaN(pressure)?'--':(pressure*100).toFixed(0)+'%'}</b></div>
     <div class="early-warning-metric"><span>量/流动性</span><b>${efficiency==null||isNaN(efficiency)?'--':(efficiency*100).toFixed(1)+'%'}</b></div>
@@ -600,7 +612,8 @@ function renderTokenList() {
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const novice=noviceState(t,structureOf(t.token_address));
       const warning=earlyWarningOf(t.token_address);
-      const listState=warning?.is_active?`${earlyWarningLabel(warning)} · ${candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label}`:(candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label);
+      const confirmation=confirmationState(t);
+      const listState=confirmation.active?`${confirmation.label} · ${state.label}`:warning?.is_active?`${earlyWarningLabel(warning)} · ${candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label}`:(candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label);
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
@@ -650,7 +663,8 @@ function renderDetail() {
   if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'');
+  const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'');
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -1164,6 +1178,7 @@ async function refresh(){
     ]);
     signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
     showOverview(rows);
+    if(selectedToken)renderDetail();
     try{localStorage.setItem(OVERVIEW_CACHE_KEY,JSON.stringify({at:Date.now(),rows}));}catch{}
     refreshStructure();
     refreshEarlyWarning();
