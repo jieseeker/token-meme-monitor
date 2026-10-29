@@ -112,7 +112,7 @@ def record_event(connection, event):
 def insert_snapshot(connection, pair, observed_at, price):
     text = datetime.fromtimestamp(observed_at, timezone.utc).isoformat()
     connection.execute(
-        "INSERT INTO snapshots(pair_address,token_address,observed_at,price_usd,liquidity_usd,volume_h1,volume_m5,raw_json) VALUES (?1,'shadow',?2,?3,1,1,1,'{}')",
+        "INSERT INTO snapshots(pair_address,token_address,observed_at,price_usd,liquidity_usd,volume_h1,volume_m5,raw_json) VALUES (?,'shadow',?,?,1,1,1,'{}')",
         (pair, text, price),
     )
     connection.commit()
@@ -122,8 +122,8 @@ def endpoint_price(connection, pair, target):
     row = connection.execute(
         """
         SELECT price_usd FROM snapshots
-        WHERE pair_address=?1 AND price_usd IS NOT NULL AND price_usd>0
-          AND CAST(strftime('%s',observed_at) AS INTEGER) BETWEEN ?2 AND ?3
+        WHERE pair_address=? AND price_usd IS NOT NULL AND price_usd>0
+          AND CAST(strftime('%s',observed_at) AS INTEGER) BETWEEN ? AND ?
         ORDER BY observed_at LIMIT 1
         """,
         (pair, target, target + 300),
@@ -199,7 +199,7 @@ def capture(api, connection):
             continue
         pair = warning.get("pair_address")
         price_row = connection.execute(
-            "SELECT price_usd FROM snapshots WHERE pair_address=?1 AND price_usd>0 ORDER BY observed_at DESC LIMIT 1",
+            "SELECT price_usd FROM snapshots WHERE pair_address=? AND price_usd>0 ORDER BY observed_at DESC LIMIT 1",
             (pair,),
         ).fetchone()
         if not price_row:
