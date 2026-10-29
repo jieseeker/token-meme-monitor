@@ -453,11 +453,12 @@ function confirmationState(token){
   const address=String(token?.token_address||'').toLowerCase();
   const v2=signalV2Rows.get(address);
   const warning=earlyWarningRows.get(address);
-  const active=v2?.stage==='watch'&&v2?.risk_status==='PASS'&&warning?.is_active===true;
+  const ageSeconds=Number.isFinite(v2?.first_seen_at)?Math.max(0,Math.floor(Date.now()/1000-v2.first_seen_at)):null;
+  const active=v2?.stage==='watch'&&v2?.risk_status==='PASS'&&warning?.is_active===true&&ageSeconds!=null&&ageSeconds<=3600;
   return {
     active,
-    label:active?'A + PASS + 量能确认':'未形成强确认',
-    reason:active?'A 形态仍在观察窗，风险 PASS，且前置量能异动活跃。':'A 形态、风险或量能未同时满足。'
+    label:active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:'未形成强确认',
+    reason:active?'A 触发仍在 60 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};

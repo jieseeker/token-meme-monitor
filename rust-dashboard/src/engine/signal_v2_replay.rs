@@ -27,7 +27,7 @@ const EXIT_STRATEGY_NAMES: [&str; 3] = [
     "no_fixed_take_profit",
     "ladder_take_profit",
 ];
-const A_ENTRY_DELAYS_SECONDS: [i64; 3] = [60, 180, 300];
+const A_ENTRY_DELAYS_SECONDS: [i64; 5] = [60, 300, 900, 1800, 3600];
 const B_COHORTS: [&str; 9] = [
     "all",
     "pass",
@@ -546,7 +546,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         "methods":{
             "ordering":"stream by token and SQLite millisecond time, exact RFC3339 sort within ties; independent stored request groups; engine clock is Unix seconds",
             "a_entry_filters":"A/pass requires contemporaneous risk PASS; pass_recent_volume additionally requires positive current m5 >= current h1/12; pass_near_breakout uses the then-known frozen line when present; cohorts without sufficient trigger evidence remain absent rather than guessed",
-            "entry_timing":"A/delay_60s, A/delay_180s, and A/delay_300s start at the first valid future observation in [A+delay,A+delay+300s], using that observation's price; no delayed event is invented when coverage is missing",
+            "entry_timing":"A/delay_60s, A/delay_300s, A/delay_900s, A/delay_1800s, and A/delay_3600s start at the first valid future observation in [A+delay,A+delay+300s], using that observation's price; no delayed event is invented when coverage is missing",
             "reference":"first eligible stored response group, highest liquidity then lowest pool address, frozen prospectively",
             "history":"only prior positive-price reference-pool samples within the replay window and 24h, 4096 raw observations maximum; overflow cancels evidence",
             "legacy_grouping":"same token and exact observed_at proxy request identity; only empty metadata eligible for proxy fallback",
@@ -1558,21 +1558,51 @@ mod tests {
         let conn = Connection::open(&db.0).unwrap();
         conn.execute("UPDATE snapshots SET volume_m5=3000", [])
             .unwrap();
-        for delay in [60, 180, 300] {
-            db.insert(T - 86_400 + delay, "a", 102.0, 30000.0, 70003.0, true);
-            db.insert(T - 86_400 + delay + 900, "a", 112.0, 30000.0, 70004.0, true);
-            db.insert(T - 86_400 + delay + 600, "a", 103.0, 30000.0, 70005.0, true);
+        for delay in [60, 300, 900, 1800, 3600] {
+            let observed_delay = match delay {
+                60 => 60,
+                300 => 540,
+                900 => 900,
+                1800 => 2100,
+                _ => 3900,
+            };
+            db.insert(
+                T - 86_400 + observed_delay,
+                "a",
+                102.0,
+                30000.0,
+                70003.0,
+                true,
+            );
+            db.insert(
+                T - 86_400 + observed_delay + 600,
+                "a",
+                103.0,
+                30000.0,
+                70005.0,
+                true,
+            );
+            db.insert(
+                T - 86_400 + observed_delay + 900,
+                "a",
+                112.0,
+                30000.0,
+                70004.0,
+                true,
+            );
         }
         let report = db.replay(false);
-        for delay in [60, 180, 300] {
+        for delay in [60, 300, 900, 1800, 3600] {
             let cohort = &report["structural_hits"][format!("A/delay_{delay}s")];
             assert_eq!(cohort["events"], 1, "{delay}");
             assert_eq!(cohort["forward"]["15m"]["denominator"], 1, "{delay}");
-            let expected = (112.0 / 102.0 - 1.0) * 100.0;
-            let actual = cohort["forward"]["15m"]["mean_sampled_return_pct"]
-                .as_f64()
-                .unwrap();
-            assert!((actual - expected).abs() < 1e-9, "{delay}");
+            if [60, 300, 900].contains(&delay) {
+                let expected = (112.0 / 102.0 - 1.0) * 100.0;
+                let actual = cohort["forward"]["15m"]["mean_sampled_return_pct"]
+                    .as_f64()
+                    .unwrap();
+                assert!((actual - expected).abs() < 1e-9, "{delay}");
+            }
         }
     }
     #[test]
