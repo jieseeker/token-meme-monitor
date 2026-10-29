@@ -58,6 +58,17 @@ async fn main() {
         return;
     }
 
+    if mode == "early-warning-replay" {
+        match engine::early_warning_replay::replay(&db_path) {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("early-warning-replay: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // Ensure parent dir
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
         let _ = std::fs::create_dir_all(parent);

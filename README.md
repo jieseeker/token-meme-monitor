@@ -55,6 +55,14 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 Worker 在 Binance 合约过滤前保存全量 BSC Alpha 列表，按代币和 5 分钟桶去重，保留 7 天。审计按已存储的最大 24h 涨幅输出 Top N，并将每个头部代币分为 `monitored`、`futures_listed_unmonitored`、`not_futures_listed`，用于判断高潜力币是在源头被合约过滤、进入后未形成活跃池，还是已被当前页面覆盖。该口径只做发现漏斗审计，不代表可交易信号。
 
+## Early warning 只读回放
+
+```bash
+MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/release/tmm early-warning-replay
+```
+
+`early-warning-replay` 只使用当前与历史 30 分钟内的 m5 成交额、5m 买压、m5 成交额/流动性和 5m 价格变化，输出量能异常、量能买压、强前置三组规则在 15m/1h/4h 后的采样收益、上涨率、>2%/5%/10% 命中率，并与 15 分钟基线样本对照。每个代币使用回放期内历史流动性最高的池，规则按代币 15 分钟冷却，端点缺失和右删失分开。该报告用于验证前置指标是否真的有预测增益，不代表可交易信号。
+
 ## Factor v1 只读回放
 
 ```bash

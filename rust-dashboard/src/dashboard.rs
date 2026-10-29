@@ -386,6 +386,7 @@ pub async fn serve(db_path: &str) {
         .route("/api/overview", get(overview))
         .route("/api/tokens", get(tokens))
         .route("/api/structure", get(structure))
+        .route("/api/early-warning", get(early_warning))
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/signal-v2", get(signal_v2_diagnostics))
@@ -2249,6 +2250,28 @@ async fn structure(
         )
     })?;
     let mut response = Json(serde_json::json!({"items":items})).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=15"),
+    );
+    Ok(response)
+}
+
+async fn early_warning(
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let path = state.db_path.as_ref().clone();
+    let report =
+        tokio::task::spawn_blocking(move || crate::engine::early_warning_replay::current(&path))
+            .await
+            .map_err(axum_error)?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
+    let mut response = Json(report).into_response();
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=15"),

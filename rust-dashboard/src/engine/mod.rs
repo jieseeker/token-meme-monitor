@@ -1,4 +1,5 @@
 pub mod alpha_discovery;
+pub mod early_warning_replay;
 pub mod factor_v1;
 pub mod factor_v1_replay;
 pub mod features;

@@ -38,6 +38,9 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
+  if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
+    {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString()}
+  ],historical_calibration:{volume_anomaly_gt_5pct_pct:14.76,baseline_gt_5pct_pct:7.11}})};
   if(url==='/api/structure?limit=100'){if(structureGate)await structureGate;return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',available:true,stage:'watch',stage_label:'观察',structure_label:'结构观察',data_status_label:'预热中',risk_status_label:'风险通过',conclusion:'等待确认',factors:{},timeline:[],updated_at:Math.floor(Date.now()/1000),b_crossed_at:1792753000,b_at:null,c_at:null,b_breakout_line:0.000000012,risk_status:'PASS'}
   ]})};}
@@ -99,8 +102,9 @@ setImmediate(async () => {
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
-assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),1,'confirmed executable candidates must sort above ordinary activity scores');
+assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),2,'confirmed executable candidates must sort above ordinary activity scores');
 assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',updated_at:Math.floor(Date.now()/1000)})`,context),0);
+assert.equal(vm.runInContext(`earlyWarningRows.set('0xready',{status:'strong_anomaly',is_active:true});candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),4,'strong early warnings must increase discovery priority');
   await new Promise(setImmediate);
 assert.ok(vm.runInContext(`stageMatches('inactive', new Set(['inactive']))`,context));
 assert.ok(!vm.runInContext(`stageMatches('inactive', new Set(['watch']))`,context));
@@ -268,7 +272,7 @@ assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === s
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
-  assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=50','/api/structure?limit=100'].includes(url)),[],'unchanged overview must not reload detail APIs');
+assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=50','/api/structure?limit=100','/api/early-warning'].includes(url)),[],'unchanged overview must not reload detail APIs');
   assert.equal(document.getElementById('depthBody').innerHTML,depth);
   row.observed_at=new Date(Date.now()+1000).toISOString();
   vm.runInContext(`detailCache.get('0xtoken').at=0`,context);
