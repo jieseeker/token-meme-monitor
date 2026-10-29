@@ -71,6 +71,8 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 “预测趋势”浮层通过 `GET /api/early-warning/history?limit=12` 读取最近的持续回放报告，展示每轮事件数、4h >5% 命中率、基线、0.3%/0.5% 成本后净收益与 A 提前量。
 
+前置预测卡片同时读取同池最近深度缓存，按 `1%/2%/5%` 压力档位插值估算 `$100` 与 `$1000` 买入滑点；深度缓存缺失时显示 `--`，不会为此发起新的链上请求。
+
 ### 已监控高涨幅币复盘
 
 ```bash

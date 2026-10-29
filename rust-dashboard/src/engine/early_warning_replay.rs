@@ -1,6 +1,6 @@
 //! Read-only leading-indicator replay; triggers use only prior and current evidence.
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -672,6 +672,7 @@ pub fn current(path: &str) -> Result<Value> {
                 "buy_pressure":buy_pressure,"volume_to_liquidity":efficiency,
                 "return_5m_pct":return_5m,"evidence_count":history_values.len(),
                 "observed_at":DateTime::from_timestamp(current.at,0).map(|at| at.to_rfc3339()),
+                "slippage_estimates":slippage_estimates(&conn,&current.pair)?,
                 "rules":{"volume":volume_rule,"buy_pressure":buy_rule,"strong":strong_rule}
             }),
         ));
@@ -825,6 +826,60 @@ pub fn history(db_path: &str, limit: usize) -> Result<Value> {
     }))
 }
 
+fn estimate_slippage_pct(order_usd: f64, bands: &[f64], capacities: &[f64]) -> Option<f64> {
+    if order_usd <= 0.0 || bands.is_empty() || capacities.len() != bands.len() {
+        return None;
+    }
+    for (bands, capacities) in bands.windows(2).zip(capacities.windows(2)) {
+        let (left_band, right_band) = (bands[0], bands[1]);
+        let (left_capacity, right_capacity) = (capacities[0], capacities[1]);
+        if left_capacity <= 0.0 || right_capacity < left_capacity {
+            return None;
+        }
+        if order_usd <= left_capacity {
+            return Some(order_usd / left_capacity * left_band);
+        }
+        if order_usd <= right_capacity {
+            let ratio = (order_usd - left_capacity) / (right_capacity - left_capacity);
+            return Some(left_band + ratio * (right_band - left_band));
+        }
+    }
+    let (band, capacity) = (bands.last()?, capacities.last()?);
+    (capacity > &0.0).then_some(order_usd / capacity * band)
+}
+
+fn slippage_estimates(conn: &Connection, pair: &str) -> Result<Value> {
+    let raw = conn
+        .query_row(
+            "SELECT value_json FROM detail_cache WHERE kind='depth' AND cache_key=?1",
+            [pair],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(json!([]));
+    };
+    let depth: Value = serde_json::from_str(&raw)?;
+    let bands = depth["bands_pct"].as_array();
+    let capacities = depth["pressure_usd"].as_array();
+    let estimates = [100.0, 500.0, 1000.0]
+        .into_iter()
+        .filter_map(|order_usd| {
+            let bands: Option<Vec<f64>> = bands?.iter().map(|value| value.as_f64()).collect();
+            let capacities: Option<Vec<f64>> =
+                capacities?.iter().map(|value| value.as_f64()).collect();
+            let buy_slippage_pct =
+                estimate_slippage_pct(order_usd, bands.as_deref()?, capacities.as_deref()?)?;
+            Some(json!({"order_usd":order_usd,"buy_slippage_pct":buy_slippage_pct}))
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "estimates":estimates,
+        "depth_calculated_at":depth["calculated_at"],
+        "source":"cached_pool_depth"
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,6 +974,17 @@ mod tests {
         }
         insert(&conn, now - 60, 100.5, 100.0, 50, 50);
         insert(&conn, now, 101.0, 300.0, 80, 20);
+        let depth = json!({
+            "available":true,
+            "bands_pct":[1.0,2.0,5.0],
+            "pressure_usd":[1000.0,3000.0,9000.0],
+            "calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339()
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO detail_cache(kind,cache_key,value_json,updated_at) VALUES('depth','p',?1,?2)",
+            rusqlite::params![depth,chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339()],
+        ).unwrap();
         let report = current(&path).unwrap();
         let item = &report["items"][0];
         assert_eq!(item["token_address"], "token");
@@ -927,6 +993,18 @@ mod tests {
         assert!((item["buy_pressure"].as_f64().unwrap() - 0.8).abs() < 1e-9);
         assert_eq!(item["evidence_count"], 6);
         assert!((item["return_5m_pct"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+        assert_eq!(
+            item["slippage_estimates"]["estimates"][0]["order_usd"].as_f64(),
+            Some(100.0)
+        );
+        assert_eq!(
+            item["slippage_estimates"]["estimates"][0]["buy_slippage_pct"],
+            0.1
+        );
+        assert_eq!(
+            item["slippage_estimates"]["estimates"][2]["buy_slippage_pct"],
+            1.0
+        );
         std::fs::remove_file(&path).unwrap();
     }
 

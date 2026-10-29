@@ -45,7 +45,7 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
   if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
-    {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString()}
+    {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.12},{order_usd:500,buy_slippage_pct:.62},{order_usd:1000,buy_slippage_pct:1.25}]}}
   ],historical_calibration:{volume_anomaly_gt_5pct_pct:13.68,baseline_gt_5pct_pct:7.31,strong_anomaly_gt_5pct_pct:15.12}})};
   if(url==='/api/early-warning/history?limit=12')return {ok:true,json:async()=>({reports:[
     {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01}
@@ -133,6 +133,7 @@ assert.ok(vm.runInContext(`stageFilter.has('inactive') && stageFilter.size === s
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
   assert.ok(detail.includes('class="structure-summary"'),'the novice summary should be embedded in the structure card');
+  assert.ok(detail.includes('$100 买入滑点') && detail.includes('0.12%') && detail.includes('1.25%'),'early warning must expose cached depth slippage');
   assert.ok(detail.indexOf('class="structure-card"') < detail.indexOf('class="structure-summary"') && detail.indexOf('class="structure-summary"') < detail.indexOf('class="factor-grid"'),'the novice summary should sit inside the structure card before factors');
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
