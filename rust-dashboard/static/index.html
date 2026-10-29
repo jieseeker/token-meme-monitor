@@ -462,6 +462,7 @@ function confirmationState(token){
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
 function earlyWarningLabel(state){return earlyWarningLabels[state?.status]||'前置预测';}
+function fmtPct2(value){return value==null||isNaN(value)?'--':`${value.toFixed(2)}%`;}
 function earlyWarningHTML(token){
   const item=earlyWarningOf(token?.token_address);
   if(!item)return '<div class="hint">前置预测数据加载中...</div>';
@@ -470,7 +471,7 @@ function earlyWarningHTML(token){
   const confirmation=confirmationState(token);
   const slippage=(item.slippage_estimates?.estimates||[]).reduce((map,row)=>(row.order_usd===100?map[100]=row.buy_slippage_pct:row.order_usd===1000?map[1000]=row.buy_slippage_pct:null,map),{});
   return `<div class="early-warning-strip${item.is_active?' active':''}">
-    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note">${confirmation.active?`<b>${escapeAttr(confirmation.label)}</b> · `:''}同类历史 4h &gt;5%：${gt5!=null?`${gt5}% / 基线 ${earlyWarningCalibration.baseline_gt_5pct_pct}%`:'--'} · 预测观察，不是买入指令</div></div>
+    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note">${confirmation.active?`<b>${escapeAttr(confirmation.label)}</b> · `:''}同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'} · 预测观察，不是买入指令</div></div>
     <div class="early-warning-metric"><span>量能倍数</span><b>${acceleration==null||isNaN(acceleration)?'--':acceleration.toFixed(1)+'x'}</b></div>
     <div class="early-warning-metric"><span>5m买压</span><b>${pressure==null||isNaN(pressure)?'--':(pressure*100).toFixed(0)+'%'}</b></div>
     <div class="early-warning-metric"><span>量/流动性</span><b>${efficiency==null||isNaN(efficiency)?'--':(efficiency*100).toFixed(1)+'%'}</b></div>
