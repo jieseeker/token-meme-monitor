@@ -7,6 +7,10 @@ use std::collections::{BTreeMap, HashSet};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 const HORIZONS: [(&str, i64); 3] = [("15m", 900), ("1h", 3600), ("4h", 14400)];
 const RULE_NAMES: [&str; 4] = ["volume", "buy", "strong", "baseline"];
 const EVENT_COOLDOWN_SECONDS: i64 = 900;
@@ -70,7 +74,52 @@ struct RuleOutcome {
     tokens: u64,
     #[serde(skip)]
     token_set: HashSet<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    followed_by_a: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    a_lead_median_seconds: Option<i64>,
+    #[serde(skip)]
+    a_lead_seconds: Vec<i64>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    exit_strategies: BTreeMap<String, Vec<ExitCostOutcome>>,
     forward: BTreeMap<String, Outcome>,
+}
+
+#[derive(Default, Serialize)]
+struct ExitCostOutcome {
+    cost_pct: f64,
+    denominator: u64,
+    resolved: u64,
+    endpoint_missing: u64,
+    wins: u64,
+    losses: u64,
+    mean_net_return_pct: Option<f64>,
+    total_net_profit_pct: f64,
+    total_net_loss_pct: f64,
+    profit_factor: Option<f64>,
+}
+
+impl ExitCostOutcome {
+    fn record(&mut self, gross_return_pct: Option<f64>) {
+        self.denominator += 1;
+        let Some(gross) = gross_return_pct else {
+            self.endpoint_missing += 1;
+            return;
+        };
+        let net = gross - self.cost_pct;
+        self.resolved += 1;
+        if net > 0.0 {
+            self.wins += 1;
+            self.total_net_profit_pct += net;
+        } else if net < 0.0 {
+            self.losses += 1;
+            self.total_net_loss_pct += -net;
+        }
+        let mean = self.mean_net_return_pct.unwrap_or(0.0);
+        self.mean_net_return_pct = Some(mean + (net - mean) / self.resolved as f64);
+        self.profit_factor = (self.total_net_loss_pct > 0.0)
+            .then_some(self.total_net_profit_pct / self.total_net_loss_pct);
+    }
 }
 
 fn median(values: &[f64]) -> Option<f64> {
@@ -102,10 +151,17 @@ fn record_event(
     rule: &'static str,
     samples: &[Sample],
     index: usize,
+    a_times: &[i64],
 ) {
     let outcome = reports.entry(rule.into()).or_default();
     outcome.events += 1;
     outcome.token_set.insert(samples[index].token.clone());
+    if a_times
+        .iter()
+        .any(|at| *at >= samples[index].at && *at <= samples[index].at + 14400)
+    {
+        outcome.followed_by_a += 1;
+    }
     for (name, horizon) in HORIZONS {
         let forward = outcome.forward.entry((*name).into()).or_default();
         forward.denominator += 1;
@@ -120,9 +176,97 @@ fn record_event(
             forward.endpoint_missing += 1;
         }
     }
+    if !a_times.is_empty() {
+        outcome.a_lead_seconds.extend(
+            a_times
+                .iter()
+                .filter(|at| **at >= samples[index].at && **at <= samples[index].at + 14400)
+                .map(|at| at - samples[index].at),
+        );
+    }
+    for (strategy, gross) in [
+        ("fixed_take_profit", path_exit(samples, index, false)),
+        ("ladder_take_profit", path_exit(samples, index, true)),
+    ] {
+        let outcomes = outcome
+            .exit_strategies
+            .entry(strategy.into())
+            .or_insert_with(|| {
+                [0.0, 0.3, 0.5]
+                    .into_iter()
+                    .map(|cost_pct| ExitCostOutcome {
+                        cost_pct,
+                        ..ExitCostOutcome::default()
+                    })
+                    .collect()
+            });
+        for cost in outcomes {
+            cost.record(gross);
+        }
+    }
 }
 
-fn process_token(samples: &[Sample], reports: &mut BTreeMap<String, RuleOutcome>) {
+fn path_exit(samples: &[Sample], index: usize, ladder: bool) -> Option<f64> {
+    let event = &samples[index];
+    let deadline = event.at + 14400;
+    let mut high_pct = 0.0_f64;
+    let mut first_target = false;
+    let mut second_target = false;
+    for sample in samples.get(index + 1..)? {
+        if sample.at > deadline + 300 {
+            break;
+        }
+        let gross = (sample.price / event.price - 1.0) * 100.0;
+        high_pct = high_pct.max(gross);
+        if sample.at >= deadline && sample.at <= deadline + 300 {
+            if !ladder || !first_target {
+                return Some(gross);
+            }
+            let remaining = if second_target { 0.4 } else { 0.7 };
+            let realized_return = if second_target {
+                10.0 * 0.3 + 25.0 * 0.3
+            } else {
+                3.0
+            };
+            return Some(realized_return + remaining * gross);
+        }
+        if !ladder {
+            if gross >= 10.0 {
+                return Some(10.0);
+            }
+            if gross <= -10.0 {
+                return Some(-10.0);
+            }
+        } else {
+            if gross <= -10.0 {
+                let stop_return = if second_target {
+                    3.0 + 7.5 + 0.4 * -10.0
+                } else if first_target {
+                    3.0 + 0.7 * -10.0
+                } else {
+                    -10.0
+                };
+                return Some(stop_return);
+            }
+            if !first_target && gross >= 10.0 {
+                first_target = true;
+            } else if first_target && !second_target && gross >= 25.0 {
+                second_target = true;
+            }
+            if first_target && gross >= 8.0 && gross <= high_pct - 20.0 {
+                let trailing = if second_target {
+                    10.0 * 0.3 + 25.0 * 0.3 + gross * 0.4
+                } else {
+                    10.0 * 0.3 + gross * 0.7
+                };
+                return Some(trailing);
+            }
+        }
+    }
+    None
+}
+
+fn process_token(samples: &[Sample], a_times: &[i64], reports: &mut BTreeMap<String, RuleOutcome>) {
     let reference_pair = samples
         .iter()
         .map(|sample| (&sample.pair, sample.liquidity_usd))
@@ -216,14 +360,48 @@ fn process_token(samples: &[Sample], reports: &mut BTreeMap<String, RuleOutcome>
             let allowed = sample.at.saturating_sub(previous) >= EVENT_COOLDOWN_SECONDS;
             if active && allowed {
                 last_event.insert(rule, sample.at);
-                record_event(reports, rule, &samples, index);
+                record_event(reports, rule, &samples, index, a_times);
             }
         }
         if sample.at.saturating_sub(last_baseline) >= EVENT_COOLDOWN_SECONDS {
             last_baseline = sample.at;
-            record_event(reports, "baseline", &samples, index);
+            record_event(reports, "baseline", &samples, index, a_times);
         }
     }
+}
+
+fn a_transition_times(conn: &Connection) -> Result<BTreeMap<String, Vec<i64>>> {
+    let mut query = conn.prepare(
+        "SELECT token_address,recorded_at,summary_json FROM signal_v2_changes ORDER BY token_address,recorded_at,id",
+    )?;
+    let rows = query.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut tokens: BTreeMap<String, Vec<i64>> = BTreeMap::default();
+    let mut previous: BTreeMap<String, (String, i64, bool)> = BTreeMap::new();
+    for row in rows {
+        let (token, recorded_at, summary) = row?;
+        let Ok(summary) = serde_json::from_str::<Value>(&summary) else {
+            continue;
+        };
+        let stage = summary["stage"].as_str().unwrap_or_default().to_string();
+        let first_seen = summary["first_seen_at"].as_i64().unwrap_or_default();
+        let terminated = summary["terminated"].as_bool().unwrap_or_default();
+        let previous_state =
+            previous.insert(token.clone(), (stage.clone(), first_seen, terminated));
+        let triggered = stage == "watch"
+            && previous_state.is_none_or(|(old_stage, old_first, old_terminated)| {
+                old_stage == "inactive" || old_terminated || old_first != first_seen
+            });
+        if triggered {
+            tokens.entry(token).or_default().push(recorded_at);
+        }
+    }
+    Ok(tokens)
 }
 
 pub fn replay(path: &str) -> Result<Value> {
@@ -248,6 +426,7 @@ pub fn replay(path: &str) -> Result<Value> {
         ))
     })?;
     let mut parsed: Vec<(i64, Sample)> = Vec::new();
+    let a_transitions = a_transition_times(&conn)?;
     let mut first = None;
     let mut last = None;
     let mut row_count = 0u64;
@@ -313,11 +492,17 @@ pub fn replay(path: &str) -> Result<Value> {
             .iter()
             .map(|(_, sample)| sample.clone())
             .collect();
-        process_token(&samples, &mut reports);
+        let a_times = a_transitions.get(&token).cloned().unwrap_or_default();
+        process_token(&samples, &a_times, &mut reports);
         start = end;
     }
     for outcome in reports.values_mut() {
         outcome.tokens = outcome.token_set.len() as u64;
+        outcome.a_lead_seconds.sort_unstable();
+        outcome.a_lead_median_seconds = outcome
+            .a_lead_seconds
+            .get(outcome.a_lead_seconds.len() / 2)
+            .copied();
     }
     Ok(json!({
         "mode":"early_warning_replay","source_time_unverified":true,
@@ -560,6 +745,13 @@ mod tests {
         insert(&conn, 1200, 101.0, 300.0, 80, 20);
         insert(&conn, 1800, 101.0, 300.0, 80, 20);
         insert(&conn, 2100, 110.0, 300.0, 80, 20);
+        insert(&conn, 15600, 110.0, 100.0, 50, 50);
+        let summary = json!({"stage":"watch","first_seen_at":1800,"terminated":false}).to_string();
+        conn.execute(
+            "INSERT INTO signal_v2_changes(token_address,pair_address,recorded_at,summary_json) VALUES('token','p',1800,?1)",
+            [&summary],
+        )
+        .unwrap();
         let report = replay(&path).unwrap();
         let strong = &report["rules"]["strong"];
         assert_eq!(strong["events"], 1);
@@ -567,6 +759,15 @@ mod tests {
         assert_eq!(strong["forward"]["15m"]["eligible"], 1);
         assert_eq!(strong["forward"]["15m"]["positive"], 1);
         assert_eq!(strong["forward"]["15m"]["endpoint_missing"], 0);
+        assert_eq!(strong["followed_by_a"], 1);
+        assert_eq!(strong["a_lead_median_seconds"], 600);
+        let fixed = strong["exit_strategies"]["fixed_take_profit"]
+            .as_array()
+            .unwrap();
+        assert_eq!(fixed.len(), 3);
+        assert_eq!(fixed[0]["cost_pct"], 0.0);
+        assert!((fixed[0]["mean_net_return_pct"].as_f64().unwrap() - 8.91).abs() < 0.01);
+        assert!((fixed[2]["mean_net_return_pct"].as_f64().unwrap() - 8.41).abs() < 0.01);
         std::fs::remove_file(&path).unwrap();
     }
 
