@@ -281,6 +281,7 @@ struct Row {
 }
 struct Pending {
     keys: Vec<String>,
+    token: String,
     at: DateTime<Utc>,
     pair: String,
     price: f64,
@@ -295,8 +296,91 @@ struct Pending {
 
 struct DelayedEntry {
     key: String,
+    token: String,
     pair: String,
     target: DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize)]
+struct PortfolioEvent {
+    token: String,
+    entry_at: i64,
+    exit_at: i64,
+    gross_return_pct: f64,
+}
+
+#[derive(Default, Serialize)]
+struct PortfolioPolicy {
+    opened: u64,
+    skipped_capacity: u64,
+    skipped_cooldown: u64,
+    wins: u64,
+    losses: u64,
+    final_equity: f64,
+    max_drawdown_pct: f64,
+    exposure_pct: f64,
+}
+
+fn simulate_portfolio(events: &[PortfolioEvent]) -> BTreeMap<String, PortfolioPolicy> {
+    let mut policies = BTreeMap::new();
+    let Some(first_entry) = events.iter().map(|event| event.entry_at).min() else {
+        return policies;
+    };
+    let Some(last_exit) = events
+        .iter()
+        .map(|event| event.exit_at.max(event.entry_at))
+        .max()
+    else {
+        return policies;
+    };
+    let window_seconds = (last_exit - first_entry).max(1) as f64;
+    for max_positions in [1usize, 2, 3, 5] {
+        let mut sorted = events.to_vec();
+        sorted.sort_by_key(|event| (event.entry_at, event.token.clone()));
+        let mut active_exits: Vec<i64> = Vec::new();
+        let mut cooldown_until: BTreeMap<String, i64> = BTreeMap::new();
+        let mut opened = Vec::new();
+        let mut policy = PortfolioPolicy::default();
+        for event in sorted {
+            active_exits.retain(|exit_at| *exit_at > event.entry_at);
+            if cooldown_until
+                .get(&event.token)
+                .is_some_and(|until| event.entry_at < *until)
+            {
+                policy.skipped_cooldown += 1;
+                continue;
+            }
+            if active_exits.len() >= max_positions {
+                policy.skipped_capacity += 1;
+                continue;
+            }
+            active_exits.push(event.exit_at);
+            cooldown_until.insert(event.token.clone(), event.entry_at + 3600);
+            opened.push(event);
+        }
+        policy.opened = opened.len() as u64;
+        opened.sort_by_key(|event| event.exit_at);
+        let mut equity = 1.0;
+        let mut peak = 1.0_f64;
+        let mut invested_seconds = 0_i64;
+        for event in &opened {
+            let net_return = (event.gross_return_pct - 0.3) / 100.0 / max_positions as f64;
+            equity *= 1.0 + net_return;
+            peak = peak.max(equity);
+            policy.max_drawdown_pct = policy.max_drawdown_pct.max((peak - equity) / peak * 100.0);
+            if net_return > 0.0 {
+                policy.wins += 1;
+            } else if net_return < 0.0 {
+                policy.losses += 1;
+            }
+            invested_seconds += event.exit_at.saturating_sub(event.entry_at).max(1);
+        }
+        policy.final_equity = equity;
+        policy.exposure_pct =
+            invested_seconds as f64 / (window_seconds * max_positions as f64) * 100.0;
+        policies.insert(format!("max_positions_{max_positions}"), policy);
+    }
+    policies
 }
 
 /// Opens the source read-only before any application startup, migration, or persistence.
@@ -381,6 +465,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
     let mut token = String::new();
     let mut rows = Vec::new();
     let mut bucket_time = None;
+    let mut portfolio_events = Vec::new();
     let mut replay = TokenReplay {
         from: from.map(|time| time.timestamp()).unwrap_or(0),
         ..TokenReplay::default()
@@ -414,6 +499,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         }
         if next_token != token {
             replay.finish(last.unwrap(), &mut hits);
+            portfolio_events.extend(replay.portfolio_events.iter().cloned());
             replay = TokenReplay {
                 from: from.unwrap().timestamp(),
                 ..TokenReplay::default()
@@ -487,6 +573,8 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         &mut hits,
     )?;
     replay.finish(last.unwrap_or_else(Utc::now), &mut hits);
+    portfolio_events.extend(replay.portfolio_events.iter().cloned());
+    let portfolio_policies = simulate_portfolio(&portfolio_events);
     let mut cohorts = BTreeMap::new();
     let mut by_date: BTreeMap<String, BTreeMap<String, Hits>> = BTreeMap::new();
     let keys: Vec<_> = hits
@@ -530,6 +618,7 @@ pub fn run(path: &str, args: &[String], settings: &Settings) -> Result<Value> {
         "frame_completeness_verified":false,"runtime_execution_trace_reproduced":false,
         "window":{"available_from":first,"available_until":last,"replay_from":from,"replay_until":last,"max_days":7},
         "input":input,"coverage":coverage,"structural_hits":hits,
+        "portfolio":{"events":portfolio_events.len(),"policies":portfolio_policies},
         "b_filter_comparison":{
             "experiment_version":"b_quality_v1",
             "cohorts":cohorts,"by_utc_date":by_date,"recent_volume_evidence":recent_evidence,
@@ -768,9 +857,16 @@ fn a_cohorts(state: &State, current: &Sample) -> Vec<&'static str> {
     names
 }
 
-fn new_pending(keys: Vec<String>, at: DateTime<Utc>, pair: &str, price: f64) -> Pending {
+fn new_pending(
+    keys: Vec<String>,
+    at: DateTime<Utc>,
+    token: &str,
+    pair: &str,
+    price: f64,
+) -> Pending {
     Pending {
         keys,
+        token: token.into(),
         at,
         pair: pair.into(),
         price,
@@ -814,6 +910,7 @@ struct TokenReplay {
     previous_reference: Option<DateTime<Utc>>,
     pending: Vec<Pending>,
     delayed: Vec<DelayedEntry>,
+    portfolio_events: Vec<PortfolioEvent>,
 }
 fn flush(
     conn: &Connection,
@@ -875,6 +972,7 @@ impl TokenReplay {
             previous_reference,
             pending,
             delayed,
+            portfolio_events,
         } = self;
         let at = group[0].at;
         count(input, "groups");
@@ -882,7 +980,7 @@ impl TokenReplay {
             count(input, "groups_over_three_pools");
         }
         // Forward labels consume later data separately; detection receives no future rows.
-        labels(pending, group, at, hits);
+        labels(pending, group, at, hits, portfolio_events);
         delayed.retain(|entry| {
             if at < entry.target {
                 return true;
@@ -900,6 +998,7 @@ impl TokenReplay {
                 pending.push(new_pending(
                     vec![key.clone()],
                     at,
+                    &entry.token,
                     &entry.pair,
                     sample.price.unwrap(),
                 ));
@@ -1068,6 +1167,7 @@ impl TokenReplay {
                 for delay in A_ENTRY_DELAYS_SECONDS {
                     delayed.push(DelayedEntry {
                         key: format!("A/delay_{delay}s"),
+                        token: token.to_string(),
                         pair: state.pair_address.clone(),
                         target: at + Duration::seconds(delay),
                     });
@@ -1104,6 +1204,7 @@ impl TokenReplay {
             pending.push(new_pending(
                 keys,
                 at,
+                token,
                 &state.pair_address,
                 current.price.unwrap(),
             ));
@@ -1166,6 +1267,7 @@ fn labels(
     group: &[Row],
     now: DateTime<Utc>,
     hits: &mut BTreeMap<String, Hits>,
+    portfolio_events: &mut Vec<PortfolioEvent>,
 ) {
     for event in pending.iter_mut() {
         let current = group
@@ -1337,6 +1439,16 @@ fn labels(
             for (name, is_new) in newly_exits {
                 if is_new {
                     let exit = event.strategy_exits.get(name).unwrap().unwrap();
+                    if name == "ladder_take_profit"
+                        && event.keys.iter().any(|key| key == "A/pass_recent_volume")
+                    {
+                        portfolio_events.push(PortfolioEvent {
+                            token: event.token.clone(),
+                            entry_at: event.at.timestamp(),
+                            exit_at: now.timestamp(),
+                            gross_return_pct: exit.1,
+                        });
+                    }
                     for key in &event.keys {
                         hits.get_mut(key)
                             .unwrap()
@@ -1604,6 +1716,46 @@ mod tests {
                 assert!((actual - expected).abs() < 1e-9, "{delay}");
             }
         }
+    }
+    #[test]
+    fn portfolio_simulation_respects_position_capacity() {
+        let events = vec![
+            PortfolioEvent {
+                token: "a".into(),
+                entry_at: 0,
+                exit_at: 100,
+                gross_return_pct: 10.0,
+            },
+            PortfolioEvent {
+                token: "b".into(),
+                entry_at: 50,
+                exit_at: 150,
+                gross_return_pct: -10.0,
+            },
+        ];
+        let policies = simulate_portfolio(&events);
+        let one = &policies["max_positions_1"];
+        assert_eq!(one.opened, 1);
+        assert_eq!(one.skipped_capacity, 1);
+        assert!((one.final_equity - 1.097).abs() < 1e-9);
+        let two = &policies["max_positions_2"];
+        assert_eq!(two.opened, 2);
+        assert_eq!(two.skipped_capacity, 0);
+        assert!((two.final_equity - 0.99450225).abs() < 1e-8);
+    }
+    #[test]
+    fn replay_adds_strong_a_cohort_to_portfolio_simulation() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        db.insert(T + 15_600, "a", 110.0, 30000.0, 70003.0, true);
+        let report = db.replay(false);
+        let portfolio = &report["portfolio"];
+        assert_eq!(portfolio["events"], 1);
+        assert_eq!(portfolio["policies"]["max_positions_1"]["opened"], 1);
+        assert_eq!(portfolio["policies"]["max_positions_5"]["opened"], 1);
     }
     #[test]
     fn replay_path_outcome_separates_target_and_stop_before_changing_win_rate() {
