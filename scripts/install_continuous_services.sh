@@ -5,6 +5,7 @@ BASE=${TMM_BASE:-/home/ubuntu/token-meme-monitor}
 SOURCE=${TMM_SOURCE:-$BASE/.source}
 RUNTIME="$BASE/monitoring-runtime/continuous"
 mkdir -p "$RUNTIME"
+sudo -n chown -R "$(id -un):$(id -gn)" "$RUNTIME"
 
 write_unit() {
   local name=$1 description=$2 exec_start=$3
