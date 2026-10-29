@@ -69,7 +69,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 
 /* ============ RIGHT: Detail ============ */
 .detail-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:start; }
+.context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:stretch; }
 .context-grid .detail-section { min-width:0; }
 .detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
 .structure-section { container-type:inline-size; }
@@ -166,6 +166,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .oi-main { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin:8px 0 12px; }
 .oi-meta { display:flex; flex-wrap:wrap; gap:10px 28px; padding-top:10px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
 .oi-meta b { display:block; margin-top:3px; font-size:15px; color:var(--text); }
+.oi-breakdown { margin-top:12px; }
 .oi-footnote { margin-top:10px; }
 @media(max-width:1100px){ .overview-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 @media(max-width:700px){ .overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -648,7 +649,6 @@ function renderDetail() {
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
   const previousTimes=sameToken?['oiTime','trendTime','depthTime','whaleTime','transferTime'].map(id=>document.getElementById(id)?.textContent):[];
-  const oiExpanded=document.querySelector('#oiBody details')?.open;
   const risks=marketRisks(t.signal_risk_flags);
   const structureTime=structure?.updated_at?new Date(structure.updated_at*1000).toISOString():null;
   const state=structureState(structure,Number(t.price_usd));
@@ -743,7 +743,7 @@ function renderDetail() {
   const watchButton=document.getElementById('watchButton');
   if(watchButton)watchButton.addEventListener('click',()=>toggleWatchlist(t.token_address));
   loadTrend(t);
-  loadOI(t.pair_address, t.price_change_h1, oiExpanded);
+  loadOI(t.pair_address, t.price_change_h1);
   loadDepth(t);
   loadWhales(t);
   loadTransfers(t);
@@ -906,7 +906,7 @@ async function loadDepth(token) {
   }));
 }
 
-async function loadOI(pair, priceChangeH1, expanded) {
+async function loadOI(pair, priceChangeH1) {
   let cached=oiCache.get(pair);
   if(!cached||Date.now()-cached.at>60000){
     cached={at:Date.now(),promise:fetchReady(`/api/token/${pair}/oi`).catch(e=>({available:false,reason:e.message}))};
@@ -934,12 +934,9 @@ async function loadOI(pair, priceChangeH1, expanded) {
       <div class="metric-card"><div class="label">价格 × OI</div><div class="value">${state}</div></div>
     </div>
     ${globalHtml||oi.long_short?.ratio!=null?`<div class="oi-meta">${globalHtml}${oi.long_short?.ratio!=null?`<div><span>大户多空比</span><b>${oi.long_short.ratio.toFixed(2)}</b></div>`:''}</div>`:''}
-    <details><summary>OI 规模、24h 变化与历史走势</summary>
-      <div class="secondary-metrics"><span>Binance OI <b>${fmtMoney(oi.oi_usd)}</b></span><span>24h 数量变化 <b>${fmtOiPct(oi.change_24h_pct)}</b></span></div>
-      <div class="chart-card"><h4>Binance OI 美元价值 · 近 24 小时</h4>${makeChart(oi.history.map(x=>({v:x.oi_usd})),'#b45309')}</div>
-    </details>
+    <div class="secondary-metrics oi-breakdown"><span>Binance OI <b>${fmtMoney(oi.oi_usd)}</b></span><span>24h 数量变化 <b>${fmtOiPct(oi.change_24h_pct)}</b></span></div>
+    <div class="chart-card"><h4>Binance OI 美元价值 · 近 24 小时</h4>${makeChart(oi.history.map(x=>({v:x.oi_usd})),'#b45309')}</div>
     <div class="hint oi-footnote">${oi.stale?'刷新失败，沿用上次结果 · ':''}${escapeAttr(oi.symbol||'未知合约')} · 小时采样 ${oi.timestamp&&Number.isFinite(new Date(oi.timestamp).getTime())?new Date(oi.timestamp).toLocaleString('zh-CN'):'时间未知'} · ${Number.isFinite(Date.parse(oi.calculated_at))?'抓取于 '+new Date(oi.calculated_at).toLocaleString('zh-CN'):'抓取时间未知'}。按同名合约匹配；跨平台 OI 仅含已收录且近期成交的永续合约，OI 增减不能单独判断方向。</div>`;
-  if(expanded)body.querySelector('details').open=true;
 }
 
 async function loadTrend(token) {

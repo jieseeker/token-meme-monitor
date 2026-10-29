@@ -162,6 +162,7 @@ assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_s
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
   assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
   assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');
+  assert.ok(html.includes('.context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:stretch; }'),'the OI card must stretch to the structure card height');
   assert.ok(detail.indexOf('市场价格对比') < detail.indexOf('价格区间深度'), 'trend should be visible before pool depth');
   assert.ok(detail.indexOf('已收录 <b>2</b> 个池子') < detail.indexOf('更新于 '), 'pool count should sit before the update time');
   assert.ok(detail.includes('class="overview-grid"'), 'the first card should use one unified stats grid');
@@ -284,6 +285,8 @@ assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_s
   const oi=document.getElementById('oiBody').innerHTML;
   assert.ok(oi.includes('oi-main') && oi.includes('oi-meta'));
   assert.ok(oi.includes('1小时 OI 变化') && oi.includes('大户多空比') && oi.includes('多交易所 OI'));
+  assert.ok(oi.includes('24h 数量变化') && oi.includes('Binance OI 美元价值 · 近 24 小时'));
+  assert.ok(!oi.includes('<details'), 'OI breakdown must be visible without expanding');
   assert.ok(oi.includes('小时采样'), 'OI timestamp must be labeled as an hourly sample');
   assert.ok(!oi.includes('与前一小时整点样本比较'));
   vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:false,reason:'无同名合约'})})`,context);
