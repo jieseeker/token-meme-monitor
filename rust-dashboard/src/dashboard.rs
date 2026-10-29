@@ -346,6 +346,24 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
 }
 
 fn market_state(rows: Vec<serde_json::Value>) -> serde_json::Value {
+    let mut tokens: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    for row in rows {
+        let token = row["token_address"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let replace = tokens
+            .get(&token)
+            .map(|current| {
+                row["liquidity_usd"].as_f64().unwrap_or(0.0)
+                    > current["liquidity_usd"].as_f64().unwrap_or(0.0)
+            })
+            .unwrap_or(true);
+        if replace && !token.is_empty() {
+            tokens.insert(token, row);
+        }
+    }
+    let rows: Vec<serde_json::Value> = tokens.into_values().collect();
     let mut changes: Vec<f64> = rows
         .iter()
         .filter_map(|row| row["price_change_h1"].as_f64())
