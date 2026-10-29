@@ -1044,10 +1044,18 @@ impl TokenReplay {
         }
         let a = state.stage == "watch"
             && (old_stage == "inactive" || old_terminated || state.first_seen_at != old_first);
+        let c_candidate = state.stage == "base"
+            && old_stage != "base"
+            && state.b_at.is_some()
+            && state.c_at.is_none()
+            && !state.terminated
+            && !state.expired
+            && state.data_status == "current";
         for (stage, trigger) in [
             ("A", a),
             ("B", old_b.is_none() && state.b_at.is_some()),
             ("C", old_c.is_none() && state.c_at.is_some()),
+            ("C/candidate", c_candidate),
         ] {
             if !trigger {
                 continue;
@@ -1518,6 +1526,30 @@ mod tests {
                 "{cohort}"
             );
         }
+    }
+    #[test]
+    fn replay_c_candidate_starts_when_base_forms_after_b() {
+        let db = Database::new();
+        breakout(&db);
+        let conn = Connection::open(&db.0).unwrap();
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        for (time, price) in [
+            (T + 600, 112.0),
+            (T + 840, 108.0),
+            (T + 1080, 108.1),
+            (T + 1320, 108.2),
+            (T + 1560, 108.1),
+            (T + 1800, 108.2),
+        ] {
+            db.insert(time, "a", price, 30000.0, 70003.0, true);
+        }
+        db.insert(T + 360, "a", 101.2, 30000.0, 70003.0, true);
+        conn.execute("UPDATE snapshots SET volume_m5=3000", [])
+            .unwrap();
+        let report = db.replay(false);
+        assert_eq!(report["structural_hits"]["C"]["events"], 0);
+        assert_eq!(report["structural_hits"]["C/candidate"]["events"], 1);
     }
     #[test]
     fn replay_a_delayed_entries_sample_the_future_price_once() {
