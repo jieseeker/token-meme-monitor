@@ -67,6 +67,8 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 页面通过 `GET /api/early-warning` 输出当前代币的前置状态和同口径指标。该接口只读取最近 31 分钟快照；历史命中率优先读取最新持续回放报告，报告缺失时才使用内置回退值。计算结果用于排序和“预测观察”展示，不改变 A/B/C 结构确认，也不输出买入指令。
 
+顶部“自选提醒”可申请浏览器通知权限。仅自选代币出现活跃前置异动时提醒，同一代币同一状态 15 分钟内去重；通知文案始终标明“预测观察，不是买入指令”。
+
 ## Factor v1 只读回放
 
 ```bash

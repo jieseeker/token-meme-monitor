@@ -23,6 +23,12 @@ const row = {
 let depthAt = new Date().toISOString();
 let structureGate = null;
 const calls=[];
+class TestNotification {
+  static permission='granted';
+  static async requestPermission(){return 'granted';}
+  constructor(title,options){TestNotification.instances.push({title,options});}
+}
+TestNotification.instances=[];
 const storage = new Map([
   ['tmm-watchlist-v1', JSON.stringify(['0xtoken'])],
   ['tmm-watchlist-only-v1','true'],
@@ -49,7 +55,7 @@ const fetch = async url => { calls.push(url);
   if(url.endsWith('/prices')) return {ok:true,json:async()=>({symbol:'TESTUSDT',spot:[{at:at-100000,price:row.price_usd*.99},{at:at-40000,price:row.price_usd}],futures:[{at:at-100000,price:row.price_usd*1.01},{at:at-40000,price:row.price_usd*1.02}]})};
   if(url.endsWith('/oi')) return {ok:true,json:async()=>({available:true,symbol:'TESTUSDT',timestamp:Date.now(),calculated_at:new Date().toISOString(),oi_usd:12000,change_1h_pct:2.5,change_24h_pct:6,history:[{oi_usd:10000},{oi_usd:12000}],global:{oi_usd:30000,market_count:2},long_short:{ratio:1.3,timestamp:Date.now()}})};
   return { ok: true, json: async () => url.startsWith('/api/overview') ? [row, {...row, pair_address:'0xmid', liquidity_usd:50000, volume_h1:5000, signal_score:45, dex_id:'uniswap'}, {...row, token_address:'0xother', pair_address:'0xlow', token_symbol:'OTHER', signal_score:20}, {...row, token_address:'0xzero', pair_address:'0xzero-pair', token_symbol:'ZERO', signal_score:0, signal_reasons:'[]'}] : url.endsWith('/oi') ? { available:true, symbol:'TESTUSDT', timestamp:Date.now(), oi_usd:12000, change_1h_pct:2.5, change_24h_pct:6, history:[{oi_usd:10000},{oi_usd:12000}], global:{oi_usd:30000,market_count:2}, long_short:{ratio:1.3,timestamp:Date.now()} } : url.endsWith('/depth') ? { available:true, calculated_at:depthAt, dex:url.includes('0xmid')?'uniswap':'pancakeswap', type:'v3', block:'0x10', bands_pct:[1,2,5], support_usd:url.includes('0xmid')?[50,100,250]:[100,200,500], pressure_usd:url.includes('0xmid')?[60,120,300]:[120,240,600] } : url.endsWith('/whales') ? {available:true,calculated_at:new Date().toISOString(),trades:url.includes('0xmid')?[{side:'sell',usd:18000,at:new Date().toISOString(),hash:'0xabc',wallet:'0xdef'},{side:'buy',usd:11000,at:new Date().toISOString(),hash:'0xghi',wallet:'0xjkl'}]:[{side:'sell',usd:12000,at:new Date().toISOString(),hash:'0xabc',wallet:'0xdef'}]} : url.endsWith('/transfers') ? {available:true,calculated_at:new Date().toISOString(),sample_count:100,transfers:[{amount:1500000,from:'0xaaaabbbb',to:'0xccccdddd',hash:'0xtransfer',at:new Date().toISOString()},{amount:2000000,from:'0xpair',to:'0xccccdddd',hash:'0xpool',at:new Date().toISOString()}]} : [] }; };
-const context=vm.createContext({ document, fetch, localStorage, window:{addEventListener() {}}, setInterval() {}, Date, Map, console });
+const context=vm.createContext({ document, fetch, localStorage, window:{addEventListener() {}}, setInterval() {}, Date, Map, console, Notification:TestNotification });
 vm.runInContext(script, context);
 assert.equal(vm.runInContext('watchlistOnly',context),true,'legacy boolean watchlist-only state must survive a reload');
 vm.runInContext('watchlistOnly=false; watchlist.clear()',context);
@@ -57,7 +63,14 @@ assert.ok(document.getElementById('tokenList').innerHTML.includes('CACHED'), 're
 assert.ok(document.getElementById('refreshInfo').textContent.includes('行情快照最早 2分钟前'), 'cached list must retain the sample age');
 setImmediate(async () => {
   await new Promise(setImmediate);
+  vm.runInContext(`watchlist.add('0xtoken')`,context);
   await vm.runInContext('refreshStructure()',context);
+  await vm.runInContext('refreshEarlyWarning()',context);
+  assert.equal(TestNotification.instances.length,1,'watchlisted active early warnings should notify once');
+  assert.ok(TestNotification.instances[0].title.includes('TEST'),'notification should identify the token');
+  await vm.runInContext('refreshEarlyWarning()',context);
+  assert.equal(TestNotification.instances.length,1,'the same early warning state must not notify again within 15 minutes');
+  vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');

@@ -27,6 +27,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-count { padding-right:14px; border-right:1px solid var(--line); font-size:12px; color:var(--muted); }
 .refresh-badge { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
 .refresh-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
+.notify-toggle { flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); cursor:pointer; }
+.notify-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
 @media(max-width:600px){ .top-bar { align-items:flex-start; flex-direction:column; gap:10px; padding:12px 14px; } .toolbar-subtitle { line-height:1.5; } .top-right { flex-wrap:wrap; row-gap:8px; } }
 
 .main { display:grid; grid-template-columns:minmax(260px,300px) minmax(0,1fr); gap:20px; padding:20px 24px 40px; max-width:118rem; margin:auto; }
@@ -224,6 +226,7 @@ svg.chart.price-chart { height:104px; }
   <div class="top-right">
     <div class="token-count" id="tokenCount">统计中...</div>
     <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
+    <button class="notify-toggle" id="notifyToggle" type="button">自选提醒</button>
   </div>
 </div>
 
@@ -251,6 +254,7 @@ const REFRESH_MS = 15000;
 const OVERVIEW_CACHE_KEY = 'tmm-tokens-v1';
 const WATCHLIST_KEY = 'tmm-watchlist-v1';
 const WATCHLIST_ONLY_KEY = 'tmm-watchlist-only-v1';
+const EARLY_WARNING_NOTIFY_KEY = 'tmm-early-warning-notifications-v1';
 let allData = [];
 let tokenData = [];
 let selectedDetail = null;
@@ -1040,6 +1044,8 @@ try{
   if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
 }catch{}
 renderStageFilter();
+updateNotifyToggle();
+document.getElementById('notifyToggle')?.addEventListener('click',enableEarlyWarningNotifications);
 
 function refreshStructure(){
   if(structureRefreshPromise)return structureRefreshPromise;
@@ -1055,9 +1061,47 @@ function refreshEarlyWarning(){
   return fetchJSON('/api/early-warning').then(result=>{
     earlyWarningRows=new Map((result.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     earlyWarningCalibration=result.historical_calibration||null;
+    notifyEarlyWarnings();
     renderTokenList();
     if(selectedToken)renderDetail();
   }).catch(()=>{});
+}
+
+function updateNotifyToggle(){
+  const button=document.getElementById('notifyToggle');
+  if(!button)return;
+  const enabled=typeof Notification!=='undefined'&&Notification.permission==='granted';
+  button.classList.toggle('active',enabled);
+  button.textContent=enabled?'自选提醒已开启':'自选提醒';
+}
+
+async function enableEarlyWarningNotifications(){
+  if(typeof Notification==='undefined')return;
+  if(Notification.permission!=='granted')await Notification.requestPermission();
+  updateNotifyToggle();
+  if(Notification.permission==='granted')notifyEarlyWarnings();
+}
+
+function notifyEarlyWarnings(){
+  updateNotifyToggle();
+  if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
+  let sent={};
+  try{sent=JSON.parse(localStorage.getItem(EARLY_WARNING_NOTIFY_KEY)||'{}');}catch{}
+  const now=Date.now();
+  const symbols=new Map(tokenData.map(token=>[String(token.token_address||'').toLowerCase(),token.token_symbol||token.token_name||token.token_address]));
+  for(const warning of earlyWarningRows.values()){
+    if(!warning.is_active||!watchlist.has(String(warning.token_address||'').toLowerCase()))continue;
+    const key=String(warning.token_address||'').toLowerCase()+':'+warning.status;
+    if(Number.isFinite(sent[key])&&now-sent[key]<900000)continue;
+    sent[key]=now;
+    const symbol=symbols.get(String(warning.token_address||'').toLowerCase())||'代币';
+    const acceleration=Number(warning.volume_acceleration);
+    new Notification(`${symbol} ${earlyWarningLabel(warning)}`,{
+      body:`量能 ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x':'--'} · 预测观察，不是买入指令`,
+      tag:key
+    });
+  }
+  try{localStorage.setItem(EARLY_WARNING_NOTIFY_KEY,JSON.stringify(sent));}catch{}
 }
 
 async function refresh(){
