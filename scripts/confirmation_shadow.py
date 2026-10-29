@@ -227,7 +227,8 @@ def main():
     parser.add_argument("--interval", type=int, default=300)
     args = parser.parse_args()
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(args.db)
+    connection = sqlite3.connect(args.db, timeout=30)
+    connection.execute("PRAGMA busy_timeout=30000")
     init_schema(connection)
     while True:
         print(json.dumps(capture(args.api, connection), ensure_ascii=False, sort_keys=True), flush=True)
