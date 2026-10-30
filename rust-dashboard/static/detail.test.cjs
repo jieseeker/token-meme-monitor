@@ -91,7 +91,12 @@ setImmediate(async () => {
   assert.ok(document.getElementById('tokenList').innerHTML.includes('TEST'));
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('活跃度分'),'unvalidated activity score must not dominate discovery');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'other monitored tokens are visible without expanding');
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active"'),'fresh early evidence gets a subtle list marker');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active signal-up"'),'rising fresh evidence gets the rising color');
+  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=-1.2;renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active signal-down"'),'falling fresh evidence gets the falling color');
+  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=null;renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active"') && !document.getElementById('tokenList').innerHTML.includes('signal-up') && !document.getElementById('tokenList').innerHTML.includes('signal-down'),'missing change keeps neutral signal style');
+  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=1.2;renderTokenList()`,context);
   assert.equal(document.getElementById('listHint').hidden,true,'zero-signal hint stays hidden while fresh evidence exists');
   vm.runInContext(`structureRows.set('0xother',{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1});renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('候选 · 快照') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'list copy drops A/B/C stage letters');
