@@ -198,6 +198,12 @@ assert.ok(noAWarning.includes('暂无活跃前置异动'),'inactive warning shou
 assert.ok(!noAWarning.includes('confirmation-criteria') && !noAWarning.includes('$1K 买入滑点'),'quiet warning should hide inactive admission details');
 const aWarning=vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',first_seen_at:Math.floor(Date.now()/1000)-240});earlyWarningRows.get('0xconfirm').is_active=true;earlyWarningHTML({token_address:'0xconfirm'})`,context);
 assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31%'),'A checklist must expose the blocking gap');
+assert.ok(aWarning.includes('$1K 买入滑点</span><b>0.81%</b><em>上限 0.50% · 超限 0.31%'),'blocked cost shows the current value, limit, and gap together');
+assert.ok(aWarning.includes('5/6 项满足'),'the cost block still counts toward all six conditions');
+assert.ok(aWarning.indexOf('class="early-warning-facts"')<aWarning.indexOf('class="early-warning-judgment"') && aWarning.indexOf('class="early-warning-judgment"')<aWarning.indexOf('class="early-warning-cost"') && aWarning.indexOf('class="early-warning-cost"')<aWarning.indexOf('class="confirmation-criteria"') && aWarning.indexOf('class="confirmation-criteria"')<aWarning.indexOf('class="early-warning-foot"'),'warning content follows the reader’s decision path');
+assert.ok(!aWarning.includes('$1K 滑点</span>'),'slippage condition is shown once in execution cost');
+const evidenceWarning=vm.runInContext(`earlyWarningHTML({token_address:'0xtoken'})`,context);
+assert.ok(evidenceWarning.includes('量能 <b>2.4x</b>') && evidenceWarning.includes('买单占比 <b>67%</b>') && evidenceWarning.includes('近5分钟涨跌 <b>+1.2%</b>'),'warning evidence is readable in one line');
 assert.ok(!aWarning.includes('<details') && aWarning.includes('市场环境'),'strong confirmation conditions are visible without expanding');
 assert.ok(aWarning.includes('风险偏好 / 需风险偏好或中性') && !aWarning.includes('risk_on'),'market conditions use Chinese labels');
 assert.equal(vm.runInContext(`marketRegime='risk_off';earlyWarningRows.get('0xconfirm').slippage_estimates={estimates:[{order_usd:100,buy_slippage_pct:.1},{order_usd:1000,buy_slippage_pct:.2}]};confirmationState({token_address:'0xconfirm'}).reason`,context),'市场状态 风险规避；须为风险偏好或中性。','blocked market explanation uses Chinese labels');
