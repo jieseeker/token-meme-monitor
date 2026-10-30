@@ -109,17 +109,34 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .structure-stage { font-size:13px; font-weight:750; color:var(--text); }
 .structure-meta { margin-top:4px; font-size:12px; color:var(--muted); line-height:1.5; }
 .structure-conclusion { margin-top:8px; font-size:13px; color:var(--text); line-height:1.5; }
-.early-warning-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(15,118,110,.035); }
+.early-warning-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:11px; background:rgba(15,118,110,.035); }
 .early-warning-strip.active { border-color:rgba(15,118,110,.35); background:rgba(15,118,110,.075); }
-.early-warning-main,.early-warning-evidence { grid-column:1/-1; min-width:0; }
+.early-warning-main,.early-warning-cost,.confirmation-criteria { grid-column:1/-1; min-width:0; }
 .early-warning-label { font-size:13px; font-weight:800; color:var(--accent-strong); }
-.early-warning-note { margin-top:3px; font-size:12px; color:var(--muted); line-height:1.35; }
+.early-warning-meta { margin-top:3px; font-size:12px; color:var(--muted); }
+.early-warning-strip > .early-warning-meta { grid-column:1/-1; }
+.early-warning-note { margin-top:8px; font-size:12px; color:var(--muted); line-height:1.45; }
+.early-warning-note b { color:var(--text); }
 .early-warning-metric { min-width:0; }
 .early-warning-metric span { display:block; font-size:11px; color:var(--muted); white-space:nowrap; }
 .early-warning-metric b { display:block; margin-top:2px; font-size:14px; color:var(--text); font-variant-numeric:tabular-nums; }
+.early-warning-cost { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 16px; padding-top:10px; border-top:1px solid var(--line); }
+.early-warning-cost-item { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 8px; min-width:0; font-size:12px; color:var(--muted); }
+.early-warning-cost-item b { font-size:14px; color:var(--text); font-variant-numeric:tabular-nums; }
+.early-warning-cost-item.over b,.early-warning-cost-item.over em { color:#a43f30; }
+.early-warning-cost-item em { font-style:normal; }
 .early-warning-evidence { font-size:12px; color:var(--muted); line-height:1.45; }
 .early-warning-evidence b { color:var(--text); }
+.confirmation-criteria { font-size:12px; color:var(--muted); }
+.confirmation-criteria summary { width:max-content; max-width:100%; cursor:pointer; color:var(--accent-strong); font-weight:700; }
+.confirmation-criteria summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.confirmation-checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 16px; margin-top:8px; border-top:1px solid var(--line); }
+.confirmation-check { display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
+.confirmation-check span { min-width:0; }
+.confirmation-check b { min-width:0; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; text-align:right; overflow-wrap:anywhere; }
+.confirmation-check.blocked b { color:#a43f30; }
 @container (max-width:520px){ .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@container (max-width:520px){ .early-warning-cost,.confirmation-checks { grid-template-columns:1fr; } }
 .factor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .factor-item { min-width:0; }
 .factor-label { display:flex; justify-content:space-between; gap:6px; font-size:12px; color:var(--muted); }
@@ -446,7 +463,9 @@ function confirmationState(token){
     active,
     classification,
     label,
-    evidence:`阶段 ${v2?.stage||'--'} / watch · 风险 ${v2?.risk_status||'--'} / PASS · 量能 ${warning?.is_active===true?'活跃':'未活跃'} / 活跃 · A ${fmtDuration(ageSeconds)} / ≤5分钟${ageSeconds!=null?`（${ageSeconds<=300?'剩余':'超出'} ${fmtDuration(Math.abs(300-ageSeconds))}）`:''} · $100 滑点 ${valid100?Number(slippage100).toFixed(2)+'%':'--'} / ≤0.30% · $1K 滑点 ${valid1000?Number(slippage1000).toFixed(2)+'%':'--'} / ≤0.50% · 市场 ${marketRegime||'未知'} / risk_on 或 neutral`,
+    ageSeconds,
+    slippage100:valid100?Number(slippage100):null,
+    slippage1000:valid1000?Number(slippage1000):null,
     reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':classification==='market_blocked'?`市场状态 ${marketRegime||'未知'}；须为 risk_on 或 neutral。`:classification==='slippage_unknown'?'$100 / $1K 滑点缺失；阈值分别为 0.30% / 0.50%。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
 }
@@ -459,14 +478,30 @@ function earlyWarningHTML(token){
   const acceleration=Number(item.volume_acceleration), pressure=Number(item.buy_pressure), efficiency=Number(item.volume_to_liquidity), change=Number(item.return_5m_pct);
   const gt5=item.status==='strong_anomaly'?earlyWarningCalibration?.strong_anomaly_gt_5pct_pct:earlyWarningCalibration?.volume_anomaly_gt_5pct_pct;
   const confirmation=confirmationState(token);
-  const slippage=(item.slippage_estimates?.estimates||[]).reduce((map,row)=>(row.order_usd===100?map[100]=row.buy_slippage_pct:row.order_usd===1000?map[1000]=row.buy_slippage_pct:null,map),{});
+  const v2=signalV2Rows.get(String(token?.token_address||'').toLowerCase());
+  const hasA=v2?.stage==='watch';
+  const status=hasA?(confirmation.classification==='none'?'A 时间缺失，暂不评估强确认':confirmation.classification==='slippage_blocked'?'执行成本超限，暂不确认买点':confirmation.label):v2?'当前不在 A 观察窗，仅展示前置异动':'尚无 A 形态，当前仅前置观察';
+  const costRows=[[100,confirmation.slippage100,.3],[1000,confirmation.slippage1000,.5]].map(([order,value,limit])=>{
+    const excess=value!=null&&value>limit;
+    return `<div class="early-warning-cost-item${excess?' over':''}"><span>${order===100?'$100':'$1K'} 买入滑点</span><b>${value==null?'--':value.toFixed(2)+'%'}</b><em>${excess?`超限 ${(value-limit).toFixed(2)}%`:`上限 ${limit.toFixed(2)}%`}</em></div>`;
+  }).join('');
+  const checks=hasA?[
+    ['风险',v2.risk_status==='PASS',`${v2.risk_status||'未知'} / 需 PASS`],
+    ['前置量能',item.is_active===true,`${item.is_active===true?'活跃':'未活跃'} / 需活跃`],
+    ['A 新鲜度',confirmation.ageSeconds!=null&&confirmation.ageSeconds<=300,`${fmtDuration(confirmation.ageSeconds)} / ≤5分钟${confirmation.ageSeconds>300?`，超出 ${fmtDuration(confirmation.ageSeconds-300)}`:''}`],
+    ['$100 滑点',confirmation.slippage100!=null&&confirmation.slippage100<=.3,`${confirmation.slippage100==null?'--':confirmation.slippage100.toFixed(2)+'%'} / ≤0.30%`],
+    ['$1K 滑点',confirmation.slippage1000!=null&&confirmation.slippage1000<=.5,`${confirmation.slippage1000==null?'--':confirmation.slippage1000.toFixed(2)+'%'} / ≤0.50%`],
+    ['市场环境',marketRegime==='risk_on'||marketRegime==='neutral',`${marketRegime||'未知'} / 需 risk_on 或 neutral`]
+  ]:[];
   return `<div class="early-warning-strip${item.is_active?' active':''}">
-    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note"><b>${escapeAttr(confirmation.label)}</b> · 同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'} · 预测观察，不是买入指令</div></div>
+    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-meta">证据 ${Number(item.evidence_count||0)} 条 · 更新 ${escapeAttr(timeAgo(item.observed_at))}</div><div class="early-warning-note"><b>${escapeAttr(status)}</b> · 预测观察，不是买入指令</div></div>
     <div class="early-warning-metric"><span>量能倍数</span><b>${acceleration==null||isNaN(acceleration)?'--':acceleration.toFixed(1)+'x'}</b></div>
     <div class="early-warning-metric"><span>5m买压</span><b>${pressure==null||isNaN(pressure)?'--':(pressure*100).toFixed(0)+'%'}</b></div>
     <div class="early-warning-metric"><span>量/流动性</span><b>${efficiency==null||isNaN(efficiency)?'--':(efficiency*100).toFixed(1)+'%'}</b></div>
     <div class="early-warning-metric"><span>5m涨幅</span><b>${change==null||isNaN(change)?'--':fmtChange(change)}</b></div>
-    <div class="early-warning-evidence">证据 <b>${Number(item.evidence_count||0)}</b> 条 · 更新 <b>${escapeAttr(timeAgo(item.observed_at))}</b> · $100 买入滑点 <b>${slippage[100]==null?'--':slippage[100].toFixed(2)+'%'}</b> · $1K 买入滑点 <b>${slippage[1000]==null?'--':slippage[1000].toFixed(2)+'%'}</b><br>${escapeAttr(confirmation.evidence)}</div>
+    <div class="early-warning-cost">${costRows}</div>
+    ${hasA?`<details class="confirmation-criteria"><summary>强确认条件 · ${checks.filter(row=>row[1]).length}/6 项满足</summary><div class="confirmation-checks">${checks.map(([name,pass,value])=>`<div class="confirmation-check${pass?'':' blocked'}"><span>${escapeAttr(name)}</span><b>${escapeAttr(value)}</b></div>`).join('')}</div></details>`:''}
+    <div class="early-warning-meta">同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'}</div>
   </div>`;
 }
 function buyPointAxisHTML(distance){

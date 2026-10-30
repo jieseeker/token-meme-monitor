@@ -154,6 +154,11 @@ assert.equal(vm.runInContext(`marketRegime='risk_on';earlyWarningRows.set('0xcon
 assert.equal(vm.runInContext(`noviceState({token_address:'0xconfirm',price_usd:1.02,observed_at:new Date().toISOString(),signal_risk_flags:'[]'},{available:true,stage:'first_start',risk_status:'PASS',data_status:'current',b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)}).label`,context),'B 结构观察','B must not be shown as a buy candidate');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-3601});confirmationState({token_address:'0xconfirm'}).active`,context),false,'an A event older than 60 minutes must leave the strongest confirmation cohort');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'WARN',data_status:'current'});confirmationState({token_address:'0xconfirm'}).active`,context),false,'risk WARN must not enter the strongest confirmation cohort');
+const noAWarning=vm.runInContext(`signalV2Rows.delete('0xconfirm');earlyWarningRows.set('0xconfirm',{status:'volume_anomaly',is_active:false,evidence_count:12,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.08},{order_usd:1000,buy_slippage_pct:.81}]}});earlyWarningHTML({token_address:'0xconfirm'})`,context);
+assert.ok(noAWarning.includes('尚无 A 形态') && !noAWarning.includes('阶段 -- / watch'),'missing A must be explained without a wall of empty criteria');
+assert.ok(noAWarning.includes('超限 0.31%') && !noAWarning.includes('confirmation-criteria'),'slippage remains visible but admission checklist stays hidden without A');
+const aWarning=vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',first_seen_at:Math.floor(Date.now()/1000)-240});earlyWarningRows.get('0xconfirm').is_active=true;earlyWarningHTML({token_address:'0xconfirm'})`,context);
+assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31%'),'A checklist must expose the blocking gap');
   await new Promise(setImmediate);
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
