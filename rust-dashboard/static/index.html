@@ -49,6 +49,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .watchlist-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
 .watchlist-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .list-summary { font-size:12px; color:var(--subtle); }
+.list-toggle { width:100%; padding:8px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--accent-strong); font-size:12px; font-weight:700; cursor:pointer; }
+.list-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
 @media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
 .token-btn { display:flex; flex-shrink:0; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
@@ -59,8 +61,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
-.token-btn .score-tag { position:relative; flex:none; font-size:15px; font-weight:800; font-variant-numeric:tabular-nums; padding:5px 9px; border-radius:6px; cursor:help; }
-.structure-stage { color:var(--text); font-weight:650; }
 .score-tooltip { position:fixed; z-index:100; width:max-content; max-width:min(250px,calc(100vw - 16px)); padding:8px 10px; border-radius:8px; background:var(--text); color:var(--panel); font-size:12px; line-height:1.5; white-space:normal; text-align:left; box-shadow:0 8px 24px rgba(17,24,39,.18); pointer-events:none; }
 .score-tooltip[hidden] { display:none; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
@@ -69,12 +69,16 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 
 /* ============ RIGHT: Detail ============ */
 .detail-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:stretch; }
-.context-grid .detail-section { min-width:0; }
-.context-grid #oiSection:not(.oi-empty) { height:100%; display:flex; flex-direction:column; }
-#oiSection:not(.oi-empty) #oiBody { flex:1; display:flex; flex-direction:column; }
-#oiSection:not(.oi-empty) .chart-card { flex:1; display:flex; flex-direction:column; }
-#oiSection:not(.oi-empty) .chart-card svg { flex:1; height:auto; min-height:96px; }
+.advanced-data { border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:0 16px; }
+.advanced-data > summary, .factor-details > summary { cursor:pointer; color:var(--accent-strong); font-weight:700; }
+.advanced-data > summary { padding:13px 0; }
+.advanced-data[open] { padding-bottom:12px; }
+.detail-panel > .advanced-data { margin-top:0; }
+.advanced-data > .detail-section { margin-top:12px; }
+.factor-details { margin-top:12px; }
+.factor-details > summary { font-size:12px; }
+.factor-details .factor-grid { margin-top:12px; }
+.quiet-warning { color:var(--muted); font-size:13px; }
 .detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
 .structure-section { container-type:inline-size; }
 .detail-section.oi-empty { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 16px; padding:12px 20px; }
@@ -105,10 +109,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .structure-card { display:grid; gap:12px; margin:-8px 0 16px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:rgba(15,118,110,.025); }
 .structure-section .structure-card { margin:0; padding:0; border:0; background:transparent; }
 .structure-section .section-header { margin-bottom:10px; }
-.structure-head { display:grid; grid-template-columns:minmax(0,1fr) 168px; gap:14px; align-items:start; }
-.structure-stage { font-size:13px; font-weight:750; color:var(--text); }
-.structure-meta { margin-top:4px; font-size:12px; color:var(--muted); line-height:1.5; }
-.structure-conclusion { margin-top:8px; font-size:13px; color:var(--text); line-height:1.5; }
 .early-warning-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:11px; background:rgba(15,118,110,.035); }
 .early-warning-strip.active { border-color:rgba(15,118,110,.35); background:rgba(15,118,110,.075); }
 .early-warning-main,.early-warning-cost,.confirmation-criteria { grid-column:1/-1; min-width:0; }
@@ -148,31 +148,13 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .factor-bar .strong { background:var(--accent); }
 .factor-bar .weak { background:var(--danger); }
 .factor-bar .neutral { background:var(--muted); }
-.timeline { display:flex; gap:3px; margin-top:12px; }
-.timeline span { flex:1; height:5px; border-radius:999px; background:rgba(107,114,128,.18); }
-.timeline span.done { background:rgba(15,118,110,.24); }
-.timeline span.active { background:var(--accent); }
 .detail-section .hint { font-size:12px; line-height:1.45; color:#64748b; }
-@media(max-width:820px){ .structure-head { grid-template-columns:1fr; } .factor-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-@media(max-width:900px){ .context-grid { grid-template-columns:1fr; } }
-@media(max-width:600px){ .factor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .timeline { margin-top:0; } .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:820px){ .factor-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:600px){ .factor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .secondary-metrics { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); }
 .secondary-metrics b { color:var(--text); }
 .detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
 .detail-panel summary { cursor:pointer; }
-.structure-summary { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:9px 11px; border:1px solid var(--line); border-radius:10px; background:rgba(15,118,110,.025); font-size:12px; line-height:1.45; }
-.structure-summary.stale { border-color:rgba(180,83,9,.3); background:rgba(180,83,9,.025); }
-.structure-summary strong { color:var(--text); font-weight:800; }
-.structure-summary strong.safe { color:var(--accent-strong); }
-.structure-summary strong.risk { color:var(--danger); }
-.structure-summary span { color:var(--muted); }
-.structure-summary b { color:var(--text); }
-.buy-axis { display:grid; gap:7px; }
-.buy-axis-scale { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); height:8px; overflow:hidden; border-radius:999px; background:rgba(107,114,128,.14); }
-.buy-axis-scale span { height:100%; }
-.buy-axis-scale span.active { background:var(--accent); }
-.buy-axis-labels { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; font-size:11px; color:var(--muted); text-align:center; }
-@media(max-width:600px){ .buy-axis-labels { font-size:10px; } }
 
 /* Metric cards */
 .metric-card { min-width:0; padding:0 14px; border-right:1px solid var(--line); }
@@ -249,7 +231,7 @@ svg.chart.price-chart { height:104px; }
   <div class="top-right">
     <div class="token-count" id="tokenCount">统计中...</div>
     <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
-    <button class="notify-toggle" id="historyToggle" type="button">预测趋势</button>
+    <button class="notify-toggle" id="historyToggle" type="button">近期验证</button>
     <button class="notify-toggle" id="notifyToggle" type="button">自选提醒</button>
   </div>
 </div>
@@ -262,6 +244,7 @@ svg.chart.price-chart { height:104px; }
       <button class="watchlist-toggle" id="watchlistToggle" type="button" aria-label="只看自选" aria-pressed="false" title="只看自选">☆</button>
     </div>
     <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
+    <button class="list-toggle" id="allTokensToggle" type="button" aria-expanded="false">全部监控</button>
   </div>
   <div class="detail-panel" id="detailPanel">
     <div class="empty-state">名单加载完成后将显示代币详情</div>
@@ -270,8 +253,8 @@ svg.chart.price-chart { height:104px; }
 <div id="scoreTooltip" class="score-tooltip" role="tooltip" hidden></div>
 <div class="history-panel" id="earlyHistoryPanel" hidden>
   <div class="section-header">
-    <span class="section-heading">预测趋势</span>
-    <div class="section-meta"><span class="section-copy">滚动回放</span><button class="watch-button" id="earlyHistoryClose" type="button">关闭</button></div>
+    <span class="section-heading">近期验证</span>
+    <div class="section-meta"><span class="section-copy">最新回放</span><button class="watch-button" id="earlyHistoryClose" type="button">关闭</button></div>
   </div>
   <div id="earlyHistoryBody"><div class="hint">加载历史回放...</div></div>
 </div>
@@ -288,6 +271,9 @@ let selectedDetail = null;
 let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
+let showAllTokens = false;
+let userSelected = false;
+let earlyWarningLoaded = false;
 let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KEY));
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
@@ -366,12 +352,6 @@ async function fetchReady(url){
 
 function fmtChange(v){return v==null||isNaN(v)?'--':`${v>0?'+':''}${v.toFixed(1)}%`;}
 const scoreOf=p=>p.short_momentum_score??p.signal_score??0;
-const reasonLabels={early_age_window:'新池早期',tradable_age_window:'活跃时段',healthy_liquidity_band:'流动性适中',ample_liquidity:'流动性充足',h1_volume_support:'1小时成交额达标',m5_volume_impulse:'5分钟成交放量',m5_buy_dominance:'5分钟买入笔数占优',h1_buy_dominance:'1小时买入笔数占优',volume_to_liquidity_breakout:'成交额/流动性突破',volume_to_liquidity_support:'成交额/流动性支撑',balanced_liquidity_to_fdv:'流动性/估值均衡',positive_price_trend:'价格上行',alpha_hot_score:'Alpha 热度高',alpha_score_support:'Alpha 热度支撑',alpha_activity_support:'Alpha 成交与流动性佐证',binance_futures_listed:'上线 Binance 合约'};
-const retiredReasons=new Set(['project_metadata_present','partial_metadata_present','active_dex_boost','holder_depth','speculative_pool_activity']);
-function scoreTags(raw){
-  try { const tags=typeof raw==='string'?JSON.parse(raw):raw;const live=Array.isArray(tags)?tags.filter(x=>!retiredReasons.has(x)):[];return live.length?live.map(x=>reasonLabels[x]||String(x)).join('、'):'暂无命中标签'; }
-  catch { return '暂无命中标签'; }
-}
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
 function earlyWarningOf(token){return earlyWarningRows.get(String(token||'').toLowerCase())||null;}
 function liveEarlyWarning(token){
@@ -480,6 +460,7 @@ function fmtPct2(value){return value==null||isNaN(value)?'--':`${value.toFixed(2
 function earlyWarningHTML(token){
   const item=earlyWarningOf(token?.token_address);
   if(!item)return '<div class="hint">前置预测数据加载中...</div>';
+  if(!item.is_active)return `<div class="quiet-warning">${escapeAttr(earlyWarningLabel(item))} · 更新 ${escapeAttr(timeAgo(item.observed_at))} · 暂无活跃前置异动</div>`;
   const acceleration=Number(item.volume_acceleration), pressure=Number(item.buy_pressure), efficiency=Number(item.volume_to_liquidity), change=Number(item.return_5m_pct);
   const gt5=item.status==='strong_anomaly'?earlyWarningCalibration?.strong_anomaly_gt_5pct_pct:earlyWarningCalibration?.volume_anomaly_gt_5pct_pct;
   const confirmation=confirmationState(token);
@@ -509,12 +490,6 @@ function earlyWarningHTML(token){
     <div class="early-warning-meta">同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'}</div>
   </div>`;
 }
-function buyPointAxisHTML(distance){
-  if(distance==null)return '';
-  const active=distance<-.05?0:distance<0?1:distance<=.08?2:3;
-  const labels=['等待买点','接近观察区','突破确认窗','已涨远'];
-  return `<div class="buy-axis"><div class="buy-axis-scale">${labels.map((_,i)=>`<span class="${i===active?'active':''}"></span>`).join('')}</div><div class="buy-axis-labels">${labels.map((label,i)=>`<span>${i===active?`<b>${label}</b>`:label}</span>`).join('')}</div></div>`;
-}
 function factorClass(status){return status==='strong'?'strong':status==='weak'?'weak':'neutral';}
 function factorProgress(value,kind){
   if(value==null||isNaN(value))return 0;
@@ -527,33 +502,15 @@ function factorItemHTML(key,label,factor){
   const cls=factorClass(factor.status);
   return `<div class="factor-item" data-tip="${escapeAttr(factor.help||label)}"><div class="factor-label"><span>${label}</span><span>${escapeAttr(factor.status_label||'中性')}</span></div><div class="factor-value ${cls}">${escapeAttr(factor.display||'--')}</div><div class="factor-bar"><span class="${cls}" style="width:${factorProgress(factor.value,key).toFixed(1)}%"></span></div></div>`;
 }
-function structureCardHTML(token){
+function structureCardHTML(token, factorsOpen=false){
   const address=String(token?.token_address||'');
   const structure=structureOf(address);
   if(!structure)return '<div class="hint">结构数据加载中...</div>';
-  const price=Number(token?.price_usd);
-  const state=structureState(structure,price);
-  if(!structure.available)return `<div class="structure-card"><div class="structure-head"><div><div class="structure-stage">${escapeAttr(structure.stage_label||'未知')} · ${escapeAttr(structure.structure_label||'结构观察')}</div><div class="structure-conclusion">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div></div></div></div>`;
+  if(!structure.available)return `<div class="hint">${escapeAttr(structure.conclusion||structure.reason||'暂无结构数据')}</div>`;
   const factors=structure.factors||{};
-  const novice=noviceState(token,structure);
-  const distance=buyPointDistance(token,structure);
-  const activeIndex=(structure.timeline||[]).findIndex(x=>x.active);
-  const timeline=(structure.timeline||[]).map((x,index)=>`<span class="${x.active?'active':index<activeIndex?'done':''}" title="${escapeAttr(x.label)}${x.active?'（当前阶段）':''}"></span>`).join('');
   return `<div class="structure-card">
-    <div class="structure-head">
-      <div>
-        <div class="structure-stage">${escapeAttr(state.label)} · ${escapeAttr(state.note)}</div>
-        <div class="structure-conclusion">${escapeAttr(structure.conclusion||'结构观察')}</div>
-      </div>
-      <div class="timeline" role="img" aria-label="结构阶段路径：${escapeAttr(structure.stage_label||'未知')}">${timeline}</div>
-    </div>
     ${earlyWarningHTML(token)}
-    <div class="structure-summary${novice.key==='data_stale'?' stale':''}">
-      <strong class="${novice.tone}">${novice.label}</strong>
-      <span>${escapeAttr(novice.reason)}</span>
-      <span>建议：<b>${escapeAttr(novice.action)}</b></span>
-    </div>
-    ${distance==null?'<div class="hint">等待结构形成，暂不画买点距离。</div>':buyPointAxisHTML(distance)}
+    <details class="factor-details"${factorsOpen?' open':''}><summary>结构因子</summary>
     <div class="factor-grid">
       ${factorItemHTML('breakout_30m','30m突破',factors.breakout_30m)}
       ${factorItemHTML('relative_volume_30m','相对成交量',factors.relative_volume_30m)}
@@ -562,6 +519,7 @@ function structureCardHTML(token){
       ${factorItemHTML('momentum_15m','15m动量',factors.momentum_15m)}
       ${factorItemHTML('liquidity_stability_30m','流动性稳定',factors.liquidity_stability_30m)}
     </div>
+    </details>
   </div>`;
 }
 async function ensureStructure(token){
@@ -628,32 +586,38 @@ function renderTokenList() {
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
   });
-  const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
+  const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : searchTerm||showAllTokens ? filtered : filtered.filter(t=>liveEarlyWarning(t)))
     .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   const activeCount=tokenData.filter(t=>liveEarlyWarning(t)).length;
   document.getElementById('tokenCount').textContent = `前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
+  const allToggle=document.getElementById('allTokensToggle');
+  allToggle.textContent=showAllTokens?'只看前置异动':`全部监控 · ${tokenData.length}`;
+  allToggle.setAttribute('aria-expanded',String(showAllTokens));
 
   const html=visible.map(t=>{
-      const score=t.indicator_score;
-      const cls=score>=60?'tag-high':score>=40?'tag-mid':'tag-low';
       const sel=t.token_address===selectedToken?' selected':'';
-      const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-      const v2Tip=v2TipText(v2);
-      const scoreTip=`活跃度分${t.short_signal_stale?'（短周期信号已过期，分数按剩余标签保守估算）':''} · 命中标签：${scoreTags(t.indicator_reasons)}${v2Tip?` · ${v2Tip}`:''}`;
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const warning=liveEarlyWarning(t);
       const acceleration=Number(warning?.volume_acceleration);
       const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.label} · 快照 ${timeAgo(t.observed_at)}`;
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
-        <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
       </button>`;
     }).join('');
   hideScoreTooltip();
-  document.getElementById('tokenList').innerHTML=html||'<div class="empty-state">没有匹配结果</div>';
+  document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':watchlistOnly?'自选中暂无代币':'当前没有前置异动'}</div>`;
 }
 
-function selectToken(token){selectedToken=token;renderTokenList();loadSelectedDetail(token);}
+function toggleAllTokens(){showAllTokens=!showAllTokens;renderTokenList();}
+document.getElementById('allTokensToggle').addEventListener('click',toggleAllTokens);
+function syncDiscoverySelection(){
+  if(!earlyWarningLoaded||userSelected||showAllTokens||watchlistOnly||searchTerm)return;
+  const first=tokenData.filter(t=>liveEarlyWarning(t)).sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score)[0]?.token_address||null;
+  if(selectedToken===first)return;
+  selectedToken=first;
+  if(first)loadSelectedDetail(first);else {selectedDetail=null;renderDetail();}
+}
+function selectToken(token){userSelected=true;selectedToken=token;renderTokenList();loadSelectedDetail(token);}
 
 function makeChart(points,color='#0f766e') {
   const h=96,w=400;
@@ -697,6 +661,8 @@ function renderDetail() {
   const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime;
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
+  const advancedOpen=sameToken&&document.getElementById('advancedData')?.open===true;
+  const factorsOpen=sameToken&&document.querySelector('.factor-details')?.open===true;
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
   const previousTimes=sameToken?['oiTime','trendTime','depthTime','whaleTime','transferTime'].map(id=>document.getElementById(id)?.textContent):[];
   const risks=marketRisks(t.signal_risk_flags);
@@ -731,21 +697,22 @@ function renderDetail() {
       <div class="overview-item"><span class="label">24h 涨跌</span><strong class="value">${fmtChange(t.price_change_h24)}</strong></div>
       <div class="overview-item"><span class="label">市值</span><strong class="value">${fmtMoney(t.market_cap)}</strong></div>
       <div class="overview-item risk${risks?.length===0?' clear':''}"><span class="label">代币风险观察</span><strong class="value">${risks===null?'暂无评估':escapeAttr(risks.join('、')||'当前规则未命中')}</strong></div>
-      <div class="overview-item"><span class="label">1h 大额净流入</span><strong class="value" id="whaleFlowValue">${whaleFlowText(whaleFlow)}</strong></div>
       <div class="overview-item"><span class="label">池内资产估值</span><strong class="value">${fmtMoney(t.liquidity_usd)}</strong></div>
       <div class="overview-item"><span class="label">5m 成交额</span><strong class="value">${fmtMoney(t.volume_m5)}</strong></div>
       <div class="overview-item"><span class="label">1h 成交额</span><strong class="value">${fmtMoney(t.volume_h1)}</strong></div>
     </div>
   </div>
 
-  <div class="context-grid">
-    <div class="detail-section structure-section">
+  <div class="detail-section structure-section">
       <div class="section-header">
         <span class="section-heading">结构阶段</span>
         <div class="section-meta"><span class="section-copy">趋势与成交</span><span class="section-time" id="structureTime">${updatedAt(structureTime)}</span></div>
       </div>
-      ${structureCardHTML(t)}
-    </div>
+      ${structureCardHTML(t,factorsOpen)}
+  </div>
+
+  <details id="advancedData" class="advanced-data"${advancedOpen?' open':''}>
+    <summary>更多数据 · OI / 价格对比 / 深度 / 链上</summary>
     <div class="detail-section" id="oiSection">
       <div class="section-header">
         <span class="section-heading">合约持仓 · OI</span>
@@ -753,7 +720,6 @@ function renderDetail() {
       </div>
       <div id="oiBody">${previous[1]||'<div class="hint">后台获取 OI 数据...</div>'}</div>
     </div>
-  </div>
 
   <div class="detail-section" id="trendSection">
     <div class="section-header">
@@ -776,6 +742,7 @@ function renderDetail() {
       <span class="section-heading">链上大额动向</span>
       <div class="section-meta"><span class="section-copy">单笔 &gt; $10K</span><span class="section-time" id="whaleTime">${previousTimes[3]||'更新中…'}</span></div>
     </div>
+    <div class="secondary-metrics">1h 大额净流入 <b id="whaleFlowValue">${whaleFlowText(whaleFlow)}</b></div>
     <div id="whaleBody">${previous[3]||'<div class="hint">后台获取大额交易...</div>'}</div>
     <div class="transfer-panel">
       <div class="section-header transfer-header">
@@ -785,6 +752,7 @@ function renderDetail() {
       <div id="transferBody">${previous[4]||'<div class="hint">后台获取大额转账...</div>'}</div>
     </div>
   </div>
+  </details>
 
   `;
 
@@ -1037,13 +1005,9 @@ function showScoreTooltip(score){
 }
 function hideScoreTooltip(){scoreTooltip.hidden=true;}
 tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
-tokenList.addEventListener('pointerover',e=>{const target=e.target.closest('.score-tag');if(target)showScoreTooltip(target);});
-tokenList.addEventListener('pointerout',e=>{const target=e.target.closest('.score-tag');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
 const detailPanelElement=document.getElementById('detailPanel');
 detailPanelElement.addEventListener('pointerover',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target)showScoreTooltip(target);});
 detailPanelElement.addEventListener('pointerout',e=>{const target=e.target.closest('.factor-item[data-tip]');if(target&&!target.contains(e.relatedTarget))hideScoreTooltip();});
-tokenList.addEventListener('focusin',e=>{const score=e.target.closest('.token-btn')?.querySelector('.score-tag');if(score)showScoreTooltip(score);});
-tokenList.addEventListener('focusout',hideScoreTooltip);
 tokenList.addEventListener('scroll',hideScoreTooltip);
 window.addEventListener('scroll',hideScoreTooltip);
 window.addEventListener('resize',hideScoreTooltip);
@@ -1051,6 +1015,7 @@ window.addEventListener('resize',hideScoreTooltip);
 function showOverview(rows, cachedAt){
   tokenData=rows.filter(t=>t.indicator_score>0);
   if(!tokenData.some(t=>t.token_address===selectedToken))selectedToken=tokenData[0]?.token_address||null;
+  syncDiscoverySelection();
   renderTokenList();
   if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
   const times=tokenData.map(t=>Date.parse(t.observed_at)).filter(Number.isFinite);
@@ -1110,6 +1075,8 @@ function refreshEarlyWarning(){
   return fetchJSON('/api/early-warning').then(result=>{
     earlyWarningRows=new Map((result.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     earlyWarningCalibration=result.historical_calibration||null;
+    earlyWarningLoaded=true;
+    syncDiscoverySelection();
     notifyEarlyWarnings();
     renderTokenList();
     if(selectedToken)renderDetail();
@@ -1167,7 +1134,7 @@ function fmtDuration(seconds){
   return`${(seconds/3600).toFixed(1)}小时`;
 }
 function earlyHistoryHTML(result){
-  const rows=(result?.reports||[]).map(item=>`<tr>
+  const rows=(result?.reports||[]).slice(0,1).map(item=>`<tr>
     <td>${escapeAttr(new Date(item.replay_until).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</td>
     <td>${Number(item.volume_events||0)}</td>
     <td>${escapeAttr(fmtSignedPct(item.volume_gt_5pct))}</td>
@@ -1177,22 +1144,6 @@ function earlyHistoryHTML(result){
     <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
   </tr>`).join('');
   return rows?`<table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>4h&gt;5%</th><th>基线</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>A提前量</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">暂无历史回放报告。</div>';
-}
-
-function confirmationShadowHTML(summary){
-  const labels={strong:'Strong',aging:'Aging',slippage_blocked:'滑点阻断',stale:'过期'};
-  const rows=(summary?.by_classification?Object.entries(summary.by_classification):[]).map(([name,item])=>`<tr>
-    <td>${escapeAttr(labels[name]||name)}</td>
-    <td>${Number(item.events||0)}</td>
-    <td>${Number(item.resolved||0)}</td>
-    <td>${escapeAttr(fmtSignedPct(item.mean_15m_pct))}</td>
-    <td>${escapeAttr(fmtSignedPct(item.mean_1h_pct))}</td>
-    <td>${escapeAttr(fmtSignedPct(item.mean_4h_pct))}</td>
-  </tr>`).join('');
-  return `<div class="section-header" style="margin-top:14px">
-      <span class="section-heading">实时信号质量</span>
-      <div class="section-meta"><span class="section-copy">页面影子日志</span></div>
-    </div>${rows?`<table class="history-table"><thead><tr><th>分类</th><th>事件</th><th>已结算</th><th>15m</th><th>1h</th><th>4h</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">影子日志积累中，暂无可结算样本。</div>'}`;
 }
 
 function marketStateHTML(state){
@@ -1205,16 +1156,6 @@ function marketStateHTML(state){
     </div><div class="early-warning-evidence"><b>${escapeAttr(label)}</b> · 1h上涨占比 <b>${state.up_ratio==null?'--':`${(state.up_ratio*100).toFixed(1)}%`}</b> · 中位数 <b>${escapeAttr(fmtChange(state.median_change_h1_pct))}</b> · 1h成交额 <b>${fmtMoney(state.total_volume_h1_usd)}</b> · 流动性 <b>${fmtMoney(state.total_liquidity_usd)}</b></div>`;
 }
 
-function livePortfolioHTML(){
-  const states=tokenData.map(token=>confirmationState(token));
-  const count=key=>states.filter(state=>state.classification===key).length;
-  const occupied=Math.min(count('strong'),3);
-  return `<div class="section-header" style="margin-top:14px">
-      <span class="section-heading">实时组合槽位</span>
-      <div class="section-meta"><span class="section-copy">建议最多 3 个</span></div>
-    </div><div class="history-table"><div class="early-warning-evidence">强确认 <b>${occupied}/3</b> · 新鲜度下降 <b>${count('aging')}</b> · 滑点阻断 <b>${count('slippage_blocked')}</b> · 已过期 <b>${count('stale')}</b><br>强确认才占用观察槽位；这是风险预算展示，不是自动买入指令。</div></div>`;
-}
-
 async function toggleEarlyHistory(force){
   const panel=document.getElementById('earlyHistoryPanel');
   if(!panel)return;
@@ -1223,12 +1164,11 @@ async function toggleEarlyHistory(force){
   if(!open)return;
   const body=document.getElementById('earlyHistoryBody');
   try{
-    const [result,shadow,market]=await Promise.all([
-      fetchJSON('/api/early-warning/history?limit=12'),
-      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null),
+    const [result,market]=await Promise.all([
+      fetchJSON('/api/early-warning/history?limit=1'),
       fetchJSON('/api/market-state').catch(()=>null)
     ]);
-    body.innerHTML=marketStateHTML(market)+confirmationShadowHTML(shadow)+livePortfolioHTML()+earlyHistoryHTML(result);
+    body.innerHTML=marketStateHTML(market)+earlyHistoryHTML(result);
   }catch(e){
     body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
   }

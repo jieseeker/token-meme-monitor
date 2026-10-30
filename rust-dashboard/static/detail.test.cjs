@@ -49,8 +49,9 @@ const fetch = async url => { calls.push(url);
   if(url==='/api/early-warning')return {ok:true,json:async()=>({items:[
     {token_address:'0xtoken',status:'volume_anomaly',is_active:true,volume_acceleration:2.4,buy_pressure:.67,volume_to_liquidity:.018,return_5m_pct:1.2,evidence_count:5,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.12},{order_usd:500,buy_slippage_pct:.18},{order_usd:1000,buy_slippage_pct:.25}]}}
   ],historical_calibration:{volume_anomaly_gt_5pct_pct:13.636363636363635,baseline_gt_5pct_pct:7.285546415981199,strong_anomaly_gt_5pct_pct:15.123456}})};
-  if(url==='/api/early-warning/history?limit=12')return {ok:true,json:async()=>({reports:[
-    {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01}
+  if(url==='/api/early-warning/history?limit=1')return {ok:true,json:async()=>({reports:[
+    {replay_until:'2026-10-29T02:40:00Z',volume_events:3772,volume_followed_by_a:150,a_lead_median_seconds:5264,volume_gt_5pct:13.68,baseline_gt_5pct:7.31,ladder_net_0_3pct:0.21,ladder_net_0_5pct:0.01},
+    {replay_until:'2026-10-28T02:40:00Z',volume_events:111,volume_gt_5pct:1.11,baseline_gt_5pct:2.22,ladder_net_0_3pct:-3.33}
   ]})};
   if(url==='/api/confirmation-shadow/summary')return {ok:true,json:async()=>({events:2,by_classification:{
     strong:{events:1,resolved:1,mean_15m_pct:1,mean_1h_pct:2,mean_4h_pct:3,positive_15m_pct:100},
@@ -86,22 +87,33 @@ setImmediate(async () => {
   assert.ok(TestNotification.instances[0].options.body.includes('预测观察'),'notification must not claim a buy instruction');
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.equal(TestNotification.instances.length,1,'the same A event must not notify again');
+  assert.equal((document.getElementById('tokenList').innerHTML.match(/class="token-btn/g)||[]).length,1,'discovery starts with live early candidates only');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('TEST'));
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('活跃度分'),'unvalidated activity score must not dominate discovery');
+  assert.ok(html.includes('id="allTokensToggle"'),'all monitored tokens remain accessible');
+  vm.runInContext('toggleAllTokens()',context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'expanding all monitored tokens restores the full list');
+  vm.runInContext('toggleAllTokens()',context);
+  vm.runInContext("userSelected=false;selectedToken='0xother';syncDiscoverySelection()",context);
+  assert.equal(vm.runInContext('selectedToken',context),'0xtoken','first live candidate opens automatically');
+  vm.runInContext("userSelected=true;selectedToken='0xother';syncDiscoverySelection()",context);
+  assert.equal(vm.runInContext('selectedToken',context),'0xother','manual token choice remains selected');
+  vm.runInContext("userSelected=false;selectedToken='0xtoken'",context);
   vm.runInContext(`signalV2Rows.set('0xtoken',{stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null});renderedKey='';renderDetail()`,context);
   await new Promise(setImmediate);
   await vm.runInContext('toggleEarlyHistory(true)',context);
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('13.68%'),'history must show volume hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('7.31%'),'history must show baseline hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('+0.21%'),'history must show 0.3% cost result');
-  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时信号质量'),'history panel must show live shadow quality');
-  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Strong'),'history panel must show strong confirmation quality');
-  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时组合槽位'),'history panel must show live portfolio slots');
+  assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('实时信号质量'),'history panel should omit shadow diagnostics');
+  assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('实时组合槽位'),'history panel should omit portfolio slots');
+  assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Risk On'),'history panel must label risk-on state');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('首次启动'), 'V2 stage should use Chinese copy');
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('V2阶段：首次启动'), 'V2 tooltip should use Chinese copy');
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('V2阶段：'), 'discovery list should not expose V2 debug tooltip');
   const v2Tip=vm.runInContext(`v2TipText({stage:'base',risk_status:'WARN',data_status:'warming_up',b_at:null,c_at:null,c_reason:'support_failed'})`,context);
   assert.ok(v2Tip.includes('V2阶段：企稳') && v2Tip.includes('数据状态：预热中') && v2Tip.includes('结果：跌破支撑'), 'V2 stages and data states should use Chinese copy');
   assert.ok(!v2Tip.includes('B时间') && !v2Tip.includes('C时间'), 'V2 tooltip should not expose B/C jargon');
@@ -139,7 +151,7 @@ setImmediate(async () => {
     assert.equal(result.key,key);assert.equal(result.label,label);
   }
   const noLine=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000),factors:{},timeline:[]});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()})`,context);
-  assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
+  assert.ok(!noLine.includes('buy-axis') && noLine.includes('factor-details'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
 assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'confirmed executable candidates must sort above ordinary activity scores');
@@ -156,7 +168,7 @@ assert.equal(vm.runInContext(`earlyWarningRows.set('0xready',{status:'strong_ano
   assert.ok(discoveryOrder[0]>discoveryOrder[1]&&discoveryOrder[1]>discoveryOrder[2],'fresh early evidence must lead the discovery list; old evidence must not be promoted');
   vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xearly',token_symbol:'EARLY',observed_at:new Date().toISOString(),indicator_score:5,indicator_reasons:'[]',signal_risk_flags:'[]'},{token_address:'0xconfirmed',token_symbol:'READY',observed_at:new Date().toISOString(),indicator_score:90,indicator_reasons:'[]',signal_risk_flags:'[]'}];renderTokenList()`,context);
   const discoveryList=document.getElementById('tokenList').innerHTML;
-  assert.ok(discoveryList.indexOf('EARLY')<discoveryList.indexOf('READY'),'the live early candidate must appear first');
+  assert.ok(discoveryList.includes('EARLY')&&!discoveryList.includes('READY'),'the live early candidate alone leads the default list');
   assert.ok(discoveryList.includes('前置量能异动')&&discoveryList.includes('2.4x'),'the list must name the leading evidence');
   assert.ok(document.getElementById('tokenCount').textContent.includes('前置异动 1'),'the list must show how many fresh candidates exist');
   vm.runInContext(`tokenData=testPreviousTokens;renderTokenList()`,context);
@@ -170,23 +182,24 @@ assert.equal(vm.runInContext(`noviceState({token_address:'0xconfirm',price_usd:1
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-3601});confirmationState({token_address:'0xconfirm'}).active`,context),false,'an A event older than 60 minutes must leave the strongest confirmation cohort');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'WARN',data_status:'current'});confirmationState({token_address:'0xconfirm'}).active`,context),false,'risk WARN must not enter the strongest confirmation cohort');
 const noAWarning=vm.runInContext(`signalV2Rows.delete('0xconfirm');earlyWarningRows.set('0xconfirm',{status:'volume_anomaly',is_active:false,evidence_count:12,observed_at:new Date().toISOString(),slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.08},{order_usd:1000,buy_slippage_pct:.81}]}});earlyWarningHTML({token_address:'0xconfirm'})`,context);
-assert.ok(noAWarning.includes('尚无 A 形态') && !noAWarning.includes('阶段 -- / watch'),'missing A must be explained without a wall of empty criteria');
-assert.ok(noAWarning.includes('超限 0.31%') && !noAWarning.includes('confirmation-criteria'),'slippage remains visible but admission checklist stays hidden without A');
+assert.ok(noAWarning.includes('暂无活跃前置异动'),'inactive warning should be concise');
+assert.ok(!noAWarning.includes('confirmation-criteria') && !noAWarning.includes('$1K 买入滑点'),'quiet warning should hide inactive admission details');
 const aWarning=vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',first_seen_at:Math.floor(Date.now()/1000)-240});earlyWarningRows.get('0xconfirm').is_active=true;earlyWarningHTML({token_address:'0xconfirm'})`,context);
 assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31%'),'A checklist must expose the blocking gap');
+const quietWarning=vm.runInContext(`earlyWarningRows.set('0xquiet',{status:'quiet',is_active:false,observed_at:new Date().toISOString(),evidence_count:0});earlyWarningHTML({token_address:'0xquiet'})`,context);
+assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量能倍数') && !quietWarning.includes('$100 买入滑点') && !quietWarning.includes('同类历史'),'quiet warning should be one concise line');
   await new Promise(setImmediate);
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
-  assert.ok(detail.includes('class="structure-summary"'),'the novice summary should be embedded in the structure card');
+  assert.ok(!detail.includes('class="structure-summary"'),'the repeated verdict should be removed');
   assert.ok(detail.includes('13.64% / 基线 7.29%'),'early warning calibration must render at most two decimals');
   assert.ok(!detail.includes('13.636363'),'early warning calibration must not leak full floating-point precision');
   assert.ok(detail.includes('$100 买入滑点') && detail.includes('0.12%') && detail.includes('0.25%'),'early warning must expose cached depth slippage');
-  assert.ok(detail.indexOf('class="structure-card"') < detail.indexOf('class="structure-summary"') && detail.indexOf('class="structure-summary"') < detail.indexOf('class="factor-grid"'),'the novice summary should sit inside the structure card before factors');
-  assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI should appear above the trend');
-  assert.ok(detail.indexOf('结构阶段') < detail.indexOf('合约持仓 · OI'), 'structure and OI should share the decision context row');
-  assert.ok(detail.includes('class="context-grid"'), 'structure and OI should share the responsive grid');
-  assert.ok(html.includes('.context-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:12px; align-items:stretch; }'),'the OI card must stretch to the structure card height');
-  assert.ok(detail.indexOf('市场价格对比') < detail.indexOf('价格区间深度'), 'trend should be visible before pool depth');
+  assert.ok(!detail.includes('class="buy-axis"'),'the repeated buy axis should be removed');
+  assert.ok(detail.includes('class="advanced-data"'), 'secondary data should be grouped under more data');
+  assert.ok(detail.indexOf('class="advanced-data"') < detail.indexOf('合约持仓 · OI'), 'OI should be collapsed by default');
+  assert.ok(detail.indexOf('class="advanced-data"') < detail.indexOf('市场价格对比'), 'trend should be collapsed by default');
+  assert.ok(detail.includes('class="factor-details"'), 'structure factors should be collapsed');
   assert.ok(detail.indexOf('已收录 <b>2</b> 个池子') < detail.indexOf('更新于 '), 'pool count should sit before the update time');
   assert.ok(detail.includes('class="overview-grid"'), 'the first card should use one unified stats grid');
   assert.ok(detail.indexOf('参考价格') < detail.indexOf('5m 涨跌'), 'price should lead its change metrics');
@@ -197,7 +210,7 @@ assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31
   assert.ok(detail.includes('触发：') && detail.includes('失效：'), 'the summary should expose structure trigger and invalidation');
   assert.ok(detail.includes('1h 换手：'), 'the summary should expose turnover');
   assert.ok(!detail.includes('活跃度分'), 'detail should not repeat the list activity score');
-  assert.ok(detail.includes('1h 大额净流入'), 'the old net-buy slot should use real large-trade flow');
+  assert.ok(detail.indexOf('1h 大额净流入') > detail.indexOf('class="advanced-data"'), 'large-trade flow belongs in more data');
   assert.ok(detail.includes('池内资产估值'), 'pool assets must not be mistaken for near-price depth');
   assert.ok(detail.includes('代币风险观察') && detail.includes('卖出笔数偏多'));
   assert.ok(!detail.includes('合并池子口径'), 'the risk card should not repeat merge scope copy');
@@ -218,7 +231,7 @@ assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31
   assert.equal(document.getElementById('watchlistToggle').textContent,'★','active watchlist filter should use the same filled star as detail');
   assert.ok(!detail.includes('0xlegacy'));
   const list = document.getElementById('tokenList').innerHTML;
-  assert.equal((list.match(/class="token-btn/g) || []).length, 2);
+  assert.equal((list.match(/class="token-btn/g) || []).length, 1);
   assert.ok(!list.includes('ZERO'));
   assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
   assert.ok(list.includes('前置量能异动'), 'the live early signal should lead the list copy');
@@ -232,13 +245,10 @@ assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('OTHER'),'watchlist filter must hide unwatched tokens');
   assert.ok(document.getElementById('refreshInfo').textContent.startsWith('行情快照最早 '));
   assert.ok(JSON.parse(storage.get('tmm-tokens-v1')).rows.length>1, 'network result replaces the cached list');
-  assert.ok(list.includes('data-tip="活跃度分 · 命中标签：流动性适中、1小时成交额达标 · V2阶段：首次启动'));
-  assert.ok(list.includes('活跃度分'));
-  assert.ok(list.includes('快照 '), 'each list row should expose its own sample age');
+  assert.ok(!list.includes('活跃度分'));
+  assert.ok(list.includes('更新'), 'live discovery rows expose evidence age');
   assert.ok(!list.includes('onclick='), 'token selection must not embed an address in JavaScript');
-  assert.ok(html.includes('id="scoreTooltip" class="score-tooltip"'), 'score tooltip renders outside the scrolling list');
-  assert.ok(html.includes("tokenList.addEventListener('pointerover'"));
-  assert.ok(!html.includes('.score-tag::after'), 'score tooltip must not be clipped by the scrolling list');
+  assert.ok(html.includes('id="scoreTooltip" class="score-tooltip"'), 'factor tooltip renders outside the scrolling list');
   const mixed=vm.runInContext(`mergeTokens([
     {token_address:'0xmixed',pair_address:'0xdeep',dex_id:'a',liquidity_usd:100,signal_score:0,signal_reasons:'[]',signal_risk_flags:'["low_liquidity"]'},
     {token_address:'0xmixed',pair_address:'0xscored',dex_id:'b',liquidity_usd:50,signal_score:45,signal_reasons:'["h1_buy_dominance"]',signal_risk_flags:'["sell_pressure"]'}
@@ -253,7 +263,6 @@ assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31
   assert.equal(vm.runInContext('marketRisks(null)',context),null);
   assert.equal(vm.runInContext('marketRisks("broken")',context),null);
   assert.equal(vm.runInContext('marketRisks(\'["missing_project_metadata","sell_pressure"]\').join("、")',context),'卖出笔数偏多','old snapshots must not call missing DEX links a project risk');
-  assert.equal(vm.runInContext('scoreTags(\'["holder_depth","h1_buy_dominance"]\')',context),'1小时买入笔数占优');
   assert.equal(vm.runInContext('marketRisks(\'["low_liquidity","liquidity_near_zero","missing_price","fdv_missing","thin_downside_depth"]\').join("、")',context),'流动性极低、跌1%所需卖出额偏低');
   const sameDex=vm.runInContext(`mergeTokens([{token_address:'0xsame',pair_address:'0xa',dex_id:'pancakeswap',liquidity_usd:100,volume_h1:10,signal_score:10},{token_address:'0xsame',pair_address:'0xb',dex_id:'pancakeswap',liquidity_usd:50,volume_h1:5,signal_score:5}])`,context)[0];
   assert.equal(sameDex.pools.length,2);
