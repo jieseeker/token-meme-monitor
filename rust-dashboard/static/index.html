@@ -29,18 +29,18 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .refresh-dot { width:7px; height:7px; border-radius:50%; background:var(--accent); }
 .notify-toggle { flex:0 0 auto; padding:9px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); cursor:pointer; }
 .notify-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
-.history-panel { position:fixed; z-index:80; right:20px; top:78px; width:min(760px,calc(100vw - 32px)); max-height:min(520px,calc(100vh - 100px)); overflow:auto; padding:16px 18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); box-shadow:0 18px 48px rgba(15,23,42,.22); }
-.history-panel[hidden] { display:none; }
+.history-panel { width:calc(100% - 48px); max-width:118rem; margin:16px auto 0; padding:16px 20px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
 .history-table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
 .history-table th,.history-table td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
 .history-table th:first-child,.history-table td:first-child { text-align:left; }
 .history-table th { color:var(--muted); font-weight:650; }
 @media(max-width:600px){ .top-bar { align-items:flex-start; flex-direction:column; gap:10px; padding:12px 14px; } .toolbar-subtitle { line-height:1.5; } .top-right { flex-wrap:wrap; row-gap:8px; } }
+@media(max-width:600px){ .history-panel { width:calc(100% - 28px); } }
 
 .main { display:grid; grid-template-columns:minmax(260px,300px) minmax(0,1fr); gap:20px; padding:20px 24px 40px; max-width:118rem; margin:auto; }
 
 /* ============ LEFT: Token List ============ */
-.list-panel { display:flex; flex-direction:column; gap:12px; position:sticky; top:20px; align-self:start; max-height:calc(100vh - 40px); padding:16px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+.list-panel { display:flex; flex-direction:column; gap:12px; align-self:start; padding:16px 20px; background:var(--panel); border:1px solid var(--line); border-radius:14px; }
 .section-title { font-size:20px; font-weight:750; letter-spacing:-.2px; }
 .filter-row { display:flex; align-items:center; gap:8px; }
 .search-input { flex:1; min-width:0; padding:10px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:14px; color:var(--text); outline:none; transition:border-color .2s; }
@@ -49,10 +49,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .watchlist-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
 .watchlist-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .list-summary { font-size:12px; color:var(--subtle); }
-.list-toggle { width:100%; padding:8px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--accent-strong); font-size:12px; font-weight:700; cursor:pointer; }
-.list-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; padding-right:4px; }
-@media(max-width:1024px){ .main { grid-template-columns:1fr; } .list-panel { position:static; max-height:none; } .list-scroll { max-height:240px; } }
+.list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; padding-right:4px; }
+@media(max-width:1024px){ .main { grid-template-columns:1fr; } }
 .token-btn { display:flex; flex-shrink:0; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; font-size:14px; color:var(--text); transition:background .15s,border-color .15s; text-align:left; }
 .token-btn:hover { position:relative; z-index:1; border-color:var(--accent); background:var(--accent-soft); }
 .token-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -69,15 +67,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 
 /* ============ RIGHT: Detail ============ */
 .detail-panel { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.advanced-data { border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:0 16px; }
-.advanced-data > summary, .factor-details > summary { cursor:pointer; color:var(--accent-strong); font-weight:700; }
-.advanced-data > summary { padding:13px 0; }
-.advanced-data[open] { padding-bottom:12px; }
-.detail-panel > .advanced-data { margin-top:0; }
-.advanced-data > .detail-section { margin-top:12px; }
-.factor-details { margin-top:12px; }
-.factor-details > summary { font-size:12px; }
-.factor-details .factor-grid { margin-top:12px; }
+.detail-sections { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.factor-details > strong { display:block; margin-bottom:10px; color:var(--accent-strong); font-size:12px; }
 .quiet-warning { color:var(--muted); font-size:13px; }
 .detail-section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 20px; }
 .structure-section { container-type:inline-size; }
@@ -128,8 +119,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .early-warning-evidence { font-size:12px; color:var(--muted); line-height:1.45; }
 .early-warning-evidence b { color:var(--text); }
 .confirmation-criteria { font-size:12px; color:var(--muted); }
-.confirmation-criteria summary { width:max-content; max-width:100%; cursor:pointer; color:var(--accent-strong); font-weight:700; }
-.confirmation-criteria summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.confirmation-criteria > strong { color:var(--accent-strong); }
 .confirmation-checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 16px; margin-top:8px; border-top:1px solid var(--line); }
 .confirmation-check { display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
 .confirmation-check span { min-width:0; }
@@ -153,8 +143,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 @media(max-width:600px){ .factor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .secondary-metrics { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); }
 .secondary-metrics b { color:var(--text); }
-.detail-panel details { margin-top:12px; font-size:12px; color:var(--muted); }
-.detail-panel summary { cursor:pointer; }
 
 /* Metric cards */
 .metric-card { min-width:0; padding:0 14px; border-right:1px solid var(--line); }
@@ -205,7 +193,6 @@ svg.chart.price-chart { height:104px; }
 .trade-sell { color:#b91c1c; }
 .secondary-metrics .trade-buy b, .secondary-metrics .trade-sell b { color:inherit; }
 .activity-empty { padding:4px 0; font-size:12px; color:var(--muted); }
-.detail-panel details.data-note { margin-top:4px; }
 .transfer-panel { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
 .transfer-row { flex-wrap:wrap; }
 
@@ -231,9 +218,16 @@ svg.chart.price-chart { height:104px; }
   <div class="top-right">
     <div class="token-count" id="tokenCount">统计中...</div>
     <div class="refresh-badge"><span class="refresh-dot"></span><span id="refreshInfo">加载中...</span></div>
-    <button class="notify-toggle" id="historyToggle" type="button">近期验证</button>
     <button class="notify-toggle" id="notifyToggle" type="button">自选提醒</button>
   </div>
+</div>
+
+<div class="history-panel" id="earlyHistoryPanel">
+  <div class="section-header">
+    <span class="section-heading">近期验证</span>
+    <div class="section-meta"><span class="section-copy">最新回放</span></div>
+  </div>
+  <div id="earlyHistoryBody"><div class="hint">加载历史回放...</div></div>
 </div>
 
 <div class="main">
@@ -244,20 +238,12 @@ svg.chart.price-chart { height:104px; }
       <button class="watchlist-toggle" id="watchlistToggle" type="button" aria-label="只看自选" aria-pressed="false" title="只看自选">☆</button>
     </div>
     <div class="list-scroll" id="tokenList"><div class="empty-state">正在加载代币数据...</div></div>
-    <button class="list-toggle" id="allTokensToggle" type="button" aria-expanded="false">全部监控</button>
   </div>
   <div class="detail-panel" id="detailPanel">
     <div class="empty-state">名单加载完成后将显示代币详情</div>
   </div>
 </div>
 <div id="scoreTooltip" class="score-tooltip" role="tooltip" hidden></div>
-<div class="history-panel" id="earlyHistoryPanel" hidden>
-  <div class="section-header">
-    <span class="section-heading">近期验证</span>
-    <div class="section-meta"><span class="section-copy">最新回放</span><button class="watch-button" id="earlyHistoryClose" type="button">关闭</button></div>
-  </div>
-  <div id="earlyHistoryBody"><div class="hint">加载历史回放...</div></div>
-</div>
 
 <script>
 const REFRESH_MS = 15000;
@@ -271,9 +257,6 @@ let selectedDetail = null;
 let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
-let showAllTokens = false;
-let userSelected = false;
-let earlyWarningLoaded = false;
 let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KEY));
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
@@ -486,7 +469,7 @@ function earlyWarningHTML(token){
     <div class="early-warning-metric"><span>量/流动性</span><b>${efficiency==null||isNaN(efficiency)?'--':(efficiency*100).toFixed(1)+'%'}</b></div>
     <div class="early-warning-metric"><span>5m涨幅</span><b>${change==null||isNaN(change)?'--':fmtChange(change)}</b></div>
     <div class="early-warning-cost">${costRows}</div>
-    ${hasA?`<details class="confirmation-criteria"><summary>强确认条件 · ${checks.filter(row=>row[1]).length}/6 项满足</summary><div class="confirmation-checks">${checks.map(([name,pass,value])=>`<div class="confirmation-check${pass?'':' blocked'}"><span>${escapeAttr(name)}</span><b>${escapeAttr(value)}</b></div>`).join('')}</div></details>`:''}
+    ${hasA?`<div class="confirmation-criteria"><strong>强确认条件 · ${checks.filter(row=>row[1]).length}/6 项满足</strong><div class="confirmation-checks">${checks.map(([name,pass,value])=>`<div class="confirmation-check${pass?'':' blocked'}"><span>${escapeAttr(name)}</span><b>${escapeAttr(value)}</b></div>`).join('')}</div></div>`:''}
     <div class="early-warning-meta">同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'}</div>
   </div>`;
 }
@@ -502,7 +485,7 @@ function factorItemHTML(key,label,factor){
   const cls=factorClass(factor.status);
   return `<div class="factor-item" data-tip="${escapeAttr(factor.help||label)}"><div class="factor-label"><span>${label}</span><span>${escapeAttr(factor.status_label||'中性')}</span></div><div class="factor-value ${cls}">${escapeAttr(factor.display||'--')}</div><div class="factor-bar"><span class="${cls}" style="width:${factorProgress(factor.value,key).toFixed(1)}%"></span></div></div>`;
 }
-function structureCardHTML(token, factorsOpen=false){
+function structureCardHTML(token){
   const address=String(token?.token_address||'');
   const structure=structureOf(address);
   if(!structure)return '<div class="hint">结构数据加载中...</div>';
@@ -510,7 +493,7 @@ function structureCardHTML(token, factorsOpen=false){
   const factors=structure.factors||{};
   return `<div class="structure-card">
     ${earlyWarningHTML(token)}
-    <details class="factor-details"${factorsOpen?' open':''}><summary>结构因子</summary>
+    <div class="factor-details"><strong>结构因子</strong>
     <div class="factor-grid">
       ${factorItemHTML('breakout_30m','30m突破',factors.breakout_30m)}
       ${factorItemHTML('relative_volume_30m','相对成交量',factors.relative_volume_30m)}
@@ -519,7 +502,7 @@ function structureCardHTML(token, factorsOpen=false){
       ${factorItemHTML('momentum_15m','15m动量',factors.momentum_15m)}
       ${factorItemHTML('liquidity_stability_30m','流动性稳定',factors.liquidity_stability_30m)}
     </div>
-    </details>
+    </div>
   </div>`;
 }
 async function ensureStructure(token){
@@ -586,14 +569,10 @@ function renderTokenList() {
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
   });
-  const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : searchTerm||showAllTokens ? filtered : filtered.filter(t=>liveEarlyWarning(t)))
+  const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
     .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   const activeCount=tokenData.filter(t=>liveEarlyWarning(t)).length;
   document.getElementById('tokenCount').textContent = `前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
-  const allToggle=document.getElementById('allTokensToggle');
-  allToggle.textContent=showAllTokens?'只看前置异动':`全部监控 · ${tokenData.length}`;
-  allToggle.setAttribute('aria-expanded',String(showAllTokens));
-
   const html=visible.map(t=>{
       const sel=t.token_address===selectedToken?' selected':'';
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
@@ -605,23 +584,10 @@ function renderTokenList() {
       </button>`;
     }).join('');
   hideScoreTooltip();
-  document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':watchlistOnly?'自选中暂无代币':'当前没有前置异动'}</div>`;
+  document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':watchlistOnly?'自选中暂无代币':'当前没有监控代币'}</div>`;
 }
 
-function toggleAllTokens(){
-  showAllTokens=!showAllTokens;
-  if(!showAllTokens&&!watchlistOnly&&!searchTerm){userSelected=false;syncDiscoverySelection();}
-  renderTokenList();
-}
-document.getElementById('allTokensToggle').addEventListener('click',toggleAllTokens);
-function syncDiscoverySelection(){
-  if(!earlyWarningLoaded||userSelected||showAllTokens||watchlistOnly||searchTerm)return;
-  const first=tokenData.filter(t=>liveEarlyWarning(t)).sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score)[0]?.token_address||null;
-  if(selectedToken===first)return;
-  selectedToken=first;
-  if(first)loadSelectedDetail(first);else {selectedDetail=null;renderDetail();}
-}
-function selectToken(token){userSelected=true;selectedToken=token;renderTokenList();loadSelectedDetail(token);}
+function selectToken(token){selectedToken=token;renderTokenList();loadSelectedDetail(token);}
 
 function makeChart(points,color='#0f766e') {
   const h=96,w=400;
@@ -658,15 +624,13 @@ function makeMarketChart(pool, markets) {
 
 function renderDetail() {
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
-  if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':earlyWarningLoaded&&!showAllTokens&&!watchlistOnly&&!searchTerm?'当前无新鲜前置异动，持续监控中。可展开“全部监控”查看其他代币。':'选择左侧代币查看详情'}</div>`;return;}
+  if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
   const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime;
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
-  const advancedOpen=sameToken&&document.getElementById('advancedData')?.open===true;
-  const factorsOpen=sameToken&&document.querySelector('.factor-details')?.open===true;
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
   const previousTimes=sameToken?['oiTime','trendTime','depthTime','whaleTime','transferTime'].map(id=>document.getElementById(id)?.textContent):[];
   const risks=marketRisks(t.signal_risk_flags);
@@ -712,11 +676,10 @@ function renderDetail() {
         <span class="section-heading">结构阶段</span>
         <div class="section-meta"><span class="section-copy">趋势与成交</span><span class="section-time" id="structureTime">${updatedAt(structureTime)}</span></div>
       </div>
-      ${structureCardHTML(t,factorsOpen)}
+      ${structureCardHTML(t)}
   </div>
 
-  <details id="advancedData" class="advanced-data"${advancedOpen?' open':''}>
-    <summary>更多数据 · OI / 价格对比 / 深度 / 链上</summary>
+  <div class="detail-sections">
     <div class="detail-section" id="oiSection">
       <div class="section-header">
         <span class="section-heading">合约持仓 · OI</span>
@@ -756,7 +719,7 @@ function renderDetail() {
       <div id="transferBody">${previous[4]||'<div class="hint">后台获取大额转账...</div>'}</div>
     </div>
   </div>
-  </details>
+  </div>
 
   `;
 
@@ -790,15 +753,13 @@ async function loadTransfers(token) {
   const transfers=(result.transfers||[]).filter(x=>!poolAddresses.has(x.from.toLowerCase())&&!poolAddresses.has(x.to.toLowerCase()));
   if(!transfers.length){
     body.innerHTML=`<div class="activity-empty">大额转账 0 笔 · 最近 ${result.sample_count||0} 笔样本未发现单笔超过 100 万 ${escapeAttr(token.token_symbol)}</div>
-      <details class="data-note"><summary>转账样本与统计口径</summary><div class="hint">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；仅显示近 24 小时记录；可能包含合约地址，高频代币可能遗漏更早记录。</div></details>`;
+      <div class="hint">转账样本与统计口径：${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；仅显示近 24 小时记录；可能包含合约地址，高频代币可能遗漏更早记录。</div>`;
     return;
   }
   const short=address=>`${address.slice(0,6)}…${address.slice(-4)}`;
-  const wasOpen=body.querySelector?.('details')?.open;
   body.innerHTML=`<div class="secondary-metrics"><span>大额转账 <b>${transfers.length} 笔</b></span><span>单笔 &gt; 100 万 ${escapeAttr(token.token_symbol)}</span></div>
-    <details><summary>查看 A → B 转账</summary>${transfers.slice(0,8).map(x=>`<div class="whale-row transfer-row"><b>${Number(x.amount).toLocaleString('en-US',{maximumFractionDigits:2})}</b><span>≈ ${fmtUsd(Number(x.amount)*token.price_usd)}</span><span>${short(x.from)} → ${short(x.to)}</span><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">交易</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
+    ${transfers.slice(0,8).map(x=>`<div class="whale-row transfer-row"><b>${Number(x.amount).toLocaleString('en-US',{maximumFractionDigits:2})}</b><span>≈ ${fmtUsd(Number(x.amount)*token.price_usd)}</span><span>${short(x.from)} → ${short(x.to)}</span><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">交易</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}
     <div class="hint" style="margin-top:8px">${updatedAt(result.calculated_at)}${result.stale?' · 刷新失败，沿用上次结果':''}；最近 ${result.sample_count||0} 笔链上转账中仅显示近 24 小时记录；美元价值按当前价格估算；可能包含合约地址，高频代币可能遗漏更早记录。</div>`;
-  if(wasOpen)body.querySelector('details').open=true;
 }
 
 async function loadWhales(token) {
@@ -842,14 +803,12 @@ async function loadWhales(token) {
     if(flowValue)flowValue.textContent=flowReady?whaleFlowText({netUsd,buyCount:buys.length,sellCount:sells.length}):`-- · ${available.length}/${token.pools.length}池`;
     if(!recentTrades.length){
       body.innerHTML=`<div class="activity-empty">${note}已查询的池子近 1 小时未查到单笔超过 $10K 的买卖</div>
-        <details class="data-note"><summary>交易样本与统计口径</summary><div class="hint">各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div></details>`;
+        <div class="hint">交易样本与统计口径：各池最近交易样本；同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div>`;
       return;
     }
-    const wasOpen=body.querySelector?.('details')?.open;
     body.innerHTML=`<div class="secondary-metrics"><span class="trade-buy">近1小时买入 <b>${buys.length} 笔 · ${fmtMoney(sum(buys))}</b></span><span class="trade-sell">近1小时卖出 <b>${sells.length} 笔 · ${fmtMoney(sum(sells))}</b></span></div>
-      <details><summary>最近大额交易</summary>${trades.slice(0,8).map(x=>`<div class="whale-row"><span class="trade-${x.side}">${x.side==='buy'?'买入':'卖出'}</span><b class="trade-${x.side}">${fmtMoney(x.usd)}</b><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">${x.wallet.slice(0,6)}…${x.wallet.slice(-4)}</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}</details>
+      ${trades.slice(0,8).map(x=>`<div class="whale-row"><span class="trade-${x.side}">${x.side==='buy'?'买入':'卖出'}</span><b class="trade-${x.side}">${fmtMoney(x.usd)}</b><a href="https://bscscan.com/tx/${x.hash}" target="_blank" rel="noopener noreferrer">${x.wallet.slice(0,6)}…${x.wallet.slice(-4)}</a><span class="whale-time">${timeAgo(x.at)}</span></div>`).join('')}
       <div class="hint" style="margin-top:8px">${note}近 1 小时汇总；下方列表为近 24 小时样本。同笔跨池交易按最大金额计一次。地址为交易发起地址，不代表最终持有人。</div>`;
-    if(wasOpen)body.querySelector('details').open=true;
   };
   await Promise.all(token.pools.map(async (pool,i)=>{
     if(selectedToken!==token.token_address)return;
@@ -906,11 +865,8 @@ async function loadDepth(token) {
     return values.some(v=>v==null)?null:values.reduce((n,v)=>n+v,0);
   };
   const rows=(start,end)=>bands.slice(start,end).map(pct=>{const down=price*(1-pct/100),up=price*(1+pct/100);return `<div>${pct}%</div><div><strong>${fmtMoney(sumDepth('support_usd',down))}</strong><small>目标价 ${fmtPrice(down)}</small></div><div><strong>${fmtMoney(sumDepth('pressure_usd',up))}</strong><small>目标价 ${fmtPrice(up)}</small></div>`;}).join('');
-  const wasOpen=body.querySelector?.('details')?.open;
-  body.innerHTML=`<div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(0,3)}</div></div>
-    <details><summary>更多深度 · 10% / 15% / 20%</summary><div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(3,6)}</div></div></details>
+  body.innerHTML=`<div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(0,6)}</div></div>
     <div class="hint" style="margin-top:8px">池子 ${available.length}/${pools.length} · 纳入流动性约 ${totalLiquidity?Math.floor(includedLiquidity/totalLiquidity*100):0}% · ${freshCoverage} · ${poolUpdatedAt(available.map(x=>x.depth))}${recent.length<available.length?' · 合计含旧数据':''} · ${available.some(x=>x.depth.stale)?'部分池子刷新失败，沿用上次结果 · ':''}各池按同一目标价插值估算后合计；跌 5% 的金额已包含跌 1% 的金额。仅反映当前池内报价，不含跨池最优路由或套利${pending?'；其余获取中':available.length<pools.length?'；部分池子不可用，合计不完整':''}；-- 表示报价不足或待刷新</div>`;
-  if(wasOpen)body.querySelector('details').open=true;
   };
   if(!pools.length){show();return;}
   await Promise.all(pools.map(async (pool,i)=>{
@@ -1019,7 +975,6 @@ window.addEventListener('resize',hideScoreTooltip);
 function showOverview(rows, cachedAt){
   tokenData=rows.filter(t=>t.indicator_score>0);
   if(!tokenData.some(t=>t.token_address===selectedToken))selectedToken=tokenData[0]?.token_address||null;
-  syncDiscoverySelection();
   renderTokenList();
   if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
   const times=tokenData.map(t=>Date.parse(t.observed_at)).filter(Number.isFinite);
@@ -1061,8 +1016,6 @@ try{
   if(Array.isArray(cached?.rows)&&cached.at<=Date.now()&&Date.now()-cached.at<300000)showOverview(cached.rows,cached.at);
 }catch{}
 updateNotifyToggle();
-document.getElementById('historyToggle')?.addEventListener('click',()=>toggleEarlyHistory());
-document.getElementById('earlyHistoryClose')?.addEventListener('click',()=>toggleEarlyHistory(false));
 document.getElementById('notifyToggle')?.addEventListener('click',enableEarlyWarningNotifications);
 
 function refreshStructure(){
@@ -1079,8 +1032,6 @@ function refreshEarlyWarning(){
   return fetchJSON('/api/early-warning').then(result=>{
     earlyWarningRows=new Map((result.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     earlyWarningCalibration=result.historical_calibration||null;
-    earlyWarningLoaded=true;
-    syncDiscoverySelection();
     notifyEarlyWarnings();
     renderTokenList();
     if(selectedToken)renderDetail();
@@ -1160,12 +1111,7 @@ function marketStateHTML(state){
     </div><div class="early-warning-evidence"><b>${escapeAttr(label)}</b> · 1h上涨占比 <b>${state.up_ratio==null?'--':`${(state.up_ratio*100).toFixed(1)}%`}</b> · 中位数 <b>${escapeAttr(fmtChange(state.median_change_h1_pct))}</b> · 1h成交额 <b>${fmtMoney(state.total_volume_h1_usd)}</b> · 流动性 <b>${fmtMoney(state.total_liquidity_usd)}</b></div>`;
 }
 
-async function toggleEarlyHistory(force){
-  const panel=document.getElementById('earlyHistoryPanel');
-  if(!panel)return;
-  const open=force===true?true:force===false?false:panel.hidden!==false;
-  panel.hidden=!open;
-  if(!open)return;
+async function loadEarlyHistory(){
   const body=document.getElementById('earlyHistoryBody');
   try{
     const [result,market]=await Promise.all([
@@ -1200,7 +1146,9 @@ async function refresh(){
   }
 }
 refresh();
+loadEarlyHistory();
 setInterval(refresh,REFRESH_MS);
+setInterval(loadEarlyHistory,300000);
 </script>
 </body>
 </html>
