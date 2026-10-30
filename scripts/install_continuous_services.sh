@@ -50,9 +50,13 @@ write_unit \
   confirmation-shadow \
   'TMM live confirmation shadow logger every 5 minutes' \
   "/usr/bin/python3 $SOURCE/scripts/confirmation_shadow.py --db $BASE/data/monitor.db --api http://127.0.0.1:8501 --loop --interval 300"
+write_unit \
+  database-health \
+  'TMM database and disk growth monitor every hour' \
+  "/usr/bin/python3 $SOURCE/scripts/database_health.py --db $BASE/data/monitor.db --state $RUNTIME/database-health.json --loop"
 
 sudo -n systemctl daemon-reload
-for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow; do
+for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow database-health; do
   sudo -n systemctl enable --now "tmm-$service.service" >/dev/null
   sudo -n systemctl restart "tmm-$service.service"
 done

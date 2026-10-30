@@ -299,7 +299,7 @@ if (( ! healthy )); then
 fi
 "${sudo_cmd[@]}" systemctl status --no-pager --lines=5 tmm.service
 TMM_BASE="$remote_dir" TMM_SOURCE="$source_dir" /bin/bash "$source_dir/scripts/install_continuous_services.sh"
-for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow; do
+for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow database-health; do
   printf '%s=%s\n' "tmm-$service" "$(systemctl is-active "tmm-$service.service")"
 done
 REMOTE

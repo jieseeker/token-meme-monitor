@@ -39,11 +39,26 @@ class ConfirmationShadowTest(unittest.TestCase):
             ]
         }
         values = [
-            confirmation_shadow.classify(cases[0][0], warning, now),
-            confirmation_shadow.classify(cases[1][0], warning, now),
-            confirmation_shadow.classify(cases[2][0], high_slippage, now),
+            confirmation_shadow.classify(cases[0][0], warning, now, "neutral"),
+            confirmation_shadow.classify(cases[1][0], warning, now, "neutral"),
+            confirmation_shadow.classify(cases[2][0], high_slippage, now, "neutral"),
         ]
         self.assertEqual([value["classification"] for value in values], ["strong", "aging", "slippage_blocked"])
+
+    def test_strong_requires_known_slippage_and_non_risk_off_market(self):
+        now = int(time.time())
+        signal = {"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 120}
+        warning = {"is_active": True, "slippage_estimates": {"estimates": [
+            {"order_usd": 100, "buy_slippage_pct": 0.2},
+            {"order_usd": 1000, "buy_slippage_pct": 0.4},
+        ]}}
+        self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_on")["classification"], "strong")
+        self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_off")["classification"], "market_blocked")
+        self.assertEqual(confirmation_shadow.classify(signal, warning, now, None)["classification"], "market_blocked")
+        warning["slippage_estimates"]["estimates"].pop()
+        self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_on")["classification"], "slippage_unknown")
+        warning["slippage_estimates"]["estimates"][0]["buy_slippage_pct"] = 0.4
+        self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_on")["classification"], "slippage_blocked")
 
     def test_records_and_resolves_forward_outcomes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -86,6 +101,13 @@ class ConfirmationShadowTest(unittest.TestCase):
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_15m_pct"], 1.0)
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_1h_pct"], 3.0)
             self.assertAlmostEqual(summary["by_classification"]["strong"]["mean_4h_pct"], 6.0)
+            cross = summary["by_market_and_classification"]["risk_on"]["strong"]
+            self.assertEqual(cross["events"], 1)
+            self.assertAlmostEqual(cross["mean_net_4h_pct"], 5.7)
+            self.assertEqual(cross["samples_4h"], 1)
+            report = confirmation_shadow.format_report(summary)
+            self.assertIn("| risk_on | strong | 1 | 1 |", report)
+            self.assertIn("1 / +5.70%", report)
             connection.close()
 
 

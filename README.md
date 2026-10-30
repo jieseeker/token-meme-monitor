@@ -79,6 +79,10 @@ MONITOR_DATABASE_PATH=/absolute/path/consistent-copy.db ./rust-dashboard/target/
 
 `scripts/confirmation_shadow.py` 每 5 分钟读取实时 `/api/signal-v2` 与 `/api/early-warning`，把页面当时的 `strong / aging / slippage_blocked / stale` 状态、A 年龄、量能、买压、滑点和入场价写入 `confirmation_shadow_events`，并从同池快照回填 15m/1h/4h 采样结果。同一 A 事件同一状态只保留首见记录；状态迁移会形成独立影子事件，用于验证页面展示信号的真实效果。
 
+影子 `strong` 仅在 A ≤5 分钟、风险 PASS、量能活跃、两档滑点均有有效值且分别 ≤0.30%/0.50%、市场为 `risk_on` 或 `neutral` 时记录；滑点缺失与市场阻断单独归类。`python3 scripts/confirmation_shadow.py --db data/monitor.db --report` 输出市场状态 × 影子分类的 15m/1h/4h 样本数及假设往返成本 0.3% 后的端点均值。该表不含真实成交与盘中路径，不能证明可实现盈利；`strong` 样本不足时不得据此放宽准入。
+
+数据库后台保留最近 7 天的 `snapshots`、`signals`、Alpha 全量快照及 V2 状态/变更，分批清理并继续处理积压；影子事件保留用于长期前瞻验证。`tmm-database-health.service` 每小时只读记录数据库、WAL、可用磁盘与观测增长率，在剩余空间 <5 GiB、WAL >2 GiB 或按当前增速预计 <3 天耗尽时输出 `alert: true` 到 journal。自动清理可能复用 SQLite 空闲页而不立即缩小文件；大型数据库压缩须另行评估空闲空间与停机窗口。
+
 “预测趋势”浮层通过 `GET /api/confirmation-shadow/summary` 展示实时影子日志的事件数、结算数与 15m/1h/4h 平均收益，并显示当前强确认占用的实时组合槽位。强确认最多显示 3 个观察槽位；该槽位仅表示风险预算，不自动下单。
 
 `GET /api/market-state` 用当前合约过滤后代币的 1h 上涨占比和中位数划分 `risk_on / neutral / risk_off`，并输出 1h 成交额与流动性合计。预测趋势浮层同步展示该状态，影子日志也会把当时市场状态写入 `market_state` 字段。

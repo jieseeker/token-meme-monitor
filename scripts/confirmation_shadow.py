@@ -2,6 +2,7 @@
 """Persist live A confirmation states and resolve their forward outcomes."""
 import argparse
 import json
+import math
 import sqlite3
 import time
 import urllib.request
@@ -21,12 +22,22 @@ def parse_time(value):
 
 
 def slippage_values(warning):
-    estimates = warning.get("slippage_estimates", {}).get("estimates", [])
-    by_order = {float(row.get("order_usd", 0)): row.get("buy_slippage_pct") for row in estimates}
+    estimates = (warning.get("slippage_estimates") or {}).get("estimates") or []
+    by_order = {}
+    for row in estimates:
+        if not isinstance(row, dict):
+            continue
+        try:
+            order = float(row.get("order_usd"))
+            value = float(row.get("buy_slippage_pct"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value >= 0:
+            by_order[order] = value
     return by_order.get(100.0), by_order.get(1000.0)
 
 
-def classify(signal, warning, now):
+def classify(signal, warning, now, market_state):
     if signal.get("stage") != "watch" or signal.get("risk_status") != "PASS" or warning.get("is_active") is not True:
         return None
     first_seen = signal.get("first_seen_at")
@@ -34,10 +45,18 @@ def classify(signal, warning, now):
         return None
     age = max(0, int(now - first_seen))
     slippage_100, slippage_1000 = slippage_values(warning)
-    high_slippage = (slippage_1000 is not None and slippage_1000 > 0.5) or (
-        slippage_100 is not None and slippage_100 > 0.3
-    )
-    classification = "slippage_blocked" if high_slippage else "strong" if age <= 300 else "aging" if age <= 900 else "stale"
+    if age > 900:
+        classification = "stale"
+    elif age > 300:
+        classification = "aging"
+    elif (slippage_100 is not None and slippage_100 > 0.3) or (slippage_1000 is not None and slippage_1000 > 0.5):
+        classification = "slippage_blocked"
+    elif slippage_100 is None or slippage_1000 is None:
+        classification = "slippage_unknown"
+    elif market_state not in ("risk_on", "neutral"):
+        classification = "market_blocked"
+    else:
+        classification = "strong"
     return {
         "age_seconds": age,
         "classification": classification,
@@ -169,18 +188,47 @@ def resolve_outcomes(connection, now):
 
 def summarize(connection):
     rows = connection.execute(
-        "SELECT classification,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct,outcome_state FROM confirmation_shadow_events"
+        "SELECT classification,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct,outcome_state,market_state FROM confirmation_shadow_events"
     ).fetchall()
     grouped = defaultdict(list)
+    crossed = defaultdict(lambda: defaultdict(list))
     for row in rows:
         grouped[row[0]].append(row)
+        crossed[row[5] or "unknown"][row[0]].append(row)
     result = {}
     for classification, values in grouped.items():
         result[classification] = {"events": len(values), "resolved": sum(row[4] == "resolved" for row in values)}
         for label, index in (("15m", 1), ("1h", 2), ("4h", 3)):
             outcomes = [row[index] for row in values if row[index] is not None]
             result[classification][f"mean_{label}_pct"] = sum(outcomes) / len(outcomes) if outcomes else None
-    return {"events": len(rows), "by_classification": result}
+    cross_result = {}
+    for market, classes in crossed.items():
+        cross_result[market] = {}
+        for classification, values in classes.items():
+            item = {"events": len(values), "resolved": sum(row[4] == "resolved" for row in values)}
+            for label, index in (("15m", 1), ("1h", 2), ("4h", 3)):
+                outcomes = [row[index] for row in values if row[index] is not None]
+                item[f"samples_{label}"] = len(outcomes)
+                item[f"mean_net_{label}_pct"] = sum(value - 0.3 for value in outcomes) / len(outcomes) if outcomes else None
+            cross_result[market][classification] = item
+    return {"events": len(rows), "by_classification": result,
+            "by_market_and_classification": cross_result,
+            "cost_assumption_round_trip_pct": 0.3,
+            "method": "sampled same-pool endpoint return minus assumed cost; not executable PnL"}
+
+
+def format_report(summary):
+    lines = ["| 市场 | 信号状态 | 事件 | 完整结算 | 15m 样本/净均值 | 1h 样本/净均值 | 4h 样本/净均值 |",
+             "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+    for market, classes in sorted(summary["by_market_and_classification"].items()):
+        for classification, item in sorted(classes.items()):
+            cells = []
+            for label in ("15m", "1h", "4h"):
+                value = item[f"mean_net_{label}_pct"]
+                cells.append(f'{item[f"samples_{label}"]} / {value:+.2f}%' if value is not None else "0 / --")
+            lines.append(f'| {market} | {classification} | {item["events"]} | {item["resolved"]} | ' + " | ".join(cells) + " |")
+    lines.append("\n假设往返成本 0.3%；仅同池端点采样收益，不含真实成交、额外滑点或盘中路径。")
+    return "\n".join(lines)
 
 
 def fetch_json(base_url, path):
@@ -199,7 +247,7 @@ def capture(api, connection):
         signal = signal_by_token.get(token)
         if not signal:
             continue
-        state = classify(signal, warning, now)
+        state = classify(signal, warning, now, market_state)
         if not state:
             continue
         pair = warning.get("pair_address")
@@ -230,12 +278,16 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--api", default="http://127.0.0.1:8501")
     parser.add_argument("--loop", action="store_true")
+    parser.add_argument("--report", action="store_true")
     parser.add_argument("--interval", type=int, default=300)
     args = parser.parse_args()
     Path(args.db).parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(args.db, timeout=30)
     connection.execute("PRAGMA busy_timeout=30000")
     init_schema(connection)
+    if args.report:
+        print(format_report(summarize(connection)))
+        return
     while True:
         print(json.dumps(capture(args.api, connection), ensure_ascii=False, sort_keys=True), flush=True)
         if not args.loop:

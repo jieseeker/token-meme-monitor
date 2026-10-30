@@ -272,7 +272,7 @@ pub fn prune_history(path: &str) -> Result<bool, rusqlite::Error> {
     tx.execute("DELETE FROM signal_v2_state WHERE token_address IN (SELECT token_address FROM signal_v2_state WHERE first_seen_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
     tx.execute("DELETE FROM signal_v2_changes WHERE id IN (SELECT id FROM signal_v2_changes WHERE recorded_at <= ?1 LIMIT 10000)", [signal_cutoff])?;
     tx.execute("DELETE FROM detail_cache WHERE updated_at < ?1", [&cutoff])?;
-    tx.execute("DELETE FROM alpha_universe_snapshots WHERE id IN (SELECT id FROM alpha_universe_snapshots WHERE observed_at < ?1 LIMIT 10000)", [&cutoff])?;
+    let alpha = tx.execute("DELETE FROM alpha_universe_snapshots WHERE id IN (SELECT id FROM alpha_universe_snapshots WHERE observed_at < ?1 LIMIT 10000)", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_signals AS SELECT id FROM signals WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
     tx.execute("CREATE TEMP TABLE old_snapshots AS SELECT id FROM snapshots WHERE observed_at < ?1 LIMIT 10000", [&cutoff])?;
     for table in [
@@ -314,30 +314,19 @@ pub fn prune_history(path: &str) -> Result<bool, rusqlite::Error> {
     let more: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM signals WHERE observed_at < ?1)
         OR EXISTS(SELECT 1 FROM snapshots WHERE observed_at < ?1)
+        OR EXISTS(SELECT 1 FROM alpha_universe_snapshots WHERE observed_at < ?1)
         OR EXISTS(SELECT 1 FROM signal_v2_state WHERE first_seen_at <= ?2)
         OR EXISTS(SELECT 1 FROM signal_v2_changes WHERE recorded_at <= ?2)",
         params![&cutoff, signal_cutoff],
         |row| row.get(0),
     )?;
     tx.commit()?;
-    if signals + snapshots > 0 {
+    if signals + snapshots + alpha > 0 {
         crate::logging::event(
             "info",
             "history_cleanup_completed",
-            serde_json::json!({"signals_removed":signals,"snapshots_removed":snapshots,"more":more}),
+            serde_json::json!({"signals_removed":signals,"snapshots_removed":snapshots,"alpha_removed":alpha,"more":more}),
         );
-    }
-    if !more {
-        let pages: i64 = conn.pragma_query_value(None, "page_count", |row| row.get(0))?;
-        let free: i64 = conn.pragma_query_value(None, "freelist_count", |row| row.get(0))?;
-        if free > 25_000 && free * 4 > pages {
-            conn.execute_batch("VACUUM")?;
-            crate::logging::event(
-                "info",
-                "history_database_compacted",
-                serde_json::json!({"free_pages":free,"total_pages":pages}),
-            );
-        }
     }
     Ok(more)
 }
@@ -1038,6 +1027,36 @@ mod pool_tests {
         assert_eq!(violations, 0);
         drop(conn);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cleanup_continues_when_only_alpha_history_remains() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-alpha-cleanup-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let path = path.to_str().unwrap();
+        super::init_schema(path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+        conn.execute(
+            "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10001)
+            INSERT INTO alpha_universe_snapshots(bucket_start,token_address,symbol,name,observed_at)
+            SELECT 'old',printf('token%05d',n),'T','T',?1 FROM seq",
+            [&old],
+        )
+        .unwrap();
+        drop(conn);
+        assert!(super::prune_history(path).unwrap());
+        assert!(!super::prune_history(path).unwrap());
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT count(*) FROM alpha_universe_snapshots", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]

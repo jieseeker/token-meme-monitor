@@ -274,6 +274,7 @@ let searchTerm = '';
 let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KEY));
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
+let marketRegime = null;
 let structureRows = new Map();
 let earlyWarningRows = new Map();
 let earlyWarningCalibration = null;
@@ -412,7 +413,8 @@ function noviceState(token, structure){
   if(structure.data_status==='warming_up')return {key:'data_warmup',label:'数据预热',tone:'neutral',reason:'V2 结构还需要连续历史样本建立基线，暂时没有可靠买点。',action:'等基线形成后再判断'};
   if(!Number.isFinite(price)||price<=0)return {key:'unknown',label:'信息不足',tone:'neutral',reason:'当前价格数据不完整，先不要判断。',action:'等待价格补齐'};
   const distance=buyPointDistance(token,structure), stage=String(structure.stage||'');
-  if((stage==='first_start'||stage==='second_start')&&distance!=null&&distance>=0&&distance<=.08)return {key:stage==='first_start'?'breakout_ready':'second_ready',label:'可执行候选',tone:'safe',reason:`${stage==='first_start'?'首次':'二次'}启动已确认，价格仍在观察线上 0% 到 8% 的执行窗口。`,action:'固定规则成立；止损 -10%，风险自担'};
+  if(stage==='first_start'&&distance!=null&&distance>=0&&distance<=.08)return {key:'b_observe',label:'B 结构观察',tone:'neutral',reason:'首次启动已确认，但 B 的历史净收益不足以支持买点结论。',action:'只观察，不作为买入依据'};
+  if(stage==='second_start'&&distance!=null&&distance>=0&&distance<=.08)return {key:'second_ready',label:'可执行候选',tone:'safe',reason:'二次启动已确认，价格仍在观察线上 0% 到 8% 的执行窗口。',action:'固定规则成立；止损 -10%，风险自担'};
   if(structure.b_crossed_at!=null&&structure.b_at==null&&distance!=null&&distance>.08)return {key:'too_far',label:'已涨远',tone:'risk',reason:`价格高于观察线 ${fmtChange(distance)}，已超过 +8% 确认窗。`,action:'等待回踩，不追高'};
   if(structure.b_crossed_at!=null&&distance!=null&&distance>=0&&distance<=.08)return {key:'wait_volume',label:'等待量能',tone:'safe',reason:'价格已进入突破确认窗，但量能还没确认。',action:'只观察，等量能确认'};
   if(distance!=null&&distance>=-.05&&distance<0)return {key:'near_buy',label:'接近买点',tone:'safe',reason:`价格距离观察线 ${fmtChange(distance)}，接近观察区。`,action:'进入观察区，不是买入指令'};
@@ -423,25 +425,29 @@ function candidatePriority(token,structure){
   const key=noviceState(token,structure).key;
   const warning=earlyWarningOf(token?.token_address);
   const warningPriority=warning?.status==='strong_anomaly'?2:warning?.status==='volume_anomaly'?1.5:warning?.is_active?1:0;
-  return (key==='breakout_ready'||key==='second_ready'?2:0)+warningPriority+(confirmationState(token).active?2:0);
+  return (key==='second_ready'?2:0)+warningPriority+(confirmationState(token).active?2:0);
 }
 function confirmationState(token){
   const address=String(token?.token_address||'').toLowerCase();
   const v2=signalV2Rows.get(address);
   const warning=earlyWarningRows.get(address);
   const ageSeconds=Number.isFinite(v2?.first_seen_at)?Math.max(0,Math.floor(Date.now()/1000-v2.first_seen_at)):null;
-  const candidate=v2?.stage==='watch'&&v2?.risk_status==='PASS'&&warning?.is_active===true&&ageSeconds!=null;
+  const candidate=v2?.stage==='watch'&&ageSeconds!=null;
   const slippage=warning?.slippage_estimates?.estimates||[];
   const slippage100=slippage.find(row=>Number(row.order_usd)===100)?.buy_slippage_pct;
   const slippage1000=slippage.find(row=>Number(row.order_usd)===1000)?.buy_slippage_pct;
-  const highSlippage=Number(slippage1000)>0.5||Number(slippage100)>0.3;
-  const active=candidate&&ageSeconds<=300&&!highSlippage;
-  const label=highSlippage?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:!candidate?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
+  const valid100=slippage100!=null&&Number.isFinite(Number(slippage100))&&Number(slippage100)>=0;
+  const valid1000=slippage1000!=null&&Number.isFinite(Number(slippage1000))&&Number(slippage1000)>=0;
+  const highSlippage=(valid100&&Number(slippage100)>0.3)||(valid1000&&Number(slippage1000)>0.5);
+  const classification=!candidate?'none':v2?.risk_status!=='PASS'?'risk_blocked':warning?.is_active!==true?'volume_blocked':ageSeconds>900?'stale':ageSeconds>300?'aging':highSlippage?'slippage_blocked':!valid100||!valid1000?'slippage_unknown':marketRegime!=='risk_on'&&marketRegime!=='neutral'?'market_blocked':'strong';
+  const active=classification==='strong';
+  const label=classification==='risk_blocked'?'风险阻断':classification==='volume_blocked'?'量能未确认':classification==='slippage_blocked'?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:classification==='slippage_unknown'?'滑点数据缺失':classification==='market_blocked'?`市场环境阻断 · ${marketRegime||'未知'}`:classification==='none'?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
   return {
     active,
-    classification:highSlippage?'slippage_blocked':active?'strong':ageSeconds<=900?'aging':ageSeconds<=3600?'stale':'none',
+    classification,
     label,
-    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
+    evidence:`阶段 ${v2?.stage||'--'} / watch · 风险 ${v2?.risk_status||'--'} / PASS · 量能 ${warning?.is_active===true?'活跃':'未活跃'} / 活跃 · A ${fmtDuration(ageSeconds)} / ≤5分钟${ageSeconds!=null?`（${ageSeconds<=300?'剩余':'超出'} ${fmtDuration(Math.abs(300-ageSeconds))}）`:''} · $100 滑点 ${valid100?Number(slippage100).toFixed(2)+'%':'--'} / ≤0.30% · $1K 滑点 ${valid1000?Number(slippage1000).toFixed(2)+'%':'--'} / ≤0.50% · 市场 ${marketRegime||'未知'} / risk_on 或 neutral`,
+    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':classification==='market_blocked'?`市场状态 ${marketRegime||'未知'}；须为 risk_on 或 neutral。`:classification==='slippage_unknown'?'$100 / $1K 滑点缺失；阈值分别为 0.30% / 0.50%。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
@@ -455,12 +461,12 @@ function earlyWarningHTML(token){
   const confirmation=confirmationState(token);
   const slippage=(item.slippage_estimates?.estimates||[]).reduce((map,row)=>(row.order_usd===100?map[100]=row.buy_slippage_pct:row.order_usd===1000?map[1000]=row.buy_slippage_pct:null,map),{});
   return `<div class="early-warning-strip${item.is_active?' active':''}">
-    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note">${confirmation.active?`<b>${escapeAttr(confirmation.label)}</b> · `:''}同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'} · 预测观察，不是买入指令</div></div>
+    <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-note"><b>${escapeAttr(confirmation.label)}</b> · 同类历史 4h &gt;5%：${gt5!=null?`${fmtPct2(gt5)} / 基线 ${fmtPct2(earlyWarningCalibration.baseline_gt_5pct_pct)}`:'--'} · 预测观察，不是买入指令</div></div>
     <div class="early-warning-metric"><span>量能倍数</span><b>${acceleration==null||isNaN(acceleration)?'--':acceleration.toFixed(1)+'x'}</b></div>
     <div class="early-warning-metric"><span>5m买压</span><b>${pressure==null||isNaN(pressure)?'--':(pressure*100).toFixed(0)+'%'}</b></div>
     <div class="early-warning-metric"><span>量/流动性</span><b>${efficiency==null||isNaN(efficiency)?'--':(efficiency*100).toFixed(1)+'%'}</b></div>
     <div class="early-warning-metric"><span>5m涨幅</span><b>${change==null||isNaN(change)?'--':fmtChange(change)}</b></div>
-    <div class="early-warning-evidence">证据 <b>${Number(item.evidence_count||0)}</b> 条 · 更新 <b>${escapeAttr(timeAgo(item.observed_at))}</b> · $100 买入滑点 <b>${slippage[100]==null?'--':slippage[100].toFixed(2)+'%'}</b> · $1K 买入滑点 <b>${slippage[1000]==null?'--':slippage[1000].toFixed(2)+'%'}</b></div>
+    <div class="early-warning-evidence">证据 <b>${Number(item.evidence_count||0)}</b> 条 · 更新 <b>${escapeAttr(timeAgo(item.observed_at))}</b> · $100 买入滑点 <b>${slippage[100]==null?'--':slippage[100].toFixed(2)+'%'}</b> · $1K 买入滑点 <b>${slippage[1000]==null?'--':slippage[1000].toFixed(2)+'%'}</b><br>${escapeAttr(confirmation.evidence)}</div>
   </div>`;
 }
 function buyPointAxisHTML(distance){
@@ -597,7 +603,7 @@ function renderTokenList() {
       const novice=noviceState(t,structureOf(t.token_address));
       const warning=earlyWarningOf(t.token_address);
       const confirmation=confirmationState(t);
-      const listState=confirmation.active?`${confirmation.label} · ${state.label}`:warning?.is_active?`${earlyWarningLabel(warning)} · ${candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label}`:(candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label);
+      const listState=confirmation.classification!=='none'?`${confirmation.label} · ${state.label}`:warning?.is_active?`${earlyWarningLabel(warning)} · ${candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label}`:(candidatePriority(t,structureOf(t.token_address))>=2?novice.label:state.label);
       return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)} · 快照 ${timeAgo(t.observed_at)}</span></span>
         <span class="score-tag ${cls}" data-tip="${escapeAttr(scoreTip)}" aria-label="活跃度分 ${score}${t.short_signal_stale?'；短周期信号已过期':''}；命中：${escapeAttr(scoreTags(t.indicator_reasons))}${v2Tip?`；${escapeAttr(v2Tip)}`:''}">${score}</span>
@@ -648,7 +654,7 @@ function renderDetail() {
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'');
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime;
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -1096,8 +1102,8 @@ function notifyEarlyWarnings(){
     if(!warning.is_active||!watchlist.has(String(warning.token_address||'').toLowerCase()))continue;
     const confirmation=confirmationState({token_address:warning.token_address});
     if(!confirmation.active)continue;
-    const key=String(warning.token_address||'').toLowerCase()+':'+warning.status;
-    if(Number.isFinite(sent[key])&&now-sent[key]<900000)continue;
+    const key=String(warning.token_address||'').toLowerCase()+':'+signalV2Rows.get(String(warning.token_address||'').toLowerCase())?.first_seen_at;
+    if(Number.isFinite(sent[key]))continue;
     sent[key]=now;
     const symbol=symbols.get(String(warning.token_address||'').toLowerCase())||'代币';
     const acceleration=Number(warning.volume_acceleration);
@@ -1109,6 +1115,7 @@ function notifyEarlyWarnings(){
       tag:key
     });
   }
+  for(const [key,at] of Object.entries(sent))if(!Number.isFinite(at)||now-at>7*86400000)delete sent[key];
   try{localStorage.setItem(EARLY_WARNING_NOTIFY_KEY,JSON.stringify(sent));}catch{}
 }
 
@@ -1189,10 +1196,12 @@ async function toggleEarlyHistory(force){
 
 async function refresh(){
   try{
-    const [rows, signalV2] = await Promise.all([
+    const [rows, signalV2, market] = await Promise.all([
       fetchJSON('/api/tokens'),
-      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]}))
+      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]})),
+      fetchJSON('/api/market-state').catch(()=>null)
     ]);
+    marketRegime=market?.state||null;
     signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
     showOverview(rows);
     if(selectedToken)renderDetail();
