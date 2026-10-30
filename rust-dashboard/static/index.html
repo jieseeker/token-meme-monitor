@@ -56,6 +56,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-btn:hover { position:relative; z-index:1; border-color:var(--accent); background:var(--accent-soft); }
 .token-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .token-btn.selected { border-color:var(--accent-strong); background:var(--accent-soft); box-shadow:var(--shadow-card); }
+.token-btn.signal-active { border-left:3px solid var(--accent); }
+.token-btn.signal-active .token-age { color:var(--accent-strong); }
 .token-main { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -235,6 +237,7 @@ svg.chart.price-chart { height:104px; }
 <div class="main">
   <div class="list-panel">
     <div class="section-title">实时发现</div>
+    <div class="list-summary" id="listHint" hidden>当前无新鲜前置异动，列表为普通监控</div>
     <div class="filter-row">
       <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
       <button class="watchlist-toggle" id="watchlistToggle" type="button" aria-label="只看自选" aria-pressed="false" title="只看自选">☆</button>
@@ -575,13 +578,14 @@ function renderTokenList() {
     .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   const activeCount=tokenData.filter(t=>liveEarlyWarning(t)).length;
   document.getElementById('tokenCount').textContent = `前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
+  document.getElementById('listHint').hidden=activeCount>0||tokenData.length===0||watchlistOnly||!!searchTerm;
   const html=visible.map(t=>{
       const sel=t.token_address===selectedToken?' selected':'';
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const warning=liveEarlyWarning(t);
       const acceleration=Number(warning?.volume_acceleration);
-      const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.label} · 快照 ${timeAgo(t.observed_at)}`;
-      return `<button class="token-btn${sel}" data-token="${escapeAttr(t.token_address)}">
+      const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.label.replace(/^[ABC]\s+/,'')} · 快照 ${timeAgo(t.observed_at)}`;
+      return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
     }).join('');
