@@ -12,7 +12,7 @@
   --line: rgba(23,32,51,.10); --line-strong: rgba(15,118,110,.22);
   --text: #111827; --muted: #5f6b76; --subtle: #64707c;
   --accent: #0f766e; --accent-strong: #0b5f59; --accent-soft: #e6f4f1;
-  --accent-wash: rgba(15,118,110,.08); --risk: #b45309; --danger: #ef4444;
+  --accent-wash: rgba(15,118,110,.08); --risk: #b45309; --danger: #ef4444; --blocked:#a43f30;
   --shadow-card: 0 1px 2px rgba(17,24,39,.035);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -56,11 +56,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-btn:hover { position:relative; z-index:1; border-color:var(--accent); background:var(--accent-soft); }
 .token-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .token-btn.selected { border-color:var(--accent-strong); background:var(--accent-soft); box-shadow:var(--shadow-card); }
-.token-btn.signal-active { border-left:3px solid var(--line); }
-.token-btn.signal-up { border-left-color:#b91c1c; }
-.token-btn.signal-up .token-age { color:#b91c1c; }
-.token-btn.signal-down { border-left-color:var(--accent-strong); }
-.token-btn.signal-down .token-age { color:var(--accent-strong); }
+.token-btn.signal-active { border-left:3px solid var(--blocked); }
+.token-btn.signal-active .token-age { color:var(--blocked); }
 .token-main { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
@@ -130,7 +127,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .confirmation-check { display:flex; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); }
 .confirmation-check span { min-width:0; }
 .confirmation-check b { min-width:0; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; text-align:right; overflow-wrap:anywhere; }
-.confirmation-check.blocked b { color:#a43f30; }
+.confirmation-check.blocked b { color:var(--blocked); }
 @container (max-width:520px){ .early-warning-strip { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @container (max-width:520px){ .early-warning-cost,.confirmation-checks { grid-template-columns:1fr; } }
 .factor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
@@ -269,6 +266,8 @@ let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KE
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
 let marketRegime = null;
+const marketRegimeLabels={risk_on:'风险偏好',neutral:'中性',risk_off:'风险规避'};
+function marketRegimeLabel(value){return marketRegimeLabels[value]||'未知';}
 let structureRows = new Map();
 let earlyWarningRows = new Map();
 let earlyWarningCalibration = null;
@@ -434,7 +433,7 @@ function confirmationState(token){
   const highSlippage=(valid100&&Number(slippage100)>0.3)||(valid1000&&Number(slippage1000)>0.5);
   const classification=!candidate?'none':v2?.risk_status!=='PASS'?'risk_blocked':warning?.is_active!==true?'volume_blocked':ageSeconds>900?'stale':ageSeconds>300?'aging':highSlippage?'slippage_blocked':!valid100||!valid1000?'slippage_unknown':marketRegime!=='risk_on'&&marketRegime!=='neutral'?'market_blocked':'strong';
   const active=classification==='strong';
-  const label=classification==='risk_blocked'?'风险阻断':classification==='volume_blocked'?'量能未确认':classification==='slippage_blocked'?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:classification==='slippage_unknown'?'滑点数据缺失':classification==='market_blocked'?`市场环境阻断 · ${marketRegime||'未知'}`:classification==='none'?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
+  const label=classification==='risk_blocked'?'风险阻断':classification==='volume_blocked'?'量能未确认':classification==='slippage_blocked'?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:classification==='slippage_unknown'?'滑点数据缺失':classification==='market_blocked'?`市场环境阻断 · ${marketRegimeLabel(marketRegime)}`:classification==='none'?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
   return {
     active,
     classification,
@@ -442,7 +441,7 @@ function confirmationState(token){
     ageSeconds,
     slippage100:valid100?Number(slippage100):null,
     slippage1000:valid1000?Number(slippage1000):null,
-    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':classification==='market_blocked'?`市场状态 ${marketRegime||'未知'}；须为 risk_on 或 neutral。`:classification==='slippage_unknown'?'$100 / $1K 滑点缺失；阈值分别为 0.30% / 0.50%。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
+    reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':classification==='market_blocked'?`市场状态 ${marketRegimeLabel(marketRegime)}；须为风险偏好或中性。`:classification==='slippage_unknown'?'$100 / $1K 滑点缺失；阈值分别为 0.30% / 0.50%。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
@@ -468,7 +467,7 @@ function earlyWarningHTML(token){
     ['A 新鲜度',confirmation.ageSeconds!=null&&confirmation.ageSeconds<=300,`${fmtDuration(confirmation.ageSeconds)} / ≤5分钟${confirmation.ageSeconds>300?`，超出 ${fmtDuration(confirmation.ageSeconds-300)}`:''}`],
     ['$100 滑点',confirmation.slippage100!=null&&confirmation.slippage100<=.3,`${confirmation.slippage100==null?'--':confirmation.slippage100.toFixed(2)+'%'} / ≤0.30%`],
     ['$1K 滑点',confirmation.slippage1000!=null&&confirmation.slippage1000<=.5,`${confirmation.slippage1000==null?'--':confirmation.slippage1000.toFixed(2)+'%'} / ≤0.50%`],
-    ['市场环境',marketRegime==='risk_on'||marketRegime==='neutral',`${marketRegime||'未知'} / 需 risk_on 或 neutral`]
+    ['市场环境',marketRegime==='risk_on'||marketRegime==='neutral',`${marketRegimeLabel(marketRegime)} / 需风险偏好或中性`]
   ]:[];
   return `<div class="early-warning-strip${item.is_active?' active':''}">
     <div class="early-warning-main"><div class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</div><div class="early-warning-meta">证据 ${Number(item.evidence_count||0)} 条 · 更新 ${escapeAttr(timeAgo(item.observed_at))}</div><div class="early-warning-note"><b>${escapeAttr(status)}</b> · 预测观察，不是买入指令</div></div>
@@ -587,10 +586,8 @@ function renderTokenList() {
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const warning=liveEarlyWarning(t);
       const acceleration=Number(warning?.volume_acceleration);
-      const change=Number(warning?.return_5m_pct);
-      const signalTone=change>0?' signal-up':change<0?' signal-down':'';
       const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.label.replace(/^[ABC]\s+/,'')} · 快照 ${timeAgo(t.observed_at)}`;
-      return `<button class="token-btn${sel}${warning?' signal-active'+signalTone:''}" data-token="${escapeAttr(t.token_address)}">
+      return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
     }).join('');
@@ -1116,8 +1113,7 @@ function earlyHistoryHTML(result){
 
 function marketStateHTML(state){
   if(!state)return '';
-  const labels={risk_on:'Risk On',neutral:'Neutral',risk_off:'Risk Off'};
-  const label=labels[state.state]||'未知';
+  const label=marketRegimeLabel(state.state);
   return `<div class="section-header" style="margin-top:14px">
       <span class="section-heading">市场状态</span>
       <div class="section-meta"><span class="section-copy">当前监控币</span></div>

@@ -91,12 +91,8 @@ setImmediate(async () => {
   assert.ok(document.getElementById('tokenList').innerHTML.includes('TEST'));
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('活跃度分'),'unvalidated activity score must not dominate discovery');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'other monitored tokens are visible without expanding');
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active signal-up"'),'rising fresh evidence gets the rising color');
-  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=-1.2;renderTokenList()`,context);
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active signal-down"'),'falling fresh evidence gets the falling color');
-  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=null;renderTokenList()`,context);
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active"') && !document.getElementById('tokenList').innerHTML.includes('signal-up') && !document.getElementById('tokenList').innerHTML.includes('signal-down'),'missing change keeps neutral signal style');
-  vm.runInContext(`earlyWarningRows.get('0xtoken').return_5m_pct=1.2;renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active"'),'fresh evidence gets one consistent list marker');
+  assert.ok(html.includes('.token-btn.signal-active { border-left:3px solid var(--blocked); }') && html.includes('.confirmation-check.blocked b { color:var(--blocked); }'),'list marker matches the market condition text color');
   assert.equal(document.getElementById('listHint').hidden,true,'zero-signal hint stays hidden while fresh evidence exists');
   vm.runInContext(`structureRows.set('0xother',{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1});renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('候选 · 快照') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'list copy drops A/B/C stage letters');
@@ -120,7 +116,7 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('实时组合槽位'),'history panel should omit portfolio slots');
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
-  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Risk On'),'history panel must label risk-on state');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('风险偏好'),'history panel must label risk-on state in Chinese');
   await vm.runInContext('toggleEarlyHistory(false)',context);
   assert.equal(document.getElementById('earlyHistoryPanel').hidden,true,'recent validation closes on demand');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
@@ -201,6 +197,10 @@ assert.ok(!noAWarning.includes('confirmation-criteria') && !noAWarning.includes(
 const aWarning=vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',first_seen_at:Math.floor(Date.now()/1000)-240});earlyWarningRows.get('0xconfirm').is_active=true;earlyWarningHTML({token_address:'0xconfirm'})`,context);
 assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31%'),'A checklist must expose the blocking gap');
 assert.ok(!aWarning.includes('<details') && aWarning.includes('市场环境'),'strong confirmation conditions are visible without expanding');
+assert.ok(aWarning.includes('风险偏好 / 需风险偏好或中性') && !aWarning.includes('risk_on'),'market conditions use Chinese labels');
+assert.equal(vm.runInContext(`marketRegime='risk_off';earlyWarningRows.get('0xconfirm').slippage_estimates={estimates:[{order_usd:100,buy_slippage_pct:.1},{order_usd:1000,buy_slippage_pct:.2}]};confirmationState({token_address:'0xconfirm'}).reason`,context),'市场状态 风险规避；须为风险偏好或中性。','blocked market explanation uses Chinese labels');
+assert.ok(vm.runInContext(`marketStateHTML({state:'neutral'})`,context).includes('中性'),'market summary uses Chinese labels');
+vm.runInContext(`marketRegime='risk_on'`,context);
 const quietWarning=vm.runInContext(`earlyWarningRows.set('0xquiet',{status:'quiet',is_active:false,observed_at:new Date().toISOString(),evidence_count:0});earlyWarningHTML({token_address:'0xquiet'})`,context);
 assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量能倍数') && !quietWarning.includes('$100 买入滑点') && !quietWarning.includes('同类历史'),'quiet warning should be one concise line');
   await new Promise(setImmediate);
