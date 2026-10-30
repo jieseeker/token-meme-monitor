@@ -31,14 +31,14 @@ pub fn record_snapshots(
     let mut statement = conn.prepare(
         "INSERT INTO alpha_universe_snapshots
          (bucket_start,token_address,symbol,name,observed_at,price_usd,price_change_h24,
-          volume_h24,liquidity_usd,market_cap,holders,futures_listed,raw_json)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+         volume_h24,liquidity_usd,market_cap,holders,futures_listed)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(token_address,bucket_start) DO UPDATE SET
            symbol=excluded.symbol,name=excluded.name,observed_at=excluded.observed_at,
            price_usd=excluded.price_usd,price_change_h24=excluded.price_change_h24,
            volume_h24=excluded.volume_h24,liquidity_usd=excluded.liquidity_usd,
            market_cap=excluded.market_cap,holders=excluded.holders,
-           futures_listed=excluded.futures_listed,raw_json=excluded.raw_json",
+           futures_listed=excluded.futures_listed",
     )?;
     let mut inserted = 0;
     for token in tokens {
@@ -55,7 +55,6 @@ pub fn record_snapshots(
             number(&token.raw["marketCap"]),
             token.raw["holders"].as_i64(),
             futures_addresses.contains(&token.address),
-            token.raw.to_string(),
         ])?;
     }
     Ok(inserted)
@@ -207,6 +206,17 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert!((price - 1.2).abs() < 1e-9);
+        let raw: String = conn
+            .query_row(
+                "SELECT raw_json FROM alpha_universe_snapshots WHERE token_address='0xa'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            raw, "{}",
+            "the audit stores its queryable columns, not a duplicate raw response"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
