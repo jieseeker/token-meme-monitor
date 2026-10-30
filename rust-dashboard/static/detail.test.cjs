@@ -94,6 +94,11 @@ setImmediate(async () => {
   vm.runInContext('toggleAllTokens()',context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'expanding all monitored tokens restores the full list');
   vm.runInContext('toggleAllTokens()',context);
+  vm.runInContext("showAllTokens=true;userSelected=true;selectedToken='0xother';toggleAllTokens()",context);
+  assert.equal(vm.runInContext('selectedToken',context),'0xtoken','collapsing all monitored tokens selects a visible live candidate');
+  vm.runInContext('selectedToken=null;renderDetail()',context);
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('当前无新鲜前置异动'),'empty discovery should explain why detail is blank');
+  vm.runInContext("selectedToken='0xtoken'",context);
   vm.runInContext("userSelected=false;selectedToken='0xother';syncDiscoverySelection()",context);
   assert.equal(vm.runInContext('selectedToken',context),'0xtoken','first live candidate opens automatically');
   vm.runInContext("userSelected=true;selectedToken='0xother';syncDiscoverySelection()",context);

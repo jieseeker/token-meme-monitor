@@ -608,7 +608,11 @@ function renderTokenList() {
   document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':watchlistOnly?'自选中暂无代币':'当前没有前置异动'}</div>`;
 }
 
-function toggleAllTokens(){showAllTokens=!showAllTokens;renderTokenList();}
+function toggleAllTokens(){
+  showAllTokens=!showAllTokens;
+  if(!showAllTokens&&!watchlistOnly&&!searchTerm){userSelected=false;syncDiscoverySelection();}
+  renderTokenList();
+}
 document.getElementById('allTokensToggle').addEventListener('click',toggleAllTokens);
 function syncDiscoverySelection(){
   if(!earlyWarningLoaded||userSelected||showAllTokens||watchlistOnly||searchTerm)return;
@@ -654,7 +658,7 @@ function makeMarketChart(pool, markets) {
 
 function renderDetail() {
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
-  if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
+  if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':earlyWarningLoaded&&!showAllTokens&&!watchlistOnly&&!searchTerm?'当前无新鲜前置异动，持续监控中。可展开“全部监控”查看其他代币。':'选择左侧代币查看详情'}</div>`;return;}
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
