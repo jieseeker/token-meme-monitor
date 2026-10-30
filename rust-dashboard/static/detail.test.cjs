@@ -92,11 +92,14 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('活跃度分'),'unvalidated activity score must not dominate discovery');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'other monitored tokens are visible without expanding');
   assert.ok(!html.includes('id="allTokensToggle"'),'no list expansion control remains');
-  assert.ok(html.includes('.list-scroll { display:flex; flex-direction:column; gap:8px; min-height:0; padding-right:4px; }'),'the full list scrolls with the page');
+  assert.ok(html.includes('overflow-y:auto; overscroll-behavior:contain;'),'the full list scrolls inside the left panel');
+  assert.ok(html.includes('aria-label="监控代币列表" tabindex="0"'),'keyboard users can focus the scrollable list');
   vm.runInContext(`signalV2Rows.set('0xtoken',{stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null});renderedKey='';renderDetail()`,context);
   await new Promise(setImmediate);
-  await vm.runInContext('loadEarlyHistory()',context);
-  assert.ok(!html.includes('id="historyToggle"') && !html.includes('id="earlyHistoryClose"') && !html.includes('id="earlyHistoryPanel" hidden'),'recent validation is always visible');
+  assert.ok(html.includes('id="historyToggle"') && html.includes('id="earlyHistoryClose"') && html.includes('id="earlyHistoryPanel" hidden'),'recent validation is collapsed by default');
+  document.getElementById('earlyHistoryPanel').hidden=true;
+  await vm.runInContext('toggleEarlyHistory(true)',context);
+  assert.equal(document.getElementById('earlyHistoryPanel').hidden,false,'recent validation opens on demand');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('13.68%'),'history must show volume hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('7.31%'),'history must show baseline hit rate');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('+0.21%'),'history must show 0.3% cost result');
@@ -105,6 +108,8 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('Risk On'),'history panel must label risk-on state');
+  await vm.runInContext('toggleEarlyHistory(false)',context);
+  assert.equal(document.getElementById('earlyHistoryPanel').hidden,true,'recent validation closes on demand');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
   assert.ok(!html.includes('view-switch'),'the novice card should not require a separate view mode');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('token-v2'), 'the list should not show the legacy V2 stage badge');
