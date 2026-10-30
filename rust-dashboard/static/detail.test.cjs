@@ -142,9 +142,24 @@ setImmediate(async () => {
   assert.ok(noLine.includes('等待结构形成') && !noLine.includes('buy-axis'),'a missing B line must not render a fake axis');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
-assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),2,'confirmed executable candidates must sort above ordinary activity scores');
+assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'confirmed executable candidates must sort above ordinary activity scores');
 assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',updated_at:Math.floor(Date.now()/1000)})`,context),0);
-assert.equal(vm.runInContext(`earlyWarningRows.set('0xready',{status:'strong_anomaly',is_active:true});candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),4,'strong early warnings must increase discovery priority');
+assert.equal(vm.runInContext(`earlyWarningRows.set('0xready',{status:'strong_anomaly',is_active:true,observed_at:new Date().toISOString()});candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),3,'strong early warnings must increase discovery priority');
+  const discoveryOrder=vm.runInContext(`(()=>{
+    const fresh=new Date().toISOString(),old=new Date(Date.now()-180000).toISOString();
+    const token=(address)=>({token_address:address,observed_at:fresh,price_usd:1,signal_risk_flags:'[]'});
+    earlyWarningRows.set('0xearly',{status:'volume_anomaly',is_active:true,volume_acceleration:2.4,observed_at:fresh});
+    earlyWarningRows.set('0xexpired',{status:'strong_anomaly',is_active:true,volume_acceleration:3,observed_at:old});
+    const confirmed={available:true,stage:'second_start',risk_status:'PASS',data_status:'current',updated_at:Math.floor(Date.now()/1000),c_breakout_line:1};
+    return [candidatePriority(token('0xearly'),null),candidatePriority(token('0xconfirmed'),confirmed),candidatePriority(token('0xexpired'),null)];
+  })()`,context);
+  assert.ok(discoveryOrder[0]>discoveryOrder[1]&&discoveryOrder[1]>discoveryOrder[2],'fresh early evidence must lead the discovery list; old evidence must not be promoted');
+  vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xearly',token_symbol:'EARLY',observed_at:new Date().toISOString(),indicator_score:5,indicator_reasons:'[]',signal_risk_flags:'[]'},{token_address:'0xconfirmed',token_symbol:'READY',observed_at:new Date().toISOString(),indicator_score:90,indicator_reasons:'[]',signal_risk_flags:'[]'}];renderTokenList()`,context);
+  const discoveryList=document.getElementById('tokenList').innerHTML;
+  assert.ok(discoveryList.indexOf('EARLY')<discoveryList.indexOf('READY'),'the live early candidate must appear first');
+  assert.ok(discoveryList.includes('前置量能异动')&&discoveryList.includes('2.4x'),'the list must name the leading evidence');
+  assert.ok(document.getElementById('tokenCount').textContent.includes('前置异动 1'),'the list must show how many fresh candidates exist');
+  vm.runInContext(`tokenData=testPreviousTokens;renderTokenList()`,context);
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-240});earlyWarningRows.set('0xconfirm',{status:'volume_anomaly',is_active:true,slippage_estimates:{estimates:[{order_usd:100,buy_slippage_pct:.1},{order_usd:1000,buy_slippage_pct:.2}]}});confirmationState({token_address:'0xconfirm'}).label`,context),'A + PASS + 量能确认 · 4分钟','a fresh A event with PASS risk and active volume must expose the strongest confirmation cohort');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-400});earlyWarningRows.set('0xconfirm',{status:'volume_anomaly',is_active:true});confirmationState({token_address:'0xconfirm'}).label`,context),'A 新鲜度下降 · 7分钟','an A event older than five minutes must lose strongest confirmation priority');
 assert.equal(vm.runInContext(`signalV2Rows.set('0xconfirm',{stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-1000});earlyWarningRows.set('0xconfirm',{status:'volume_anomaly',is_active:true});confirmationState({token_address:'0xconfirm'}).label`,context),'A 已过新鲜窗 · 17分钟','an A event older than fifteen minutes must be clearly expired for confirmation');
@@ -206,8 +221,8 @@ assert.ok(aWarning.includes('强确认条件') && aWarning.includes('超限 0.31
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);
   assert.ok(!list.includes('ZERO'));
   assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
-  assert.ok(list.includes('B 候选'), 'list should show a B candidate instead of a generic watch state');
-  assert.equal(document.getElementById('tokenCount').textContent, '入榜 2 个代币 · 自选 0');
+  assert.ok(list.includes('前置量能异动'), 'the live early signal should lead the list copy');
+  assert.equal(document.getElementById('tokenCount').textContent, '前置异动 1 · 监控 2 · 自选 0');
   assert.ok(detail.includes('☆ 自选'));
   vm.runInContext("toggleWatchlist('0xtoken')",context);
   assert.ok(JSON.parse(localStorage.getItem('tmm-watchlist-v1')).includes('0xtoken'),'watchlist must persist');
