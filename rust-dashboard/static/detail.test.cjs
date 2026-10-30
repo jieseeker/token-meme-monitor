@@ -160,7 +160,9 @@ setImmediate(async () => {
     assert.equal(result.key,key);assert.equal(result.label,label);
   }
   const noLine=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000),factors:{},timeline:[]});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()})`,context);
-  assert.ok(!noLine.includes('buy-axis') && noLine.includes('结构因子') && !noLine.includes('<details'),'structure factors render without expanding');
+  assert.ok(noLine.includes('下一步观察') && noLine.includes('暂无数据') && !noLine.includes('factor-bar') && !noLine.includes('<details'),'missing structure evidence stays readable without progress bars');
+  const readableStructure=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,conclusion:'结构观察：因子尚未形成一致方向',factors:{breakout_30m:{value:-.008,display:'-0.8%'},relative_volume_30m:{value:.7,display:'0.70x'},buy_pressure_5m:{value:.548,display:'54.8%'},momentum_5m:{value:0,display:'0.0%'},momentum_15m:{value:-.01,display:'-1.0%'},liquidity_stability_30m:{value:.99,display:'0.99'}}});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xreadable',price_usd:1,observed_at:new Date().toISOString()})`,context);
+  assert.ok(readableStructure.includes('等待突破候选') && readableStructure.includes('距近30分钟高点') && readableStructure.includes('-0.8%') && readableStructure.includes('0.70x') && readableStructure.includes('54.8%') && readableStructure.includes('5分钟 0.0% · 15分钟 -1.0%'),'structure tells the reader what happened and what is next');
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
 assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'confirmed executable candidates must sort above ordinary activity scores');
@@ -213,7 +215,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   assert.ok(!detail.includes('class="buy-axis"'),'the repeated buy axis should be removed');
   assert.ok(!detail.includes('advanced-data') && !detail.includes('<details'), 'detail sections render flat without expansion');
   assert.ok(detail.indexOf('合约持仓 · OI') < detail.indexOf('市场价格对比'), 'OI and trend remain in sequence');
-  assert.ok(detail.includes('class="factor-grid"'), 'structure factors are directly visible');
+  assert.ok(detail.includes('class="structure-facts"'), 'structure evidence is directly visible');
   assert.ok(detail.indexOf('已收录 <b>2</b> 个池子') < detail.indexOf('更新于 '), 'pool count should sit before the update time');
   assert.ok(detail.includes('class="overview-grid"'), 'the first card should use one unified stats grid');
   assert.ok(detail.indexOf('参考价格') < detail.indexOf('5m 涨跌'), 'price should lead its change metrics');
@@ -232,7 +234,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   for (const expected of ['0xtoken', '24h 涨跌', '市值', '更新于 ', '$0.00000001235', '5m 涨跌', '+2.0%', '1h 涨跌', '-3.0%', '$2.4K', '$20.0K', '价格区间深度']) {
     assert.ok(detail.includes(expected), `missing ${expected}`);
   }
-  for (const removed of ['可控', '上涨概率', '概率预测', '下一步观察', 'pancakeswap', 'uniswap', '0xpair', '0xmid']) {
+  for (const removed of ['可控', '上涨概率', '概率预测', 'pancakeswap', 'uniswap', '0xpair', '0xmid']) {
     assert.ok(!detail.includes(removed), `unexpected ${removed}`);
   }
   assert.ok(!detail.includes('未接入卖出限制'), 'the first card should not repeat the safety copy');
@@ -262,7 +264,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   assert.ok(!list.includes('活跃度分'));
   assert.ok(list.includes('更新'), 'live discovery rows expose evidence age');
   assert.ok(!list.includes('onclick='), 'token selection must not embed an address in JavaScript');
-  assert.ok(html.includes('id="scoreTooltip" class="score-tooltip"'), 'factor tooltip renders outside the scrolling list');
+  assert.ok(!html.includes('id="scoreTooltip"'), 'unused factor tooltip is removed with the bars');
   const mixed=vm.runInContext(`mergeTokens([
     {token_address:'0xmixed',pair_address:'0xdeep',dex_id:'a',liquidity_usd:100,signal_score:0,signal_reasons:'[]',signal_risk_flags:'["low_liquidity"]'},
     {token_address:'0xmixed',pair_address:'0xscored',dex_id:'b',liquidity_usd:50,signal_score:45,signal_reasons:'["h1_buy_dominance"]',signal_risk_flags:'["sell_pressure"]'}
