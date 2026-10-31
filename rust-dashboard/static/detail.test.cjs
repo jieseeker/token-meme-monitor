@@ -99,7 +99,7 @@ setImmediate(async () => {
   assert.ok(html.includes('.token-btn.signal-active { border-left:3px solid var(--blocked); }') && html.includes('.early-warning-cost-item.over b,.early-warning-cost-item.over em { color:var(--blocked); }'),'list marker matches the blocked cost text color');
   assert.equal(document.getElementById('listHint').hidden,true,'zero-signal hint stays hidden while fresh evidence exists');
   vm.runInContext(`structureRows.set('0xother',{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1});renderTokenList()`,context);
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('等待量能确认') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'list names the next observation without stage letters');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('快照已过期，等待更新') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'stale list rows hide old observations and stage letters');
   vm.runInContext(`earlyWarningRows.get('0xtoken').observed_at=new Date(Date.now()-180000).toISOString();renderTokenList()`,context);
   assert.equal(document.getElementById('listHint').hidden,false,'zero fresh warnings show a clear list hint');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('signal-active'),'expired warning loses its accent');
@@ -121,6 +121,8 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('风险偏好'),'history panel must label risk-on state in Chinese');
+  const losingReplay=vm.runInContext(`earlyHistoryHTML({reports:[{replay_until:'2026-10-31T00:00:00Z',volume_events:4905,volume_gt_5pct:12.38,baseline_gt_5pct:7.07,ladder_net_0_3pct:-.06,ladder_net_0_5pct:-.26}]})`,context);
+  assert.ok(losingReplay.includes('扣成本后未见正收益') && losingReplay.indexOf('净收益·0.3%')<losingReplay.indexOf('4h&gt;5%'),'negative net results lead the replay instead of the hit rate');
   await vm.runInContext('toggleEarlyHistory(false)',context);
   assert.equal(document.getElementById('earlyHistoryPanel').hidden,true,'recent validation closes on demand');
   vm.runInContext(`watchlist.delete('0xtoken');renderedKey='';renderTokenList();renderDetail()`,context);
@@ -170,6 +172,9 @@ setImmediate(async () => {
   assert.ok(readableStructure.includes('量能尚未达到偏强参考'),'the structure verdict explains the leading shortfall before the factor rows');
   vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xreadable',token_symbol:'WAIT',observed_at:new Date().toISOString(),indicator_score:1}];renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('量能 0.7x'),'ordinary list rows show an actionable difference');
+  vm.runInContext(`tokenData[0].observed_at=new Date(Date.now()-180000).toISOString();renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('快照已过期，等待更新') && !document.getElementById('tokenList').innerHTML.includes('量能 0.7x'),'stale snapshots must not show old factor values');
+  vm.runInContext(`tokenData[0].observed_at=new Date().toISOString();renderTokenList()`,context);
   vm.runInContext(`structureRows.get('0xreadable').b_crossed_at=1;structureRows.get('0xreadable').factors.relative_volume_30m.value=2;renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('等待结构确认 · 量能 2.0x'),'volume above reference must not be labeled as waiting for volume');
   vm.runInContext(`tokenData=testPreviousTokens;renderTokenList()`,context);
@@ -432,7 +437,7 @@ assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2
   assert.ok(!document.getElementById('detailPanel').innerHTML.includes('<img'),'untrusted symbol must be escaped in detail');
   assert.ok(!document.getElementById('transferBody').innerHTML.includes('<img'),'untrusted symbol must be escaped in transfers');
   await vm.runInContext(`(async()=>{
-    for(const pair of ['0xpair','0xmid'])whaleCache.set(pair,{expires:Date.now()+300000,promise:Promise.resolve({available:true,trades:[]})});
+    for(const pair of ['0xpair','0xmid'])whaleCache.set(pair,{expires:Date.now()+300000,promise:Promise.resolve({available:true,calculated_at:new Date().toISOString(),trades:[]})});
     transferCache.set('0xpair',{expires:Date.now()+300000,promise:Promise.resolve({available:true,sample_count:100,transfers:[]})});
     await Promise.all([loadWhales(selectedDetail),loadTransfers(selectedDetail)]);
   })()`,context);
@@ -441,6 +446,10 @@ assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('仅统计已覆盖池子的最近交易样本'));
   assert.ok(document.getElementById('transferBody').innerHTML.includes('activity-empty'));
   assert.ok(document.getElementById('transferBody').innerHTML.includes('最近 100 笔样本未见大额转账'));
+  await vm.runInContext(`(async()=>{for(const pair of ['0xpair','0xmid'])whaleCache.set(pair,{expires:Date.now()+300000,promise:Promise.resolve({available:true,calculated_at:new Date(Date.now()-16*60000).toISOString(),trades:[]})});await loadWhales(selectedDetail)})()`,context);
+  assert.ok(document.getElementById('whaleBody').innerHTML.includes('样本已过期，暂不判断大额买卖') && !document.getElementById('whaleBody').innerHTML.includes('近 1 小时无'),'stale whale samples cannot support a zero-activity claim');
+  assert.ok(document.getElementById('whaleFlowValue').textContent.startsWith('--'),'stale whale samples cannot show zero net flow');
+  assert.ok(document.getElementById('whaleTime').textContent.includes('16分钟前'),'whale header shows the oldest covered sample');
   let finishSecondPool;
   context.secondPool = new Promise(resolve=>{finishSecondPool=resolve;});
   vm.runInContext(`whaleCache.set('0xpair',{expires:Date.now()+60000,promise:Promise.resolve({available:true,trades:[]})}); whaleCache.set('0xmid',{expires:Date.now()+60000,promise:secondPool})`,context);

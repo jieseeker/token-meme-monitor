@@ -570,7 +570,8 @@ function renderTokenList() {
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
       const next=state.note==='等待量能确认'&&volume>1.5?'等待结构确认':state.note;
-      const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${next}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}${Date.now()-Date.parse(t.observed_at)>120000?' · 快照已过期':''}`;
+      const snapshotAge=Date.now()-Date.parse(t.observed_at);
+      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${next}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
       return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
@@ -764,8 +765,8 @@ async function loadWhales(token) {
     const coveredLiquidity=token.pools.reduce((sum,pool,i)=>sum+(results[i]?.available?Math.max(0,Number(pool.liquidity_usd)||0):0),0);
     const liquidityCoverage=totalLiquidity>0?coveredLiquidity/totalLiquidity:0;
     const coverage=totalLiquidity>0?`覆盖流动性 ${Math.round(coveredLiquidity/totalLiquidity*100)}%`:'覆盖流动性未知';
-    setSectionTime('whaleTime',latestTime(available),pending?'更新中…':'更新时间未知');
     if(!available.length){
+      setSectionTime('whaleTime',null,pending?'更新中…':'更新时间未知');
       whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:null});
       const flowValue=document.getElementById('whaleFlowValue');
       if(flowValue)flowValue.textContent='--';
@@ -774,6 +775,8 @@ async function loadWhales(token) {
         :'大额交易数据暂不可用，稍后自动重试'}</div>`;
       return;
     }
+    const sampleTimes=available.map(x=>Date.parse(x.calculated_at));
+    setSectionTime('whaleTime',sampleTimes.every(Number.isFinite)?new Date(Math.min(...sampleTimes)).toISOString():null);
     const old=available.some(x=>{const at=Date.parse(x.calculated_at);return !Number.isFinite(at)||Date.now()-at>300000;});
     const partial=pending||available.length<token.pools.length||old;
     const note=`池子 ${available.length}/${token.pools.length} · ${coverage} · ${poolUpdatedAt(available)}${old?' · 数据已过期':''}${available.some(x=>x.stale)?' · 部分池子刷新失败，沿用上次结果':''}${pending?` · 已查询 ${done}/${token.pools.length} 个池子，其余获取中`:available.length<token.pools.length?' · 部分池子暂不可用':''}${partial?' · 部分样本：仅代表已覆盖池子及所示时间':''} · `;
@@ -787,12 +790,16 @@ async function loadWhales(token) {
     const buys=recentTrades.filter(x=>x.side==='buy'),sells=recentTrades.filter(x=>x.side==='sell');
     const sum=rows=>rows.reduce((n,x)=>n+x.usd,0);
     const netUsd=sum(buys)-sum(sells);
-    const flowReady=!pending&&available.length>0&&(totalLiquidity===0?available.length===token.pools.length:liquidityCoverage>=.95);
+    const flowReady=!pending&&!old&&(totalLiquidity===0?available.length===token.pools.length:liquidityCoverage>=.95);
     whaleFlowCache.set(String(token.token_address||'').toLowerCase(),{netUsd:flowReady?netUsd:null,buyUsd:flowReady?sum(buys):null,sellUsd:flowReady?sum(sells):null,buyCount:flowReady?buys.length:null,sellCount:flowReady?sells.length:null,at:latestTime(available)});
     const flowValue=document.getElementById('whaleFlowValue');
     if(flowValue)flowValue.textContent=flowReady?whaleFlowText({netUsd,buyCount:buys.length,sellCount:sells.length}):`-- · ${available.length}/${token.pools.length}池`;
+    if(old){
+      body.innerHTML=`<div class="activity-empty">样本已过期，暂不判断大额买卖 · ${note}等待数据刷新</div>`;
+      return;
+    }
     if(!recentTrades.length){
-      body.innerHTML=`<div class="activity-empty">近 1 小时无单笔超过 $10K 的买卖 · ${note}仅统计已覆盖池子的最近交易样本</div>`;
+      body.innerHTML=`<div class="activity-empty">${partial?'已覆盖池子近 1 小时未见':'近 1 小时无'}单笔超过 $10K 的买卖 · ${note}仅统计已覆盖池子的最近交易样本</div>`;
       return;
     }
     body.innerHTML=`<div class="secondary-metrics"><span class="trade-buy">近1小时买入 <b>${buys.length} 笔 · ${fmtMoney(sum(buys))}</b></span><span class="trade-sell">近1小时卖出 <b>${sells.length} 笔 · ${fmtMoney(sum(sells))}</b></span></div>
@@ -1065,16 +1072,19 @@ function fmtDuration(seconds){
   return`${(seconds/3600).toFixed(1)}小时`;
 }
 function earlyHistoryHTML(result){
-  const rows=(result?.reports||[]).slice(0,1).map(item=>`<tr>
+  const item=result?.reports?.[0];
+  if(!item)return '<div class="hint">暂无历史回放报告。</div>';
+  const noProfit=[item.ladder_net_0_3pct,item.ladder_net_0_5pct].every(value=>value!=null&&Number.isFinite(Number(value))&&Number(value)<=0);
+  const row=`<tr>
     <td>${escapeAttr(new Date(item.replay_until).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</td>
     <td>${Number(item.volume_events||0)}</td>
-    <td>${escapeAttr(fmtSignedPct(item.volume_gt_5pct))}</td>
-    <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
     <td>${escapeAttr(fmtSignedPct(item.ladder_net_0_3pct))}</td>
     <td>${escapeAttr(fmtSignedPct(item.ladder_net_0_5pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.volume_gt_5pct))}</td>
+    <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
     <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
-  </tr>`).join('');
-  return rows?`<table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>4h&gt;5%</th><th>基线</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>A提前量</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">暂无历史回放报告。</div>';
+  </tr>`;
+  return `<div class="hint" style="margin-bottom:8px">${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table>`;
 }
 
 function marketStateHTML(state){
