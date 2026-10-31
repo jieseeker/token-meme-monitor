@@ -184,7 +184,11 @@ setImmediate(async () => {
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
 assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'confirmed executable candidates must sort above ordinary activity scores');
 assert.equal(vm.runInContext(`candidatePriority({price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',updated_at:Math.floor(Date.now()/1000)})`,context),0);
-assert.equal(vm.runInContext(`earlyWarningRows.set('0xready',{status:'strong_anomaly',is_active:true,observed_at:new Date().toISOString()});candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),3,'strong early warnings must increase discovery priority');
+  assert.equal(vm.runInContext(`signalV2Rows.set('0xready',{stage:'second_start'});earlyWarningRows.set('0xready',{status:'strong_anomaly',is_active:true,observed_at:new Date().toISOString()});candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'a launched token must not regain front-discovery priority from a fresh volume warning');
+  assert.equal(vm.runInContext(`signalV2Rows.set('0xlaunched',{stage:'first_start'});earlyWarningRows.set('0xlaunched',{status:'volume_anomaly',is_active:true,observed_at:new Date().toISOString()});liveEarlyWarning({token_address:'0xlaunched',observed_at:new Date().toISOString()})`,context),null,'launched B stage must leave the front-discovery count and accent');
+  assert.equal(vm.runInContext(`signalV2Rows.delete('0xlaunched');structureRows.set('0xlaunched',{stage:'first_start_extended'});liveEarlyWarning({token_address:'0xlaunched',observed_at:new Date().toISOString()})`,context),null,'structure must block launched tokens when V2 summary is absent');
+  const launchedDetail=vm.runInContext(`earlyWarningHTML({token_address:'0xlaunched'})`,context);
+  assert.ok(launchedDetail.includes('结构已启动，仅展示量能异动记录') && !launchedDetail.includes('前置量能异动'),'launched token detail should retain evidence without calling it a new prediction');
   const discoveryOrder=vm.runInContext(`(()=>{
     const fresh=new Date().toISOString(),old=new Date(Date.now()-180000).toISOString();
     const token=(address)=>({token_address:address,observed_at:fresh,price_usd:1,signal_risk_flags:'[]'});
@@ -288,8 +292,8 @@ assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);
   assert.ok(!list.includes('ZERO'));
   assert.ok(!list.includes('structure-line'), 'list rows should not duplicate structure details');
-  assert.ok(list.includes('前置量能异动'), 'the live early signal should lead the list copy');
-  assert.equal(document.getElementById('tokenCount').textContent, '前置异动 1 · 监控 2 · 自选 0');
+  assert.ok(!list.includes('前置量能异动'), 'a launched token should show its structure state in the list');
+  assert.equal(document.getElementById('tokenCount').textContent, '前置异动 0 · 监控 2 · 自选 0');
   assert.ok(detail.includes('☆ 自选'));
   vm.runInContext("toggleWatchlist('0xtoken')",context);
   assert.ok(JSON.parse(localStorage.getItem('tmm-watchlist-v1')).includes('0xtoken'),'watchlist must persist');

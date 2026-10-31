@@ -338,7 +338,10 @@ function fmtChange(v){return v==null||isNaN(v)?'--':`${v>0?'+':''}${v.toFixed(1)
 const scoreOf=p=>p.short_momentum_score??p.signal_score??0;
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
 function earlyWarningOf(token){return earlyWarningRows.get(String(token||'').toLowerCase())||null;}
+function launchedStage(stage){return /^(first_start|first_wave|pullback|base|second_start)/.test(stage||'');}
 function liveEarlyWarning(token){
+  const address=String(token?.token_address||'').toLowerCase();
+  if(launchedStage(signalV2Rows.get(address)?.stage||structureOf(address)?.stage))return null;
   const warning=earlyWarningOf(token?.token_address);
   const age=Date.now()-Date.parse(warning?.observed_at);
   const snapshotAge=Date.now()-Date.parse(token?.observed_at);
@@ -452,11 +455,13 @@ function earlyWarningHTML(token){
   const acceleration=item.volume_acceleration==null?NaN:Number(item.volume_acceleration), pressure=item.buy_pressure==null?NaN:Number(item.buy_pressure), change=item.return_5m_pct==null?NaN:Number(item.return_5m_pct);
   const confirmation=confirmationState(token);
   const v2=signalV2Rows.get(String(token?.token_address||'').toLowerCase());
+  const launched=launchedStage(v2?.stage||structureOf(token?.token_address)?.stage);
   const hasA=v2?.stage==='watch';
   const marketSuitable=marketRegime==='risk_on'||marketRegime==='neutral';
   const showConfirmation=hasA&&confirmation.ageSeconds!=null&&confirmation.ageSeconds<=300&&v2.risk_status==='PASS'&&marketSuitable;
   let status;
-  if(!hasA)status=v2?'当前不在 A 观察窗，仅展示前置异动':'尚无 A 形态，当前仅前置观察';
+  if(launched)status='结构已启动，仅展示量能异动记录';
+  else if(!hasA)status=v2?'当前不在 A 观察窗，仅展示前置异动':'尚无 A 形态，当前仅前置观察';
   else if(confirmation.ageSeconds==null)status='A 时间缺失，暂不评估强确认';
   else if(confirmation.ageSeconds>900)status='A 已过期，等待新的 A 触发';
   else if(confirmation.ageSeconds>300)status=`A 新鲜度下降 · ${fmtDuration(confirmation.ageSeconds)}（强确认需≤5分钟）`;
@@ -468,7 +473,7 @@ function earlyWarningHTML(token){
     return `<div class="early-warning-cost-item${excess?' over':''}"><span>${order===100?'$100':'$1K'} 买入滑点</span><b>${value==null?'--':value.toFixed(2)+'%'}</b><em>上限 ${limit.toFixed(2)}%${excess?` · 超限 ${(value-limit).toFixed(2)}%`:''}</em></div>`;
   }).join('');
   return `<div class="early-warning-strip${item.is_active?' active':''}">
-    <div class="early-warning-heading"><strong class="early-warning-label">${escapeAttr(earlyWarningLabel(item))}</strong><span class="early-warning-meta">证据 ${Number(item.evidence_count||0)} 条 · 更新 ${escapeAttr(timeAgo(item.observed_at))}</span></div>
+    <div class="early-warning-heading"><strong class="early-warning-label">${escapeAttr(launched?'量能异动（已启动）':earlyWarningLabel(item))}</strong><span class="early-warning-meta">证据 ${Number(item.evidence_count||0)} 条 · 更新 ${escapeAttr(timeAgo(item.observed_at))}</span></div>
     <div class="early-warning-facts"><strong>异动依据</strong><span>量能 <b>${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x':'--'}</b></span><span>买单占比 <b>${Number.isFinite(pressure)?(pressure*100).toFixed(0)+'%':'--'}</b></span><span>近5分钟涨跌 <b>${Number.isFinite(change)?fmtChange(change):'--'}</b></span></div>
     <div class="early-warning-judgment">当前判断：<b>${escapeAttr(status)}</b> · 预测观察，不是买入指令</div>
     ${showConfirmation?`<div class="early-warning-cost"><strong>执行成本 · A ${escapeAttr(fmtDuration(confirmation.ageSeconds))}</strong>${costRows}</div>`:''}
