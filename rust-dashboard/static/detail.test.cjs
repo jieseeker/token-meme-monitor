@@ -78,6 +78,7 @@ setImmediate(async () => {
   await vm.runInContext('refreshStructure()',context);
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.ok(document.getElementById('marketBanner').textContent.includes('风险偏好 · 允许继续确认'),'market gate is visible on the first screen');
+  assert.ok(document.getElementById('marketBanner').textContent.includes('61.5%上涨 · 中位 +0.4%'),'market banner explains the regime using live breadth and median');
   vm.runInContext(`marketRegime='risk_off';renderMarketBanner()`,context);
   assert.ok(document.getElementById('marketBanner').textContent.includes('风险规避 · 暂停强确认买点'),'risk-off must explain why confirmation is paused');
   vm.runInContext(`marketRegime='risk_on';renderMarketBanner()`,context);
@@ -121,6 +122,7 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('风险偏好'),'history panel must label risk-on state in Chinese');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时影子记录 2 · 强确认 1') && document.getElementById('earlyHistoryBody').innerHTML.includes('历史量能事件 3772'),'history must separate live strong samples from replay events');
   const losingReplay=vm.runInContext(`earlyHistoryHTML({reports:[{replay_until:'2026-10-31T00:00:00Z',volume_events:4905,volume_gt_5pct:12.38,baseline_gt_5pct:7.07,ladder_net_0_3pct:-.06,ladder_net_0_5pct:-.26}]})`,context);
   assert.ok(losingReplay.includes('扣成本后未见正收益') && losingReplay.indexOf('净收益·0.3%')<losingReplay.indexOf('4h&gt;5%'),'negative net results lead the replay instead of the hit rate');
   await vm.runInContext('toggleEarlyHistory(false)',context);
@@ -240,6 +242,8 @@ assert.ok(vm.runInContext(`marketStateHTML({state:'neutral'})`,context).includes
 vm.runInContext(`marketRegime='risk_on'`,context);
 const quietWarning=vm.runInContext(`earlyWarningRows.set('0xquiet',{status:'quiet',is_active:false,observed_at:new Date().toISOString(),evidence_count:0});earlyWarningHTML({token_address:'0xquiet'})`,context);
 assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量能倍数') && !quietWarning.includes('$100 买入滑点') && !quietWarning.includes('同类历史'),'quiet warning should be one concise line');
+const quietHighVolume=vm.runInContext(`structureRows.set('0xquiet',{factors:{relative_volume_30m:{value:47}}});earlyWarningRows.get('0xquiet').volume_to_liquidity=.0038;earlyWarningHTML({token_address:'0xquiet'})`,context);
+assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1.00%'),'quiet high-volume token must show the liquidity-relative threshold gap');
   await new Promise(setImmediate);
   const detail = document.getElementById('detailPanel').innerHTML;
   assert.ok(!detail.includes('class="novice-card"'),'the novice summary should not remain a separate card');
@@ -361,7 +365,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
     depthCache.set('0xmid',{expires:Date.now()+60000,promise:Promise.resolve({available:true,calculated_at:new Date(Date.now()-8*60000).toISOString(),bands_pct:[1,2,5],support_usd:[50,100,250],pressure_usd:[60,120,300]})})`,context);
   await vm.runInContext('loadDepth(selectedDetail)',context);
   assert.ok(document.getElementById('depthBody').innerHTML.includes('近5分钟覆盖流动性 67%'), 'fresh main pool must be distinguishable from an old smaller pool');
-  assert.ok(document.getElementById('depthBody').innerHTML.includes('合计含旧数据'), 'old pool depth must not look fully fresh');
+  assert.ok(document.getElementById('depthBody').innerHTML.includes('等待池子报价刷新') && !document.getElementById('depthBody').innerHTML.includes('depth-grid'), 'insufficient fresh coverage must hide stale dollar quotes');
   vm.runInContext('depthCache.clear(); savedDepthCache.forEach((value,key)=>depthCache.set(key,value))',context);
   await vm.runInContext('loadDepth(selectedDetail)',context);
   const oi=document.getElementById('oiBody').innerHTML;
@@ -484,7 +488,7 @@ assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2
     await loadTransfers(selectedDetail);
   })()`,context);
   assert.ok(document.getElementById('depthBody').innerHTML.includes('池子 1/2'));
-  assert.ok(document.getElementById('depthBody').innerHTML.includes('沿用上次结果'));
+  assert.ok(document.getElementById('depthBody').innerHTML.includes('等待池子报价刷新') && document.getElementById('depthBody').innerHTML.includes('近5分钟覆盖流动性 0%'),'stale-only depth must show no quote');
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('池子 1/2'));
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('沿用上次结果'));
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('覆盖流动性 67%'));

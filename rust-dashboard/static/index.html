@@ -254,12 +254,14 @@ let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KE
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
 let marketRegime = null;
+let marketSnapshot = null;
 const marketRegimeLabels={risk_on:'风险偏好',neutral:'中性',risk_off:'风险规避'};
 function marketRegimeLabel(value){return marketRegimeLabels[value]||'未知';}
 function renderMarketBanner(){
   const banner=document.getElementById('marketBanner');
   banner.classList.toggle('blocked',marketRegime==='risk_off');
-  banner.textContent=`市场环境：${marketRegimeLabel(marketRegime)} · ${marketRegime==='risk_off'?'暂停强确认买点':marketRegime==='risk_on'||marketRegime==='neutral'?'允许继续确认':'状态未知，暂不确认买点'}`;
+  const basis=marketSnapshot?.up_ratio!=null&&marketSnapshot?.median_change_h1_pct!=null?` · ${(marketSnapshot.up_ratio*100).toFixed(1)}%上涨 · 中位 ${fmtChange(marketSnapshot.median_change_h1_pct)}`:'';
+  banner.textContent=`市场环境：${marketRegimeLabel(marketRegime)} · ${marketRegime==='risk_off'?'暂停强确认买点':marketRegime==='risk_on'||marketRegime==='neutral'?'允许继续确认':'状态未知，暂不确认买点'}${basis}`;
 }
 let structureRows = new Map();
 let earlyWarningRows = new Map();
@@ -355,11 +357,11 @@ function structureState(structure, price=null){
   if(stage==='watch'&&structure.b_crossed_at!=null&&structure.b_at==null){
     const line=Number(structure.b_breakout_line);
     if(Number.isFinite(price)&&line>0&&price>line*1.08)return {label:'B 超出确认窗',note:'等待回踩后重新突破'};
-    return {label:'B 候选',note:'等待量能确认'};
+    return {label:'B 候选',note:'等待结构确认'};
   }
   if(stage==='watch')return {label:'A 观察',note:'等待突破候选'};
   if(structure.b_at!=null)return {label:'B 已启动',note:'等待回调或二次启动'};
-  if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待量能确认'};
+  if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待结构确认'};
   return {label:structure.stage_label||'未知',note:'结构观察'};
 }
 function structureGuidance(structure, price=null){
@@ -441,7 +443,12 @@ function earlyWarningLabel(state){return earlyWarningLabels[state?.status]||'前
 function earlyWarningHTML(token){
   const item=earlyWarningOf(token?.token_address);
   if(!item)return '<div class="hint">前置预测数据加载中...</div>';
-  if(!item.is_active)return `<div class="quiet-warning">${escapeAttr(earlyWarningLabel(item))} · 更新 ${escapeAttr(timeAgo(item.observed_at))} · 暂无活跃前置异动</div>`;
+  if(!item.is_active){
+    const relative=Number(structureOf(token?.token_address)?.factors?.relative_volume_30m?.value);
+    const efficiency=item.volume_to_liquidity==null?NaN:Number(item.volume_to_liquidity);
+    const reason=relative>1.5&&Number.isFinite(efficiency)&&efficiency<.01?` · 近5分钟成交/流动性 ${(efficiency*100).toFixed(2)}%，需≥1.00%`:'';
+    return `<div class="quiet-warning">${escapeAttr(earlyWarningLabel(item))} · 更新 ${escapeAttr(timeAgo(item.observed_at))} · 暂无活跃前置异动${reason}</div>`;
+  }
   const acceleration=item.volume_acceleration==null?NaN:Number(item.volume_acceleration), pressure=item.buy_pressure==null?NaN:Number(item.buy_pressure), change=item.return_5m_pct==null?NaN:Number(item.return_5m_pct);
   const confirmation=confirmationState(token);
   const v2=signalV2Rows.get(String(token?.token_address||'').toLowerCase());
@@ -569,9 +576,8 @@ function renderTokenList() {
       const warning=liveEarlyWarning(t);
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
-      const next=state.note==='等待量能确认'&&volume>1.5?'等待结构确认':state.note;
       const snapshotAge=Date.now()-Date.parse(t.observed_at);
-      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${next}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
+      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
       return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
@@ -855,14 +861,15 @@ async function loadDepth(token) {
   const recent=available.filter(({depth})=>{const age=Date.now()-Date.parse(depth.calculated_at);return !depth.stale&&Number.isFinite(age)&&age>=0&&age<=300000;});
   const recentLiquidity=recent.reduce((sum,{pool})=>sum+Math.max(0,Number(pool.liquidity_usd)||0),0);
   const freshCoverage=totalLiquidity>0?`近5分钟覆盖流动性 ${Math.round(recentLiquidity/totalLiquidity*100)}%`:'近5分钟覆盖流动性未知';
+  if(!totalLiquidity||recentLiquidity/totalLiquidity<.95){body.innerHTML=`<div class="hint">等待池子报价刷新 · ${freshCoverage}（需至少 95%） · 池子 ${available.length}/${pools.length}${pending?' · 其余获取中':''}</div>`;return;}
   const bands=[1,5], price=token.price_usd;
   const sumDepth=(field,target)=>{
-    const values=available.map(({pool,depth})=>poolDepthAtTarget(pool,depth,target,field));
+    const values=recent.map(({pool,depth})=>poolDepthAtTarget(pool,depth,target,field));
     return values.some(v=>v==null)?null:values.reduce((n,v)=>n+v,0);
   };
   const rows=(start,end)=>bands.slice(start,end).map(pct=>{const down=price*(1-pct/100),up=price*(1+pct/100);return `<div>${pct}%</div><div><strong>${fmtMoney(sumDepth('support_usd',down))}</strong><small>目标价 ${fmtPrice(down)}</small></div><div><strong>${fmtMoney(sumDepth('pressure_usd',up))}</strong><small>目标价 ${fmtPrice(up)}</small></div>`;}).join('');
   body.innerHTML=`<div class="depth-scroll"><div class="depth-grid"><div>目标涨跌幅</div><div>跌至该幅度需卖出</div><div>涨至该幅度需买入</div>${rows(0,2)}</div></div>
-    <div class="hint" style="margin-top:8px">池子 ${available.length}/${pools.length} · 纳入流动性约 ${totalLiquidity?Math.floor(includedLiquidity/totalLiquidity*100):0}% · ${freshCoverage} · ${poolUpdatedAt(available.map(x=>x.depth))}${recent.length<available.length?' · 合计含旧数据':''} · ${available.some(x=>x.depth.stale)?'部分池子刷新失败，沿用上次结果 · ':''}各池按同一目标价插值估算后合计；跌 5% 的金额已包含跌 1% 的金额。仅反映当前池内报价，不含跨池最优路由或套利${pending?'；其余获取中':available.length<pools.length?'；部分池子不可用，合计不完整':''}；-- 表示报价不足或待刷新</div>`;
+    <div class="hint" style="margin-top:8px">池子 ${recent.length}/${pools.length} · 纳入流动性约 ${totalLiquidity?Math.floor(includedLiquidity/totalLiquidity*100):0}% · ${freshCoverage} · ${poolUpdatedAt(recent.map(x=>x.depth))}${recent.length<available.length?' · 旧报价已排除':''} · 各池按同一目标价插值估算后合计；跌 5% 的金额已包含跌 1% 的金额。仅反映近5分钟池内报价，不含跨池最优路由或套利${pending?'；其余获取中':recent.length<pools.length?'；部分池子不可用，合计不完整':''}；-- 表示报价不足或待刷新</div>`;
   };
   if(!pools.length){show();return;}
   await Promise.all(pools.map(async (pool,i)=>{
@@ -1071,7 +1078,7 @@ function fmtDuration(seconds){
   if(seconds<3600)return`${Math.round(seconds/60)}分钟`;
   return`${(seconds/3600).toFixed(1)}小时`;
 }
-function earlyHistoryHTML(result){
+function earlyHistoryHTML(result,shadow){
   const item=result?.reports?.[0];
   if(!item)return '<div class="hint">暂无历史回放报告。</div>';
   const noProfit=[item.ladder_net_0_3pct,item.ladder_net_0_5pct].every(value=>value!=null&&Number.isFinite(Number(value))&&Number(value)<=0);
@@ -1084,7 +1091,7 @@ function earlyHistoryHTML(result){
     <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
     <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
   </tr>`;
-  return `<div class="hint" style="margin-bottom:8px">${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><table class="history-table"><thead><tr><th>回放截止</th><th>事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table>`;
+  return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`实时影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table>`;
 }
 
 function marketStateHTML(state){
@@ -1104,11 +1111,12 @@ async function toggleEarlyHistory(force){
   if(!open)return;
   const body=document.getElementById('earlyHistoryBody');
   try{
-    const [result,market]=await Promise.all([
+    const [result,market,shadow]=await Promise.all([
       fetchJSON('/api/early-warning/history?limit=1'),
-      fetchJSON('/api/market-state').catch(()=>null)
+      fetchJSON('/api/market-state').catch(()=>null),
+      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null)
     ]);
-    body.innerHTML=marketStateHTML(market)+earlyHistoryHTML(result);
+    body.innerHTML=marketStateHTML(market)+earlyHistoryHTML(result,shadow);
   }catch(e){
     body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
   }
@@ -1122,6 +1130,7 @@ async function refresh(){
       fetchJSON('/api/market-state').catch(()=>null)
     ]);
     marketRegime=market?.state||null;
+    marketSnapshot=market;
     renderMarketBanner();
     signalV2Rows = new Map((signalV2.summaries||[]).map(state=>[String(state.token_address||'').toLowerCase(),state]));
     showOverview(rows);
