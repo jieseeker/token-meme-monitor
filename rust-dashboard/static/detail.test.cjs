@@ -170,6 +170,8 @@ setImmediate(async () => {
   assert.ok(readableStructure.includes('量能尚未达到偏强参考'),'the structure verdict explains the leading shortfall before the factor rows');
   vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xreadable',token_symbol:'WAIT',observed_at:new Date().toISOString(),indicator_score:1}];renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('量能 0.7x'),'ordinary list rows show an actionable difference');
+  vm.runInContext(`structureRows.get('0xreadable').b_crossed_at=1;structureRows.get('0xreadable').factors.relative_volume_30m.value=2;renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('等待结构确认 · 量能 2.0x'),'volume above reference must not be labeled as waiting for volume');
   vm.runInContext(`tokenData=testPreviousTokens;renderTokenList()`,context);
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
@@ -364,7 +366,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   assert.ok(!oi.includes('<details'), 'OI breakdown must be visible without expanding');
   assert.ok(oi.includes('小时采样'), 'OI timestamp must be labeled as an hourly sample');
   assert.ok(!oi.includes('与前一小时整点样本比较'));
-  vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:true,symbol:'TESTUSDT',calculated_at:new Date().toISOString(),oi_usd:12000,change_1h_pct:.01,change_24h_pct:3,history:[{oi_usd:12000},{oi_usd:12001}]})})`,context);
+  vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:true,symbol:'TESTUSDT',calculated_at:new Date().toISOString(),oi_usd:12000,change_1h_pct:.1,change_24h_pct:3,history:[{oi_usd:12000},{oi_usd:12001}]})})`,context);
   await vm.runInContext(`loadOI('0xpair',.6)`,context);
   assert.ok(document.getElementById('oiBody').innerHTML.includes('方向未定') && !document.getElementById('oiBody').innerHTML.includes('Binance OI 美元价值 · 近 24 小时'),'rounded-zero OI should not claim a directional signal or occupy a full chart');
   vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:false,reason:'无同名合约'})})`,context);

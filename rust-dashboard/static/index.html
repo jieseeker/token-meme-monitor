@@ -569,7 +569,8 @@ function renderTokenList() {
       const warning=liveEarlyWarning(t);
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
-      const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}${Date.now()-Date.parse(t.observed_at)>120000?' · 快照已过期':''}`;
+      const next=state.note==='等待量能确认'&&volume>1.5?'等待结构确认':state.note;
+      const listState=warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${next}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}${Date.now()-Date.parse(t.observed_at)>120000?' · 快照已过期':''}`;
       return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
@@ -892,7 +893,7 @@ async function loadOI(pair, priceChangeH1) {
     return;
   }
   const delta=oi.change_1h_pct;
-  const state=delta==null||Math.abs(delta)<.05||!priceChangeH1?'方向未定':
+  const state=delta==null||Math.abs(delta)<.5||!priceChangeH1?'方向未定':
     priceChangeH1>0?(delta>0?'价涨 / OI 增':'价涨 / OI 减'):
     (delta>0?'价跌 / OI 增':'价跌 / OI 减');
   body.innerHTML=`<div class="oi-main">
@@ -901,7 +902,7 @@ async function loadOI(pair, priceChangeH1) {
     </div>
     ${globalHtml||oi.long_short?.ratio!=null?`<div class="oi-meta">${globalHtml}${oi.long_short?.ratio!=null?`<div><span>大户多空比</span><b>${oi.long_short.ratio.toFixed(2)}</b></div>`:''}</div>`:''}
     <div class="secondary-metrics oi-breakdown"><span>Binance OI <b>${fmtMoney(oi.oi_usd)}</b></span><span>24h 数量变化 <b>${fmtOiPct(oi.change_24h_pct)}</b></span></div>
-    ${delta!=null&&Math.abs(delta)<.05?'':`<div class="chart-card"><h4>Binance OI 美元价值 · 近 24 小时</h4>${makeChart(oi.history.map(x=>({v:x.oi_usd})),'#b45309')}</div>`}
+    ${delta!=null&&Math.abs(delta)<.5?'':`<div class="chart-card"><h4>Binance OI 美元价值 · 近 24 小时</h4>${makeChart(oi.history.map(x=>({v:x.oi_usd})),'#b45309')}</div>`}
     <div class="hint oi-footnote">${oi.stale?'刷新失败，沿用上次结果 · ':''}${escapeAttr(oi.symbol||'未知合约')} · 小时采样 ${oi.timestamp&&Number.isFinite(new Date(oi.timestamp).getTime())?new Date(oi.timestamp).toLocaleString('zh-CN'):'时间未知'} · ${Number.isFinite(Date.parse(oi.calculated_at))?'抓取于 '+new Date(oi.calculated_at).toLocaleString('zh-CN'):'抓取时间未知'}。按同名合约匹配；跨平台 OI 仅含已收录且近期成交的永续合约，OI 增减不能单独判断方向。</div>`;
 }
 
