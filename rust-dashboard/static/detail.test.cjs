@@ -77,6 +77,10 @@ setImmediate(async () => {
   vm.runInContext(`watchlist.add('0xtoken')`,context);
   await vm.runInContext('refreshStructure()',context);
   await vm.runInContext('refreshEarlyWarning()',context);
+  assert.ok(document.getElementById('marketBanner').textContent.includes('风险偏好 · 允许继续确认'),'market gate is visible on the first screen');
+  vm.runInContext(`marketRegime='risk_off';renderMarketBanner()`,context);
+  assert.ok(document.getElementById('marketBanner').textContent.includes('风险规避 · 暂停强确认买点'),'risk-off must explain why confirmation is paused');
+  vm.runInContext(`marketRegime='risk_on';renderMarketBanner()`,context);
   assert.equal(TestNotification.instances.length,1,'watchlisted active early warnings should notify once');
   assert.ok(TestNotification.instances[0].title.includes('TEST'),'notification should identify the token');
   assert.ok(TestNotification.instances[0].title.includes('A + PASS + 量能确认'),'notification should identify strong confirmation');
@@ -95,7 +99,7 @@ setImmediate(async () => {
   assert.ok(html.includes('.token-btn.signal-active { border-left:3px solid var(--blocked); }') && html.includes('.early-warning-cost-item.over b,.early-warning-cost-item.over em { color:var(--blocked); }'),'list marker matches the blocked cost text color');
   assert.equal(document.getElementById('listHint').hidden,true,'zero-signal hint stays hidden while fresh evidence exists');
   vm.runInContext(`structureRows.set('0xother',{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1});renderTokenList()`,context);
-  assert.ok(document.getElementById('tokenList').innerHTML.includes('候选 · 快照') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'list copy drops A/B/C stage letters');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('等待量能确认') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'list names the next observation without stage letters');
   vm.runInContext(`earlyWarningRows.get('0xtoken').observed_at=new Date(Date.now()-180000).toISOString();renderTokenList()`,context);
   assert.equal(document.getElementById('listHint').hidden,false,'zero fresh warnings show a clear list hint');
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('signal-active'),'expired warning loses its accent');
@@ -150,7 +154,7 @@ setImmediate(async () => {
     [{token_symbol:'RISK',token_address:'0xrisk',price_usd:1.1,liquidity_usd:1000,signal_risk_flags:'["liquidity_withdrawal"]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000),risk_status:'PASS'},'risk_block','不碰'],
     [{token_symbol:'STALE',token_address:'0xstale',price_usd:.99,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date(Date.now()-180000).toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'data_stale','数据过期'],
     [{token_symbol:'FAR',token_address:'0xfar',price_usd:1.42,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'too_far','已涨远'],
-    [{token_symbol:'NEAR',token_address:'0xnear',price_usd:.98,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'near_buy','接近买点'],
+    [{token_symbol:'NEAR',token_address:'0xnear',price_usd:.98,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'near_line','接近观察线'],
     [{token_symbol:'BREADY',token_address:'0xbready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'["fdv_liquidity_stretched"]',observed_at:new Date().toISOString()},{available:true,stage:'first_start',risk_status:'WARN',data_status:'current',b_crossed_at:1,b_at:2,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'b_observe','B 结构观察'],
     [{token_symbol:'CREADY',token_address:'0xcready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_crossed_at:1,b_at:2,c_at:3,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'second_ready','可执行候选'],
     [{token_symbol:'UNKNOWN',token_address:'0xunknown',price_usd:1,liquidity_usd:1000,signal_risk_flags:'broken',observed_at:new Date().toISOString()},null,'unknown','信息不足']
@@ -160,9 +164,13 @@ setImmediate(async () => {
     assert.equal(result.key,key);assert.equal(result.label,label);
   }
   const noLine=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,updated_at:Math.floor(Date.now()/1000),factors:{},timeline:[]});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xwait',price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()})`,context);
-  assert.ok(noLine.includes('下一步观察') && noLine.includes('暂无数据') && !noLine.includes('factor-bar') && !noLine.includes('<details'),'missing structure evidence stays readable without progress bars');
+  assert.ok(noLine.includes('等待突破候选') && noLine.includes('暂无数据') && !noLine.includes('factor-bar') && !noLine.includes('<details'),'missing structure evidence stays readable without progress bars');
   const readableStructure=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,conclusion:'结构观察：因子尚未形成一致方向',factors:{breakout_30m:{value:-.008,display:'-0.8%'},relative_volume_30m:{value:.7,display:'0.70x'},buy_pressure_5m:{value:.548,display:'54.8%'},momentum_5m:{value:0,display:'0.0%'},momentum_15m:{value:-.01,display:'-1.0%'},liquidity_stability_30m:{value:.99,display:'0.99'}}});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xreadable',price_usd:1,observed_at:new Date().toISOString()})`,context);
   assert.ok(readableStructure.includes('等待突破候选') && readableStructure.includes('距近30分钟高点') && readableStructure.includes('-0.8%') && readableStructure.includes('0.70x') && readableStructure.includes('54.8%') && readableStructure.includes('5分钟 0.0% · 15分钟 -1.0%'),'structure tells the reader what happened and what is next');
+  assert.ok(readableStructure.includes('量能尚未达到偏强参考'),'the structure verdict explains the leading shortfall before the factor rows');
+  vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xreadable',token_symbol:'WAIT',observed_at:new Date().toISOString(),indicator_score:1}];renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('量能 0.7x'),'ordinary list rows show an actionable difference');
+  vm.runInContext(`tokenData=testPreviousTokens;renderTokenList()`,context);
   assert.equal(vm.runInContext(`noviceRisk({signal_risk_flags:'broken'},null).label`,context),'未知','unknown risk must remain unknown');
   assert.equal(vm.runInContext(`noviceState({price_usd:1,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'inactive',data_status:'warming_up',updated_at:Math.floor(Date.now()/1000)}).key`,context),'data_warmup','warmup must not be shown as waiting for a buy point');
 assert.equal(vm.runInContext(`candidatePriority({token_address:'0xready',price_usd:1.02,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date().toISOString()},{available:true,stage:'second_start',risk_status:'PASS',data_status:'current',b_at:1,b_breakout_line:.8,c_breakout_line:1,updated_at:Math.floor(Date.now()/1000)})`,context),.5,'confirmed executable candidates must sort above ordinary activity scores');
@@ -241,7 +249,7 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   assert.ok(detail.indexOf('5m 涨跌') < detail.indexOf('1h 涨跌'), '5m and 1h changes should sit beside price');
   assert.ok(detail.indexOf('5m 成交额') < detail.indexOf('1h 成交额'), 'volume metrics should be flat siblings');
   assert.ok(detail.includes('class="trade-summary"'), 'the first card should lead with a trading summary');
-  assert.ok(detail.includes('建议：'), 'the summary should state the current action');
+  assert.ok(detail.includes('观察：'), 'the summary should state the next observation');
   assert.ok(detail.includes('触发：') && detail.includes('失效：'), 'the summary should expose structure trigger and invalidation');
   assert.ok(detail.includes('1h 换手：'), 'the summary should expose turnover');
   assert.ok(!detail.includes('活跃度分'), 'detail should not repeat the list activity score');
@@ -319,11 +327,11 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   const depth = document.getElementById('depthBody').innerHTML;
   assert.ok(document.getElementById('depthTime').textContent.startsWith('更新于 '), 'depth must use the shared header update-time copy');
   assert.ok(depth.includes('目标涨跌幅') && depth.includes('跌至该幅度需卖出') && depth.includes('涨至该幅度需买入'));
-  assert.ok(!depth.includes('<details'),'all depth bands are directly visible');
-  assert.ok(depth.includes('<div>10%</div>') && depth.includes('<div>15%</div>') && depth.includes('<div>20%</div>'));
+  assert.ok(!depth.includes('<details'),'the relevant depth bands are directly visible');
+  assert.ok(depth.includes('<div>1%</div>') && depth.includes('<div>5%</div>') && !depth.includes('<div>10%</div>'));
   assert.ok(depth.includes('跌 5% 的金额已包含跌 1% 的金额'));
-  assert.ok(depth.includes('<strong>$150</strong>') && depth.includes('<strong>$300</strong>') && depth.includes('<strong>$750</strong>'));
-  assert.ok(depth.includes('<strong>$180</strong>') && depth.includes('<strong>$360</strong>') && depth.includes('<strong>$900</strong>'));
+  assert.ok(depth.includes('<strong>$150</strong>') && depth.includes('<strong>$750</strong>'));
+  assert.ok(depth.includes('<strong>$180</strong>') && depth.includes('<strong>$900</strong>'));
   assert.ok(depth.includes('depth-scroll'), 'depth bands remain readable on narrow screens');
   assert.ok(depth.includes('池子 2/2') && depth.includes('更新于 '));
   const beforeEmptyPool=calls.length;
@@ -356,6 +364,9 @@ assert.ok(quietWarning.includes('前置静默') && !quietWarning.includes('量�
   assert.ok(!oi.includes('<details'), 'OI breakdown must be visible without expanding');
   assert.ok(oi.includes('小时采样'), 'OI timestamp must be labeled as an hourly sample');
   assert.ok(!oi.includes('与前一小时整点样本比较'));
+  vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:true,symbol:'TESTUSDT',calculated_at:new Date().toISOString(),oi_usd:12000,change_1h_pct:.01,change_24h_pct:3,history:[{oi_usd:12000},{oi_usd:12001}]})})`,context);
+  await vm.runInContext(`loadOI('0xpair',.6)`,context);
+  assert.ok(document.getElementById('oiBody').innerHTML.includes('方向未定') && !document.getElementById('oiBody').innerHTML.includes('Binance OI 美元价值 · 近 24 小时'),'rounded-zero OI should not claim a directional signal or occupy a full chart');
   vm.runInContext(`oiCache.set('0xpair',{at:Date.now(),promise:Promise.resolve({available:false,reason:'无同名合约'})})`,context);
   await vm.runInContext(`loadOI('0xpair',-3,false)`,context);
   assert.equal(document.getElementById('oiSection').className,'detail-section oi-empty');
@@ -425,9 +436,9 @@ assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2
   })()`,context);
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('activity-empty'));
   assert.ok(document.getElementById('whaleBody').innerHTML.includes('池子 2/2'));
-  assert.ok(document.getElementById('whaleBody').innerHTML.includes('交易样本与统计口径'));
+  assert.ok(document.getElementById('whaleBody').innerHTML.includes('仅统计已覆盖池子的最近交易样本'));
   assert.ok(document.getElementById('transferBody').innerHTML.includes('activity-empty'));
-  assert.ok(document.getElementById('transferBody').innerHTML.includes('转账样本与统计口径'));
+  assert.ok(document.getElementById('transferBody').innerHTML.includes('最近 100 笔样本未见大额转账'));
   let finishSecondPool;
   context.secondPool = new Promise(resolve=>{finishSecondPool=resolve;});
   vm.runInContext(`whaleCache.set('0xpair',{expires:Date.now()+60000,promise:Promise.resolve({available:true,trades:[]})}); whaleCache.set('0xmid',{expires:Date.now()+60000,promise:secondPool})`,context);
