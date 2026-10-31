@@ -171,7 +171,7 @@ setImmediate(async () => {
   assert.ok(noLine.includes('等待突破候选') && noLine.includes('暂无数据') && !noLine.includes('factor-bar') && !noLine.includes('<details'),'missing structure evidence stays readable without progress bars');
   const readableStructure=vm.runInContext(`(token=>{structureRows.set(token.token_address,{available:true,stage:'watch',b_crossed_at:null,b_at:null,conclusion:'结构观察：因子尚未形成一致方向',factors:{breakout_30m:{value:-.008,display:'-0.8%'},relative_volume_30m:{value:.7,display:'0.70x'},buy_pressure_5m:{value:.548,display:'54.8%'},momentum_5m:{value:0,display:'0.0%'},momentum_15m:{value:-.01,display:'-1.0%'},liquidity_stability_30m:{value:.99,display:'0.99'}}});return structureCardHTML(token)})({token_symbol:'WAIT',token_address:'0xreadable',price_usd:1,observed_at:new Date().toISOString()})`,context);
   assert.ok(readableStructure.includes('等待突破候选') && readableStructure.includes('距近30分钟高点') && readableStructure.includes('-0.8%') && readableStructure.includes('0.70x') && readableStructure.includes('54.8%') && readableStructure.includes('5分钟 0.0% · 15分钟 -1.0%'),'structure tells the reader what happened and what is next');
-  assert.ok(readableStructure.includes('量能尚未达到偏强参考'),'the structure verdict explains the leading shortfall before the factor rows');
+  assert.ok(readableStructure.includes('当前量能尚未达到偏强参考') && readableStructure.includes('当前相对成交量'),'structure must distinguish current volume from the earlier anomaly sample');
   vm.runInContext(`testPreviousTokens=tokenData;tokenData=[{token_address:'0xreadable',token_symbol:'WAIT',observed_at:new Date().toISOString(),indicator_score:1}];renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('量能 0.7x'),'ordinary list rows show an actionable difference');
   vm.runInContext(`tokenData[0].observed_at=new Date(Date.now()-180000).toISOString();renderTokenList()`,context);
@@ -224,7 +224,7 @@ assert.ok(aWarning.includes('执行成本 · A 4分钟'),'fresh A age stays visi
 assert.ok(aWarning.indexOf('class="early-warning-facts"')<aWarning.indexOf('class="early-warning-judgment"') && aWarning.indexOf('class="early-warning-judgment"')<aWarning.indexOf('class="early-warning-cost"'),'warning content follows the reader’s decision path');
 assert.ok(!aWarning.includes('强确认条件') && !aWarning.includes('5/6'),'redundant confirmation checklist is absent');
 const evidenceWarning=vm.runInContext(`earlyWarningHTML({token_address:'0xtoken'})`,context);
-assert.ok(evidenceWarning.includes('量能 <b>2.4x</b>') && evidenceWarning.includes('买单占比 <b>67%</b>') && evidenceWarning.includes('近5分钟涨跌 <b>+1.2%</b>'),'warning evidence is readable in one line');
+assert.ok(evidenceWarning.includes('异动时依据') && evidenceWarning.includes('量能加速 <b>2.4x</b>') && evidenceWarning.includes('买单占比 <b>67%</b>') && evidenceWarning.includes('近5分钟涨跌 <b>+1.2%</b>'),'warning evidence is labeled as the anomaly sample rather than the current structure sample');
 const staleWarning=vm.runInContext(`signalV2Rows.get('0xconfirm').first_seen_at=Math.floor(Date.now()/1000)-Math.floor(157.7*3600);earlyWarningHTML({token_address:'0xconfirm'})`,context);
 assert.ok(staleWarning.includes('A 已过期，等待新的 A 触发') && !staleWarning.includes('157.7小时'),'old A is identified as expired without presenting its age as a near miss');
 assert.ok(!staleWarning.includes('执行成本') && !staleWarning.includes('强确认条件') && !staleWarning.includes('同类历史') && !staleWarning.includes('成交额/流动性'),'expired A keeps the early anomaly card focused on discovery');
