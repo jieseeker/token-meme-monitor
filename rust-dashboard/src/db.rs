@@ -6,11 +6,11 @@ use serde_json::{json, Value};
 
 fn connect(path: &str) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(20))?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
-         PRAGMA foreign_keys = ON;
-         PRAGMA busy_timeout = 5000;",
+         PRAGMA foreign_keys = ON;",
     )?;
     Ok(conn)
 }
@@ -764,6 +764,32 @@ pub fn status(path: &str) -> Result<Value, rusqlite::Error> {
 
 #[cfg(test)]
 mod pool_tests {
+    #[test]
+    fn detail_cache_waits_past_default_busy_timeout() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-cache-lock-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let path = path.to_str().unwrap();
+        super::init_schema(path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let saved_path = path.to_string();
+        let writer = std::thread::spawn(move || {
+            super::save_detail_cache(
+                &saved_path,
+                "depth",
+                "pool",
+                &serde_json::json!({"available":true}),
+            )
+        });
+        std::thread::sleep(std::time::Duration::from_millis(5_500));
+        conn.execute_batch("COMMIT").unwrap();
+        writer.join().unwrap().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn structure_snapshot_lookup_uses_token_index() {
         let path = std::env::temp_dir().join(format!(

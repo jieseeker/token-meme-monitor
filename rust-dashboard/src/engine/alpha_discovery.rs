@@ -26,7 +26,7 @@ pub fn record_snapshots(
     at: DateTime<Utc>,
 ) -> Result<usize> {
     let conn = Connection::open(path)?;
-    conn.execute_batch("PRAGMA busy_timeout=5000")?;
+    conn.busy_timeout(std::time::Duration::from_secs(20))?;
     let bucket = bucket_start(at).to_rfc3339();
     let mut statement = conn.prepare(
         "INSERT INTO alpha_universe_snapshots
