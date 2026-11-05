@@ -115,6 +115,8 @@ setImmediate(async () => {
   assert.ok(recordHTML.includes('1.30%')&&recordHTML.includes('1.40x'),'frozen discovery features are shown');
   assert.ok(recordHTML.includes('+10.0%')&&recordHTML.includes('-5.0%'),'same-pool tracking and drawdown are shown');
   assert.ok(!recordHTML.includes('<details>'),'observation history is flat, without expansion controls');
+  vm.runInContext(`prelaunchReportAt=new Date().toISOString();prelaunchRows.set('0xtoken',{triggered_at:Math.floor(Date.now()/1000)-60,observed_at:new Date().toISOString(),classification:'observing'})`,context);
+  assert.equal(vm.runInContext(`observationStatus({token_address:'0xtoken',observed_at:new Date(Date.now()-180000).toISOString()},{events:[{triggered_at:Math.floor(Date.now()/1000)-60}]})`,context),'数据待更新','archive status must not claim live eligibility with a stale token quote');
   await vm.runInContext('refreshEarlyWarning()',context);
   assert.equal(vm.runInContext(`observationOf('0xtoken').events.length`,context),2,'a missing live report must not erase archive records');
   prelaunchResponse={available:false,records:JSON.parse(vm.runInContext(`JSON.stringify([...observationRecords.values()])`,context))};

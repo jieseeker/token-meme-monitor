@@ -383,7 +383,8 @@ function observationStatus(token,record){
   if(token.archive)return '历史档案，当前不在监控列表';
   const event=record.events[0];
   if(Date.now()/1000-event.triggered_at>300)return prelaunchLabels.expired;
-  return prelaunchLabels[prelaunchState(token)?.status]||'等待实时状态更新';
+  const status=prelaunchState(token)?.status;
+  return prelaunchLabels[status==='observing'&&!livePrelaunch(token)?'stale_data':status]||'等待实时状态更新';
 }
 function observationHistoryHTML(token){
   const record=observationOf(token.token_address);
