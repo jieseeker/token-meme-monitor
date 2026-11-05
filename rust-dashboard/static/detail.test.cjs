@@ -126,6 +126,18 @@ setImmediate(async () => {
   assert.ok(recordHTML.includes('$100.00')&&recordHTML.includes('$90.00'),'every original discovery price stays visible');
   assert.ok(recordHTML.includes('1.30%')&&recordHTML.includes('1.40x'),'frozen discovery features are shown');
   assert.ok(recordHTML.includes('+10.0%')&&recordHTML.includes('-5.0%'),'same-pool tracking and drawdown are shown');
+  assert.ok(!recordHTML.includes('<table')&&!recordHTML.includes('<br>'),'observation history no longer compresses metrics and explanations into table rows');
+  assert.equal((recordHTML.match(/class="observation-event"/g)||[]).length,2,'every trigger remains visible in a separated event section');
+  assert.ok(recordHTML.indexOf('observation-result')<recordHTML.indexOf('observation-context'),'price comparison and change lead discovery evidence');
+  assert.ok(recordHTML.includes('发现时依据')&&recordHTML.includes('触发时准入')&&recordHTML.includes('当前状态'),'original context stays separate from live status');
+  assert.ok(recordHTML.includes('class="observation-change rise"')&&recordHTML.includes('未扣手续费和滑点'),'price change is emphasized without presenting it as net profit');
+  vm.runInContext(`observationRecords.get('0xtoken').events[0].tracking.last_price=80`,context);
+  const fallingObservation=vm.runInContext(`observationHistoryHTML({token_address:'0xtoken'})`,context);
+  assert.ok(fallingObservation.includes('class="observation-change fall"')&&fallingObservation.includes('-20.0%'),'negative change has its own text and color cue');
+  vm.runInContext(`observationRecords.get('0xtoken').events[0].tracking.last_price=110`,context);
+  const missingObservation=vm.runInContext(`observationRecords.set('0xmissing',{token_address:'0xmissing',symbol:'MISSING',events:[{triggered_at:Math.floor(Date.now()/1000)-60,price:.00000001,pair:'<script>bad</script>'}]});observationHistoryHTML({token_address:'0xmissing',archive:true})`,context);
+  assert.ok(missingObservation.includes('等待采样')&&!missingObservation.includes('NaN')&&!missingObservation.includes('<script>bad'),'missing samples remain unknown and pool identifiers are escaped');
+  vm.runInContext(`observationRecords.delete('0xmissing')`,context);
   assert.ok(!recordHTML.includes('<details>'),'observation history is flat, without expansion controls');
   vm.runInContext(`prelaunchReportAt=new Date().toISOString();prelaunchRows.set('0xtoken',{triggered_at:Math.floor(Date.now()/1000)-60,observed_at:new Date().toISOString(),classification:'observing'})`,context);
   assert.equal(vm.runInContext(`observationStatus({token_address:'0xtoken',observed_at:new Date(Date.now()-180000).toISOString()},{events:[{triggered_at:Math.floor(Date.now()/1000)-60}]})`,context),'数据待更新','archive status must not claim live eligibility with a stale token quote');

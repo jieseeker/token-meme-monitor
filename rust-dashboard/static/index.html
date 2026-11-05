@@ -74,9 +74,42 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .observation-mark { flex:none; font-size:11px; color:var(--muted); font-weight:400; }
 .observation-filter { flex:none; min-height:32px; padding:4px 0; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
 .observation-filter:hover,.observation-filter.active { color:var(--accent-strong); text-decoration:underline; text-underline-offset:4px; }
-.observation-table { overflow-x:auto; margin-top:12px; }
-.observation-table:focus-visible,.observation-filter:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.observation-table .observation-evidence td { text-align:left; white-space:normal; color:var(--muted); padding-top:0; }
+.observation-filter:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.observation-section { container-type:inline-size; }
+.observation-current { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; font-size:13px; line-height:1.6; }
+.observation-current > span { color:var(--muted); }
+.observation-current.new strong { color:var(--accent-strong); }
+.observation-current.blocked strong { color:var(--risk); }
+.observation-note { margin-top:6px; color:var(--muted); font-size:12px; line-height:1.6; }
+.observation-events { list-style:none; }
+.observation-event { padding:24px 0; border-bottom:1px solid var(--line); }
+.observation-event:last-child { border-bottom:0; padding-bottom:16px; }
+.observation-event-header { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; margin-bottom:16px; }
+.observation-event-header h3 { font-size:14px; font-weight:700; }
+.observation-event-header time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.observation-result { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:24px; }
+.observation-prices { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; }
+.observation-prices dt,.observation-change > span,.observation-range dt { color:var(--muted); font-size:12px; line-height:1.5; }
+.observation-prices dd { margin-top:4px; font-size:18px; font-weight:700; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.observation-change { min-width:120px; text-align:right; }
+.observation-change strong { display:block; margin-top:2px; font-size:22px; line-height:1.2; font-weight:750; font-variant-numeric:tabular-nums; }
+.observation-event:first-child .observation-change strong { font-size:32px; }
+.observation-section .rise { color:var(--blocked); }
+.observation-section .fall { color:var(--accent-strong); }
+.observation-range { display:flex; flex-wrap:wrap; gap:12px 32px; margin-top:16px; }
+.observation-range dd { margin-top:2px; font-size:14px; font-weight:650; font-variant-numeric:tabular-nums; }
+.observation-context { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px 32px; margin-top:20px; padding-top:16px; border-top:1px solid var(--line); }
+.observation-context h4 { margin-bottom:10px; font-size:13px; font-weight:700; }
+.observation-facts { display:grid; gap:8px; }
+.observation-facts > div { display:flex; justify-content:space-between; align-items:baseline; gap:8px 16px; font-size:12px; line-height:1.6; }
+.observation-facts dt { color:var(--muted); }
+.observation-facts dd { flex:none; font-weight:650; text-align:right; font-variant-numeric:tabular-nums; }
+.observation-initial { margin-bottom:10px; font-size:12px; line-height:1.6; color:var(--muted); }
+.observation-initial.blocked { color:var(--risk); }
+.observation-source { display:flex; flex-wrap:wrap; gap:4px 20px; margin-top:16px; color:var(--muted); font-size:12px; line-height:1.6; }
+.observation-source span { min-width:0; overflow-wrap:anywhere; }
+@container (max-width:620px){ .observation-result { grid-template-columns:1fr; gap:16px; } .observation-change { text-align:left; } .observation-context { grid-template-columns:1fr; gap:20px; } }
+@container (max-width:340px){ .observation-prices { grid-template-columns:1fr; } .observation-facts > div { flex-wrap:wrap; gap:0 12px; } }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
 .tag-mid { background:rgba(180,83,9,.12); color:var(--risk); }
 .tag-low { background:rgba(239,68,68,.10); color:var(--danger); }
@@ -406,12 +439,21 @@ function observationHistoryHTML(token){
   if(!record)return '';
   const date=at=>new Date(at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
   const numeric=(value,suffix)=>Number.isFinite(value)?value.toFixed(2)+suffix:'--';
-  const rows=record.events.map(event=>{
+  const tone=value=>!Number.isFinite(value)||value===0?'':value>0?'rise':'fall';
+  const fact=(label,value)=>`<div><dt>${label}</dt><dd>${escapeAttr(value)}</dd></div>`;
+  const current=observationCardState(token,record);
+  const rows=record.events.map((event,index)=>{
     const tracking=event.tracking||{},f=event.features||{};
     const change=event.price>0&&Number.isFinite(tracking.last_price)?(tracking.last_price/event.price-1)*100:null;
-    return `<tr><td>${escapeAttr(date(event.triggered_at))}</td><td>${fmtPrice(event.price)}</td><td>${fmtPrice(tracking.last_price)}</td><td>${fmtChange(change)}</td><td>${fmtChange(tracking.max_gain_pct)}</td><td>${fmtChange(tracking.max_drawdown_pct)}</td></tr><tr class="observation-evidence"><td colspan="6">发现依据：近1小时 ${fmtChange(f.return60)} · 5分钟成交/流动性 ${numeric(f.turnover,'%')} · 相对量能 ${numeric(f.volume_ratio,'x')}<br>触发时：${escapeAttr(prelaunchLabels[event.classification]||'状态未知')} · 市场${escapeAttr(marketRegimeLabel(event.market))} · 风险${event.risk_status==='PASS'?'通过':event.risk_status==='WARN'?'警惕':event.risk_status==='FAIL'?'未通过':'未知'} · $100 / $1K滑点 ${numeric(event.slippage_100_pct,'%')} / ${numeric(event.slippage_1000_pct,'%')}<br>最后同池采样：${escapeAttr(tracking.last_price_at?new Date(tracking.last_price_at).toLocaleString('zh-CN',{hour12:false}):'等待采样')} · 池子 ${escapeAttr(event.pair||'--')}</td></tr>`;
+    return `<li class="observation-event">
+      <header class="observation-event-header"><h3>${index===0?'最新发现':'此前发现'}</h3><time datetime="${new Date(event.triggered_at*1000).toISOString()}">${escapeAttr(date(event.triggered_at))}</time></header>
+      <div class="observation-result"><dl class="observation-prices">${fact('发现价格',fmtPrice(event.price))}${fact('最后同池价格',fmtPrice(tracking.last_price))}</dl><div class="observation-change ${tone(change)}"><span>发现后涨跌</span><strong>${fmtChange(change)}</strong></div></div>
+      <dl class="observation-range"><div><dt>最高涨幅</dt><dd class="${tone(tracking.max_gain_pct)}">${fmtChange(tracking.max_gain_pct)}</dd></div><div><dt>最大回撤</dt><dd class="${tone(tracking.max_drawdown_pct)}">${fmtChange(tracking.max_drawdown_pct)}</dd></div></dl>
+      <div class="observation-context"><section><h4>发现时依据</h4><dl class="observation-facts">${fact('发现前1小时涨跌',fmtChange(f.return60))}${fact('5分钟成交 / 流动性',numeric(f.turnover,'%'))}${fact('相对量能',numeric(f.volume_ratio,'x'))}</dl></section><section><h4>触发时准入</h4><p class="observation-initial${event.classification?.includes('blocked')?' blocked':''}">${escapeAttr(prelaunchLabels[event.classification]||'状态未知')}</p><dl class="observation-facts">${fact('市场环境',marketRegimeLabel(event.market))}${fact('风险检查',event.risk_status==='PASS'?'通过':event.risk_status==='WARN'?'警惕':event.risk_status==='FAIL'?'未通过':'未知')}${fact('$100 买入滑点',numeric(event.slippage_100_pct,'%'))}${fact('$1K 买入滑点',numeric(event.slippage_1000_pct,'%'))}</dl></section></div>
+      <footer class="observation-source"><span>最后同池采样：${escapeAttr(tracking.last_price_at?new Date(tracking.last_price_at).toLocaleString('zh-CN',{hour12:false}):'等待采样')}</span><span>跟踪池子：${escapeAttr(event.pair||'--')}</span></footer>
+    </li>`;
   }).join('');
-  return `<div class="detail-section"><div class="section-header"><span class="section-heading">启动前观察记录</span><span class="section-time">近7天 · ${record.trigger_count}次触发</span></div><div class="hint">${escapeAttr(observationStatus(token,record))}。发现价格与依据已固定；新触发追加记录。试验规则未通过盈利验证。</div><div class="observation-table" role="region" aria-label="观察触发与后续表现" tabindex="0"><table class="history-table"><thead><tr><th>发现时间</th><th>发现价格</th><th>最后同池价格</th><th>发现后涨跌</th><th>最高涨幅</th><th>最大回撤</th></tr></thead><tbody>${rows}</tbody></table></div><div class="hint">以上为触发池子的采样价格变化，未扣手续费和滑点；最大回撤指采样高点后的最大跌幅。采样中断时保留最后价格，历史记录不代表当前有效信号。</div></div>`;
+  return `<section class="detail-section observation-section" aria-label="启动前观察记录"><div class="section-header"><span class="section-heading">启动前观察记录</span><span class="section-time">近7天 · ${record.trigger_count}次触发</span></div><p class="observation-current ${current.tone}"><span>当前状态</span><strong>${escapeAttr(observationStatus(token,record))}</strong></p><p class="observation-note">发现价格和依据已固定；新触发追加记录。试验观察，尚未通过盈利验证。</p><ol class="observation-events">${rows}</ol><p class="observation-note">以上为原池子的采样价格变化，未扣手续费和滑点。最大回撤为采样高点后的最大跌幅；采样中断时保留最后价格，历史记录不代表当前有效信号。</p></section>`;
 }
 function prelaunchHTML(token){
   if(observationOf(token.token_address))return '';
