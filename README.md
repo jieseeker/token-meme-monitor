@@ -101,6 +101,20 @@ python3 scripts/monitored_mover_audit.py --db /absolute/path/monitor.db --top 20
 
 脚本从 Alpha 全量审计中取 24h 涨幅 Top N，并只保留已通过合约过滤且当前存在活跃池的代币。对每个涨幅峰值回看 24 小时，复算前置量能异动并读取 A 结构变更，输出 `early_and_a`、`early_only`、`a_only`、`missed` 四类漏斗与提前秒数。执行 `--self-test` 可用内置 SQLite 样例验证分类逻辑。
 
+该旧审计的“峰值前出现过信号”不等于“启动前捕获”。启动前潜力研究使用下面的独立事件口径。
+
+### 启动前潜力研究
+
+```bash
+python3 scripts/prelaunch_research.py --export-db /absolute/path/monitor.db --output /tmp/prelaunch.csv.gz
+python3 scripts/prelaunch_research.py --input /tmp/prelaunch.csv.gz --output /tmp/prelaunch-report.json
+python3 scripts/prelaunch_research_test.py
+```
+
+工具只读导出七天五分钟样本，使用当时的 Alpha 合约身份和池流动性，按 60/20/20 时间段训练/验证/测试并剔除边界的四小时结果窗口。研究“未涨远时提醒、下一档入场、四小时内 +20% 先于 -8% 止损”，另统计真正 +5% 启动点之前的成交覆盖。输出特征对照、成本、平均/中位收益、PF、采样回撤及漏抓原因。历史实际滑点不可还原，数据缺失独立计数；不自动修改页面或生产买点。
+
+首轮真实数据结果及限制见 [2026-11-05 启动前研究](docs/research/2026-11-05-prelaunch.md)。77 组固定规则无一取得晋级资格，保留失败结果供后续未来样本验证。
+
 ## Factor v1 只读回放
 
 ```bash
