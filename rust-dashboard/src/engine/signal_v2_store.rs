@@ -86,7 +86,8 @@ pub fn sample(snapshot: &PairSnapshot, raw: &Value) -> Option<Sample> {
 
 fn connect(path: &str) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.busy_timeout(std::time::Duration::from_millis(100))?;
+    // ponytail: a cleanup lock can pause one shadow update for 20s; queue writes if it approaches the 5m signal window.
+    conn.busy_timeout(std::time::Duration::from_secs(20))?;
     Ok(conn)
 }
 
@@ -158,7 +159,7 @@ pub fn save(
 ) -> Result<bool> {
     let summary = summary(state, settings);
     let parameters = json!({"experiment_version":EXPERIMENT_VERSION,"settings":settings});
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let prior: Option<String> = tx
         .query_row(
             "SELECT summary_json FROM signal_v2_state WHERE token_address=?1",
@@ -404,6 +405,29 @@ mod tests {
             liquidity_usd: Some(50000.0),
             fingerprint: format!("request-{time}"),
         }
+    }
+    #[test]
+    fn shadow_save_waits_for_cleanup_writer() {
+        let path = database();
+        let blocker = Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
+        let saved_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut conn = connect(&saved_path).unwrap();
+            ready.send(()).unwrap();
+            save(
+                &mut conn,
+                &State::new("token", &observation(100, 1.0)),
+                &at(100),
+                &Settings::default(),
+            )
+        });
+        started.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        blocker.execute_batch("COMMIT").unwrap();
+        assert!(writer.join().unwrap().unwrap());
+        std::fs::remove_file(path).unwrap();
     }
     fn insert(conn: &Connection, time: i64, pair: &str, raw: &Value, price: f64) {
         conn.execute("INSERT INTO snapshots(pair_address,token_address,observed_at,price_usd,liquidity_usd,volume_h1,volume_m5,raw_json) VALUES (?1,'token',?2,?3,50000,30000,0,?4)", params![pair,at(time),price,raw.to_string()]).unwrap();
