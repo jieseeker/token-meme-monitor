@@ -265,6 +265,8 @@ function renderMarketBanner(){
 }
 let structureRows = new Map();
 let earlyWarningRows = new Map();
+let prelaunchRows = new Map();
+let prelaunchReportAt = null;
 let structureRefreshPromise = null;
 const oiCache = new Map();
 const depthCache = new Map();
@@ -338,6 +340,30 @@ function fmtChange(v){return v==null||isNaN(v)?'--':`${v>0?'+':''}${v.toFixed(1)
 const scoreOf=p=>p.short_momentum_score??p.signal_score??0;
 function structureOf(token){return structureRows.get(String(token||'').toLowerCase())||null;}
 function earlyWarningOf(token){return earlyWarningRows.get(String(token||'').toLowerCase())||null;}
+function prelaunchState(token){
+  const address=String(token?.token_address||'').toLowerCase(),item=prelaunchRows.get(address);
+  if(!item)return null;
+  const now=Date.now(),age=now/1000-item.triggered_at,reportAge=now-Date.parse(prelaunchReportAt),sourceAge=now-Date.parse(item.observed_at);
+  const v2=signalV2Rows.get(address);
+  let status=item.classification;
+  if(age>300)status='expired';
+  else if(!Number.isFinite(age)||age<0||!Number.isFinite(reportAge)||reportAge<0||reportAge>120000||!Number.isFinite(sourceAge)||sourceAge<0||sourceAge>120000)status='stale_data';
+  else if(status==='observing'&&launchedStage(v2?.stage))status='already_started';
+  else if(status==='observing'&&v2?.risk_status!=='PASS')status='risk_blocked';
+  else if(status==='observing'&&!['risk_on','neutral'].includes(marketRegime))status='market_blocked';
+  return {item,status};
+}
+function livePrelaunch(token){
+  const state=prelaunchState(token),age=Date.now()-Date.parse(token?.observed_at);
+  return state?.status==='observing'&&age>=0&&age<=120000?state.item:null;
+}
+function prelaunchHTML(token){
+  const state=prelaunchState(token);
+  if(!state)return '';
+  const {item,status}=state,f=item.features||{};
+  const labels={observing:'新的潜力观察，等待后续验证',expired:'本轮已过5分钟观察窗，等待新异动',setup_ended:'本轮量价条件已退出',stale_data:'数据待更新',risk_unknown:'风险数据待更新',risk_blocked:'风险未通过',already_started:'结构已启动，退出提前观察',market_blocked:'市场环境阻断',slippage_unknown:'滑点数据待更新',slippage_blocked:'滑点超过准入上限'};
+  return `<div class="early-warning-strip${livePrelaunch(token)?' active':''}"><div class="early-warning-heading"><strong>启动前观察 · 待验证</strong><span class="early-warning-meta">本轮触发 ${escapeAttr(timeAgo(new Date(item.triggered_at*1000).toISOString()))}</span></div><div class="early-warning-facts"><span>近1小时 <b>${escapeAttr(fmtChange(f.return60))}</b></span><span>5分钟成交/流动性 <b>${f.turnover==null?'--':Number(f.turnover).toFixed(2)+'%'}</b></span><span>温和量能 <b>${f.volume_ratio==null?'--':Number(f.volume_ratio).toFixed(2)+'x'}</b></span></div><div class="early-warning-judgment"><b>${escapeAttr(labels[status]||'等待数据核查')}</b> · 独立事件，不沿用旧 A 时间；历史规则未通过盈利验证</div>${status==='slippage_blocked'?`<div class="hint">$100 / $1K 滑点 ${item.slippage_100_pct==null?'--':Number(item.slippage_100_pct).toFixed(2)+'%'} / ${item.slippage_1000_pct==null?'--':Number(item.slippage_1000_pct).toFixed(2)+'%'} · 上限 0.30% / 0.50%</div>`:''}</div>`;
+}
 function launchedStage(stage){return /^(first_start|first_wave|pullback|base|second_start)/.test(stage||'');}
 function liveEarlyWarning(token){
   const address=String(token?.token_address||'').toLowerCase();
@@ -412,6 +438,8 @@ function noviceState(token, structure){
   return {key:'wait_setup',label:'等待买点',tone:'neutral',reason:stage==='inactive'?'还没有形成有效突破候选。':'结构还在形成或回调，未到保守观察区。',action:'等待结构形成'};
 }
 function candidatePriority(token,structure){
+  if(confirmationState(token).active&&liveEarlyWarning(token))return 5;
+  if(livePrelaunch(token))return 4;
   const warning=liveEarlyWarning(token);
   if(warning)return warning.status==='strong_anomaly'?3:warning.status==='volume_anomaly'?2:1;
   return noviceState(token,structure).key==='second_ready'?.5:0;
@@ -495,7 +523,7 @@ function structureCardHTML(token){
   const buyWeak=buy?.value!=null&&Number(buy.value)<=.55;
   const observation=volumeWeak||buyWeak?`${volumeWeak?'当前量能':'买单占比'}尚未达到偏强参考，${next}`:next;
   return `<div class="structure-card">
-    ${earlyWarningHTML(token)}
+    ${prelaunchHTML(token)}${earlyWarningHTML(token)}
     <div class="structure-verdict"><strong>${escapeAttr(structure.conclusion||structure.structure_label||'结构观察')}</strong><span>${escapeAttr(observation)}</span></div>
     <div class="structure-facts">
       ${structureFactHTML('距近30分钟高点',price,price?.value==null?'暂无数据':`${price.value>0?'已突破':'尚未突破'} · 5分钟 ${momentum('momentum_5m')} · 15分钟 ${momentum('momentum_15m')}`)}
@@ -573,17 +601,19 @@ function renderTokenList() {
   const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
     .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   const activeCount=tokenData.filter(t=>liveEarlyWarning(t)).length;
-  document.getElementById('tokenCount').textContent = `前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
-  document.getElementById('listHint').hidden=activeCount>0||tokenData.length===0||watchlistOnly||!!searchTerm;
+  const potentialCount=tokenData.filter(t=>livePrelaunch(t)).length;
+  document.getElementById('tokenCount').textContent = `${potentialCount?`潜力观察 ${potentialCount} · `:''}前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
+  document.getElementById('listHint').hidden=potentialCount>0||activeCount>0||tokenData.length===0||watchlistOnly||!!searchTerm;
   const html=visible.map(t=>{
       const sel=t.token_address===selectedToken?' selected':'';
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const warning=liveEarlyWarning(t);
+      const potential=livePrelaunch(t);
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
       const snapshotAge=Date.now()-Date.parse(t.observed_at);
-      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
-      return `<button class="token-btn${sel}${warning?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
+      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':potential?`启动前观察 · 触发${timeAgo(new Date(potential.triggered_at*1000).toISOString())} · 待验证`:warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
+      return `<button class="token-btn${sel}${warning||potential?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
         <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
     }).join('');
@@ -631,7 +661,7 @@ function renderDetail() {
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime;
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t));
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -1025,8 +1055,10 @@ function refreshStructure(){
 }
 
 function refreshEarlyWarning(){
-  return fetchJSON('/api/early-warning').then(result=>{
+  return Promise.all([fetchJSON('/api/early-warning'),fetchJSON('/api/prelaunch').catch(()=>null)]).then(([result,potential])=>{
     earlyWarningRows=new Map((result.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
+    prelaunchReportAt=potential?.calculated_at||null;
+    prelaunchRows=new Map((potential?.available===true?potential.items||[]:[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     notifyEarlyWarnings();
     renderTokenList();
     if(selectedToken)renderDetail();
@@ -1099,6 +1131,15 @@ function earlyHistoryHTML(result,shadow){
   return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`实时影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table>`;
 }
 
+function prelaunchHistoryHTML(report){
+  const labels={observing:'潜力观察',risk_unknown:'风险待核查',risk_blocked:'风险阻断',already_started:'已启动',market_blocked:'市场阻断',slippage_unknown:'滑点待更新',slippage_blocked:'滑点阻断'};
+  const rows=Object.entries(report?.summary||{}).map(([key,item])=>{
+    const [market,status]=key.split('/');
+    const values=['15m','1h','4h'].map(h=>`<td>${Number(item[h]?.n||0)} / ${escapeAttr(fmtSignedPct(item[h]?.mean_net_0_3_pct))}</td>`).join('');
+    return `<tr><td>${escapeAttr(marketRegimeLabel(market))}</td><td>${escapeAttr(labels[status]||'待核查')}</td><td>${Number(item.events||0)}</td>${values}<td>${item.fixed_exit?.profit_factor==null?'--':Number(item.fixed_exit.profit_factor).toFixed(2)}</td></tr>`;
+  }).join('');
+  return `<div class="section-header" style="margin-top:14px"><span class="section-heading">启动前观察 · 实时试验</span></div><div class="hint">独立事件 ${Number(report?.events||0)} 条；未通过历史盈利验证。5–7分钟延迟模拟入场，涨离提醒价5%则不成交；各周期显示已到期样本数 / 扣0.3%假设成本的持有收益。固定退出PF按+20% / -8% / 4h计算，均不代表真实成交收益。</div>${rows?`<table class="history-table"><thead><tr><th>市场</th><th>触发状态</th><th>事件</th><th>15分钟</th><th>1小时</th><th>4小时</th><th>固定退出PF</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">等待独立事件积累和到期结算。</div>'}`;
+}
 function marketStateHTML(state){
   if(!state)return '';
   const label=marketRegimeLabel(state.state);
@@ -1116,12 +1157,13 @@ async function toggleEarlyHistory(force){
   if(!open)return;
   const body=document.getElementById('earlyHistoryBody');
   try{
-    const [result,market,shadow]=await Promise.all([
+    const [result,market,shadow,potential]=await Promise.all([
       fetchJSON('/api/early-warning/history?limit=1'),
       fetchJSON('/api/market-state').catch(()=>null),
-      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null)
+      fetchJSON('/api/confirmation-shadow/summary').catch(()=>null),
+      fetchJSON('/api/prelaunch').catch(()=>null)
     ]);
-    body.innerHTML=marketStateHTML(market)+earlyHistoryHTML(result,shadow);
+    body.innerHTML=marketStateHTML(market)+earlyHistoryHTML(result,shadow)+prelaunchHistoryHTML(potential);
   }catch(e){
     body.innerHTML=`<div class="hint">历史回放加载失败：${escapeAttr(e.message)}</div>`;
   }
@@ -1131,7 +1173,7 @@ async function refresh(){
   try{
     const [rows, signalV2, market] = await Promise.all([
       fetchJSON('/api/tokens'),
-      fetchJSON('/api/signal-v2?limit=50').catch(()=>({summaries:[]})),
+      fetchJSON('/api/signal-v2?limit=100').catch(()=>({summaries:[]})),
       fetchJSON('/api/market-state').catch(()=>null)
     ]);
     marketRegime=market?.state||null;

@@ -410,6 +410,7 @@ fn continuous_job_status(
         ("exit-replay", "exit-replay-*.json", 10_800),
         ("early-warning", "early-warning-*.json", 10_800),
         ("monitored-movers", "monitored-movers-*.json", 3_600),
+        ("prelaunch", "latest.json", 60),
     ] {
         let directory = root.join(name);
         let entries = std::fs::read_dir(&directory)
@@ -644,6 +645,7 @@ pub async fn serve(db_path: &str) {
             get(confirmation_shadow_summary_handler),
         )
         .route("/api/market-state", get(market_state_handler))
+        .route("/api/prelaunch", get(prelaunch_handler))
         .route("/api/token/{token}/summary", get(token_summary))
         .route("/api/status", get(status))
         .route("/api/signal-v2", get(signal_v2_diagnostics))
@@ -1654,6 +1656,30 @@ mod oi_tests {
     }
 
     #[test]
+    fn prelaunch_report_hides_stale_items() {
+        let root = std::env::temp_dir().join(format!(
+            "tmm-prelaunch-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let directory = root.join("monitoring-runtime/continuous/prelaunch");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = root.join("data/monitor.db");
+        let now = chrono::Utc::now().timestamp();
+        let report = serde_json::json!({"version":"prelaunch_activity_probe_v1","calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339(),"items":[{"classification":"observing"}]});
+        std::fs::write(directory.join("latest.json"), report.to_string()).unwrap();
+        assert_eq!(
+            super::prelaunch_report(path.to_str().unwrap(), now)["available"],
+            true
+        );
+        assert_eq!(
+            super::prelaunch_report(path.to_str().unwrap(), now + 121)["items"],
+            serde_json::json!([])
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn market_state_classifies_breadth_and_median_momentum() {
         let rows = vec![
             serde_json::json!({"token_address":"a","price_change_h1":2.0,"volume_h1":100.0,"liquidity_usd":1000.0}),
@@ -2603,6 +2629,47 @@ async fn early_warning(
         HeaderValue::from_static("private, max-age=15"),
     );
     Ok(response)
+}
+
+fn prelaunch_report(path: &str, now: i64) -> serde_json::Value {
+    let parent = std::path::Path::new(path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let root = if parent.file_name().is_some_and(|name| name == "data") {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+    let file = root.join("monitoring-runtime/continuous/prelaunch/latest.json");
+    let mut report: serde_json::Value = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({"items":[]}));
+    let age = report["calculated_at"]
+        .as_str()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| now - at.timestamp());
+    let available = report["version"] == "prelaunch_activity_probe_v1"
+        && age.is_some_and(|age| (0..=120).contains(&age));
+    report["available"] = serde_json::json!(available);
+    report["experimental"] = serde_json::json!(true);
+    report["profitability_validated"] = serde_json::json!(false);
+    if !available {
+        report["items"] = serde_json::json!([]);
+        report["reason"] = serde_json::json!("潜力观察任务尚未更新或数据已过期");
+    }
+    report
+}
+
+async fn prelaunch_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let path = state.db_path.as_ref().clone();
+    Json(
+        tokio::task::spawn_blocking(move || {
+            prelaunch_report(&path, chrono::Utc::now().timestamp())
+        })
+        .await
+        .unwrap_or_else(|_| serde_json::json!({"available":false,"items":[]})),
+    )
 }
 
 async fn early_warning_history(

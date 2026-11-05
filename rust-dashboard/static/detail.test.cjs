@@ -41,8 +41,8 @@ const fetch = async url => { calls.push(url);
     {token_address:'0xtoken',token_symbol:row.token_symbol,token_name:'Test',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:row.observed_at},
     {token_address:'0xother',token_symbol:'OTHER',token_name:'Other',indicator_score:20,indicator_reasons:'[]',observed_at:new Date(Date.now()-180000).toISOString()},
     {token_address:'0xzero',token_symbol:'ZERO',token_name:'Zero',indicator_score:0,indicator_reasons:'[]'}]};
-  if(url==='/api/signal-v2?limit=50')return {ok:true,json:async()=>({summaries:[
-    calls.filter(call=>call==='/api/signal-v2?limit=50').length<=1
+  if(url==='/api/signal-v2?limit=100')return {ok:true,json:async()=>({summaries:[
+    calls.filter(call=>call==='/api/signal-v2?limit=100').length<=1
       ? {token_address:'0xtoken',stage:'watch',risk_status:'PASS',data_status:'current',first_seen_at:Math.floor(Date.now()/1000)-240,b_at:null,c_at:null,c_reason:null}
       : {token_address:'0xtoken',stage:'first_start',risk_status:'WARN',data_status:'current',b_at:1792753073,c_at:null,c_reason:null}
   ]})};
@@ -77,6 +77,20 @@ setImmediate(async () => {
   vm.runInContext(`watchlist.add('0xtoken')`,context);
   await vm.runInContext('refreshStructure()',context);
   await vm.runInContext('refreshEarlyWarning()',context);
+  vm.runInContext(`prelaunchReportAt=new Date().toISOString();prelaunchRows.set('0xprobe',{triggered_at:Math.floor(Date.now()/1000)-60,observed_at:new Date().toISOString(),classification:'observing',features:{return60:1.2,turnover:1.3}});signalV2Rows.set('0xprobe',{stage:'watch',risk_status:'PASS',first_seen_at:Math.floor(Date.now()/1000)-86400})`,context);
+  assert.ok(vm.runInContext(`livePrelaunch({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context),'an old A must not suppress a separate new research event');
+  assert.equal(vm.runInContext(`candidatePriority({token_address:'0xprobe',observed_at:new Date().toISOString()},null)`,context),4,'fresh eligible research observation has discovery priority');
+  assert.equal(vm.runInContext(`candidatePriority({token_address:'0xtoken',observed_at:new Date().toISOString()},structureOf('0xtoken'))`,context),5,'formal strong confirmation must rank above experimental observations');
+  const probeHTML=vm.runInContext(`prelaunchHTML({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context);
+  assert.ok(probeHTML.includes('启动前观察') && probeHTML.includes('未通过盈利验证'),'research observation must disclose validation status');
+  vm.runInContext(`prelaunchRows.get('0xprobe').triggered_at=Math.floor(Date.now()/1000)-301`,context);
+  assert.equal(vm.runInContext(`livePrelaunch({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context),null,'expired event automatically loses discovery priority');
+  vm.runInContext(`prelaunchRows.get('0xprobe').triggered_at=Math.floor(Date.now()/1000)-60;marketRegime='risk_off'`,context);
+  assert.equal(vm.runInContext(`livePrelaunch({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context),null,'risk-off blocks a fresh research observation');
+  vm.runInContext(`marketRegime='risk_on';prelaunchReportAt=new Date(Date.now()-121000).toISOString()`,context);
+  assert.equal(vm.runInContext(`livePrelaunch({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context),null,'stale report must fail closed');
+  vm.runInContext(`prelaunchRows.clear()`,context);
+  assert.ok(vm.runInContext(`prelaunchHistoryHTML({events:1,summary:{'neutral/observing':{events:1,'15m':{n:1,mean_net_0_3_pct:.2}}}})`,context).includes('1 / +0.20%'),'research outcomes show their own denominator and cost');
   assert.ok(document.getElementById('marketBanner').textContent.includes('风险偏好 · 允许继续确认'),'market gate is visible on the first screen');
   assert.ok(document.getElementById('marketBanner').textContent.includes('61.5%上涨 · 中位 +0.4%'),'market banner explains the regime using live breadth and median');
   vm.runInContext(`marketRegime='risk_off';renderMarketBanner()`,context);
@@ -417,7 +431,7 @@ assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
-assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=50','/api/market-state','/api/structure?limit=100','/api/early-warning'].includes(url)),[],'unchanged overview must not reload detail APIs');
+assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=100','/api/market-state','/api/structure?limit=100','/api/early-warning','/api/prelaunch'].includes(url)),[],'unchanged overview must not reload detail APIs');
   assert.equal(document.getElementById('depthBody').innerHTML,depth);
   row.observed_at=new Date(Date.now()+1000).toISOString();
   vm.runInContext(`detailCache.get('0xtoken').at=0`,context);

@@ -54,9 +54,13 @@ write_unit \
   database-health \
   'TMM database and disk growth monitor every hour' \
   "/usr/bin/python3 $SOURCE/scripts/database_health.py --db $BASE/data/monitor.db --state $RUNTIME/database-health.json --loop"
+write_unit \
+  prelaunch \
+  'TMM independent experimental prelaunch events every minute' \
+  "/usr/bin/python3 $SOURCE/scripts/prelaunch_monitor.py --db $BASE/data/monitor.db --api http://127.0.0.1:8501 --output $RUNTIME/prelaunch --loop"
 
 sudo -n systemctl daemon-reload
-for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow database-health; do
+for service in structure-monitor exit-replay early-warning monitored-movers confirmation-shadow database-health prelaunch; do
   sudo -n systemctl enable --now "tmm-$service.service" >/dev/null
   sudo -n systemctl restart "tmm-$service.service"
 done
