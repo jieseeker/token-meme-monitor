@@ -10,6 +10,9 @@ now = 1800000000
 signal = dict(stage='watch', risk_status='PASS', updated_at=now, last_evidence_at=now, first_seen_at=now-100000)
 warning = dict(pair_address='pool', slippage_estimates=dict(depth_calculated_at=datetime.fromtimestamp(now, timezone.utc).isoformat(), estimates=[dict(order_usd=100,buy_slippage_pct=.1),dict(order_usd=1000,buy_slippage_pct=.4)]))
 assert p.gate(signal, warning, 'pool', 'risk_on', now) == 'observing', 'old A does not block a new research event'
+warning['slippage_estimates']['stale']=True
+assert p.gate(signal,warning,'pool','risk_on',now)=='slippage_unknown', 'failed cached quote cannot be reused as fresh'
+warning['slippage_estimates']['stale']=False
 assert p.gate(signal, warning, 'pool', 'risk_off', now) == 'market_blocked'
 assert p.gate(dict(signal,stage='first_start'),warning,'pool','risk_on',now) == 'already_started'
 assert p.gate(signal,warning,'other','risk_on',now) == 'slippage_unknown', 'quotes must match the selected pool'
@@ -47,6 +50,8 @@ with tempfile.TemporaryDirectory() as directory:
     db=root/'source.db'
     source=sqlite3.connect(db)
     source.execute('CREATE TABLE snapshots(token_address TEXT,pair_address TEXT,observed_at TEXT,price_usd REAL,volume_m5 REAL,liquidity_usd REAL,buys_m5 INTEGER,sells_m5 INTEGER,risk_flags TEXT)')
+    source.execute('CREATE TABLE pairs(token_address TEXT,pair_address TEXT,chain_id TEXT,active INTEGER)')
+    source.execute("INSERT INTO pairs VALUES ('t','pool','bsc',1)")
     for i in range(13):
         source.execute('INSERT INTO snapshots VALUES (?,?,?,?,?,?,?,?,?)',('t','pool',p.iso(now-30-(12-i)*300),100,3000 if i==12 else 100,100000,15,10,'[]'))
     source.commit()
@@ -62,5 +67,10 @@ with tempfile.TemporaryDirectory() as directory:
     report=json.loads((root/'latest.json').read_text())
     assert report['items'][0]['classification']=='stale_data'
     assert report['profitability_validated'] is False
+    source=sqlite3.connect(db)
+    source.execute('UPDATE snapshots SET observed_at=? WHERE observed_at=?',(p.iso(now-30-1800-200),p.iso(now-30-1800)))
+    source.commit()
+    assert p.candidates(source,{'t':'T'},now)['t'][1] is not None, 'historical five-minute samples tolerate real provider cadence without using future observations'
+    source.close()
     p.fetch=original_fetch
 print('prelaunch monitor checks passed')

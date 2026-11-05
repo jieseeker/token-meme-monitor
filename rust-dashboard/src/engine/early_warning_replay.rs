@@ -881,6 +881,7 @@ fn slippage_estimates(conn: &Connection, pair: &str) -> Result<Value> {
     Ok(json!({
         "estimates":estimates,
         "depth_calculated_at":depth["calculated_at"],
+        "stale":depth["stale"] == true,
         "source":"cached_pool_depth"
     }))
 }
@@ -981,6 +982,7 @@ mod tests {
         insert(&conn, now, 101.0, 300.0, 80, 20);
         let depth = json!({
             "available":true,
+            "stale":true,
             "bands_pct":[1.0,2.0,5.0],
             "pressure_usd":[1000.0,3000.0,9000.0],
             "calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339()
@@ -992,6 +994,7 @@ mod tests {
         ).unwrap();
         let report = current(&path).unwrap();
         let item = &report["items"][0];
+        assert_eq!(item["slippage_estimates"]["stale"], true);
         assert_eq!(item["token_address"], "token");
         assert_eq!(item["status"], "strong_anomaly");
         assert!((item["volume_acceleration"].as_f64().unwrap() - 3.0).abs() < 1e-9);
