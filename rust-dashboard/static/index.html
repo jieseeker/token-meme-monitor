@@ -1271,9 +1271,9 @@ function prelaunchHistoryHTML(report){
   const rows=Object.entries(report?.summary||{}).map(([key,item])=>{
     const [market,status]=key.split('/');
     const values=['15m','1h','4h'].map(h=>`<td>${Number(item[h]?.n||0)} / ${escapeAttr(fmtSignedPct(item[h]?.mean_net_0_3_pct))}</td>`).join('');
-    return `<tr><td>${escapeAttr(marketRegimeLabel(market))}</td><td>${escapeAttr(labels[status]||'待核查')}</td><td>${Number(item.events||0)}</td>${values}<td>${item.fixed_exit?.profit_factor==null?'--':Number(item.fixed_exit.profit_factor).toFixed(2)}</td></tr>`;
+    return `<tr><td>${escapeAttr(marketRegimeLabel(market))}</td><td>${escapeAttr(labels[status]||'待核查')}</td><td>${Number(item.events||0)}</td>${values}<td>${Number(item.fixed_exit?.n||0)} / ${item.fixed_exit?.profit_factor==null?'--':Number(item.fixed_exit.profit_factor).toFixed(2)}</td></tr>`;
   }).join('');
-  return `<div class="section-header" style="margin-top:14px"><span class="section-heading">启动前观察 · 实时试验</span></div><div class="hint">独立事件 ${Number(report?.events||0)} 条；未通过历史盈利验证。5–7分钟延迟模拟入场，涨离提醒价5%则不成交；各周期显示已到期样本数 / 扣0.3%假设成本的持有收益。固定退出PF按+20% / -8% / 4h计算，均不代表真实成交收益。</div>${rows?`<table class="history-table"><thead><tr><th>市场</th><th>触发状态</th><th>事件</th><th>15分钟</th><th>1小时</th><th>4小时</th><th>固定退出PF</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">等待独立事件积累和到期结算。</div>'}`;
+  return `<div class="section-header" style="margin-top:14px"><span class="section-heading">启动前观察 · 实时试验</span></div><div class="hint">独立事件 ${Number(report?.events||0)} 条。未通过历史盈利验证。5–7分钟延迟模拟入场，涨离提醒价5%则不成交。各周期显示已到期样本数 / 扣0.3%假设成本的持有收益。固定退出列显示已退出样本数 / PF，按+20% / -8% / 4h计算并扣0.3%假设成本，均不代表真实成交收益。</div>${rows?`<table class="history-table"><thead><tr><th>市场</th><th>触发状态</th><th>事件</th><th>15分钟</th><th>1小时</th><th>4小时</th><th>已退出 / PF</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">等待独立事件积累和到期结算。</div>'}`;
 }
 function marketStateHTML(state){
   if(!state)return '';
