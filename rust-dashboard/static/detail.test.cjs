@@ -100,6 +100,18 @@ setImmediate(async () => {
     observationLoaded=true;renderTokenList();
   `,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('曾入选'),'expired observations keep a lasting marker');
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('observation-past')&&document.getElementById('tokenList').innerHTML.includes('已过观察窗'),'expired observations use the quiet card color and explicit status');
+  assert.ok(html.indexOf('id="observationToggle"')<html.indexOf('class="filter-row"'),'history entry belongs beside the title, above the search row');
+  assert.equal(document.getElementById('observationToggle').textContent,'观察记录 · 2');
+  vm.runInContext(`observationRecords.get('0xtoken').events[0].triggered_at=Math.floor(Date.now()/1000)-60;prelaunchReportAt=new Date().toISOString();prelaunchRows.set('0xtoken',{triggered_at:Math.floor(Date.now()/1000)-60,observed_at:new Date().toISOString(),classification:'observing'});renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('observation-new'),'only a currently eligible observation uses the fresh card color');
+  for(const [status,label] of [['risk_blocked','风险阻断'],['slippage_blocked','滑点阻断'],['market_blocked','市场环境阻断']]){
+    vm.runInContext(`prelaunchRows.get('0xtoken').classification='${status}';renderTokenList()`,context);
+    assert.ok(document.getElementById('tokenList').innerHTML.includes('observation-blocked')&&document.getElementById('tokenList').innerHTML.includes(label),`${status} has a warning color and a readable reason`);
+  }
+  vm.runInContext(`prelaunchRows.get('0xtoken').classification='observing';marketRegime='risk_off';renderTokenList()`,context);
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('observation-new'),'risk-off cannot retain the eligible card color');
+  vm.runInContext(`marketRegime='risk_on';observationRecords.get('0xtoken').events[0].triggered_at=Math.floor(Date.now()/1000)-600;prelaunchRows.clear();renderTokenList()`,context);
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('ARCHIVE'),'historical tokens never enter the normal main list');
   vm.runInContext(`watchlistOnly=true;setObservationOnly(true)`,context);
   assert.equal(vm.runInContext('watchlistOnly',context),false,'observation view does not silently intersect the favorites filter');
@@ -152,7 +164,8 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('tokenList').innerHTML.includes('活跃度分'),'unvalidated activity score must not dominate discovery');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('OTHER'),'other monitored tokens are visible without expanding');
   assert.ok(document.getElementById('tokenList').innerHTML.includes('class="token-btn selected signal-active"'),'fresh evidence gets one consistent list marker');
-  assert.ok(html.includes('.token-btn.signal-active { border-left:3px solid var(--blocked); }') && html.includes('.early-warning-cost-item.over b,.early-warning-cost-item.over em { color:var(--blocked); }'),'list marker matches the blocked cost text color');
+  assert.ok(!html.includes('border-left:3px solid var(--blocked)')&&html.includes('.token-btn.observation-new')&&html.includes('.token-btn.observation-blocked')&&html.includes('.token-btn.observation-past'),'observation backgrounds replace the old colored rail');
+  assert.ok(!html.match(/\.token-btn\.selected\s*\{[^}]*background:/),'selection must preserve the observation state background');
   assert.equal(document.getElementById('listHint').hidden,true,'zero-signal hint stays hidden while fresh evidence exists');
   vm.runInContext(`structureRows.set('0xother',{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1});renderTokenList()`,context);
   assert.ok(document.getElementById('tokenList').innerHTML.includes('快照已过期，等待更新') && !document.getElementById('tokenList').innerHTML.includes('B 候选'),'stale list rows hide old observations and stage letters');
