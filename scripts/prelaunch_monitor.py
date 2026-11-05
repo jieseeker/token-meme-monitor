@@ -88,7 +88,7 @@ def candidates(conn, tokens, now):
         observed=stamp(at)
         if token not in tokens or observed is None or not all(isinstance(x,(int,float)) and math.isfinite(x) and x>=0 for x in (price,volume,liquidity)) or price<=0 or liquidity<=0:
             return None
-        return dict(token=token,pair=pair,observed=observed,price=price,volume=volume,liquidity=liquidity,buys=buys or 0,sells=sells or 0,flags=flags or '[]',symbol=tokens[token])
+        return dict(token=token,pair=pair,observed=observed,observed_iso=at,price=price,volume=volume,liquidity=liquidity,buys=buys or 0,sells=sells or 0,flags=flags or '[]',symbol=tokens[token])
     selected = {}
     latest=conn.execute('SELECT '+','.join('s.'+c for c in columns.split(','))+" FROM pairs p JOIN snapshots s ON s.rowid=(SELECT rowid FROM snapshots WHERE pair_address=p.pair_address AND observed_at<=? ORDER BY observed_at DESC LIMIT 1) WHERE p.chain_id='bsc' AND p.active=1",(iso(now),))
     for raw in latest:
@@ -169,6 +169,33 @@ def summary(events):
     return report
 
 
+def track(conn, event, now):
+    anchor=event['price']
+    tracking=event.setdefault('tracking',dict(last_price=anchor,last_price_at=event.get('trigger_observed_at',iso(event['triggered_at'])),peak_price=anchor,max_gain_pct=0,max_drawdown_pct=0,min_change_pct=0))
+    cursor=event.get('tracking_cursor',event.get('trigger_observed_at',iso(event['triggered_at'])))
+    for observed,price in conn.execute('SELECT observed_at,price_usd FROM snapshots WHERE pair_address=? AND token_address=? AND observed_at>? AND observed_at<=? AND price_usd>0 ORDER BY observed_at',(event['pair'],event['token'],cursor,iso(now))):
+        if not isinstance(price,(int,float)) or not math.isfinite(price) or stamp(observed) is None:
+            continue
+        tracking['last_price'],tracking['last_price_at']=price,observed
+        tracking['peak_price']=max(tracking['peak_price'],price)
+        tracking['max_gain_pct']=max(tracking['max_gain_pct'],(price/anchor-1)*100)
+        tracking['min_change_pct']=min(tracking['min_change_pct'],(price/anchor-1)*100)
+        tracking['max_drawdown_pct']=min(tracking['max_drawdown_pct'],(price/tracking['peak_price']-1)*100)
+        event['tracking_cursor']=observed
+
+
+def observation_records(events):
+    grouped=defaultdict(list)
+    for event in events:
+        grouped[event['token']].append(event)
+    records=[]
+    fields=('pair','triggered_at','price','features','market','classification','risk_status','slippage_100_pct','slippage_1000_pct','tracking','entry_at','entry_price','outcomes','outcome_state','strategy_reason','strategy_gross_pct')
+    for token,history in grouped.items():
+        history=sorted(history,key=lambda e:e['triggered_at'],reverse=True)
+        records.append(dict(token_address=token,symbol=history[0]['symbol'],first_triggered_at=history[-1]['triggered_at'],latest_triggered_at=history[0]['triggered_at'],trigger_count=len(history),events=[{key:e[key] for key in fields if key in e} for e in history]))
+    return sorted(records,key=lambda r:(-r['latest_triggered_at'],r['token_address']))
+
+
 def fetch(api, path):
     with urllib.request.urlopen(api+path, timeout=20) as response:
         return json.load(response)
@@ -208,15 +235,18 @@ def scan(db, api, directory, now=None):
                 small, large = slippage_values(warnings.get(token,{}))
                 event = dict(token=token,symbol=tokens[token],pair=row['pair'],triggered_at=row['observed'],detected_at=now,price=row['price'],features=f,market=market,classification=current_gate,risk_status=signals.get(token,{}).get('risk_status'),slippage_100_pct=small,slippage_1000_pct=large,outcome_state='pending')
                 s['event'] = event
+                event['trigger_observed_at']=row['observed_iso']
                 state['events'].append(event)
             event = s.get('event')
             if event and now-event['triggered_at'] <= 86400:
                 same_pool = condition if row is None or row['pair']==event['pair'] else False
                 items.append(dict(token_address=token,pair_address=event['pair'],triggered_at=event['triggered_at'],observed_at=iso(row['observed']) if row else None,classification=view_class(event['classification'],same_pool,current_gate,event['triggered_at'],now),features=f,risk_status=signals.get(token,{}).get('risk_status'),market_state=market,slippage_100_pct=slippage_values(warnings.get(token,{}))[0],slippage_1000_pct=slippage_values(warnings.get(token,{}))[1]))
         for event in state['events']:
+            track(conn,event,now)
             if event.get('outcome_state') == 'pending':
                 resolve(conn,event,now)
     report = dict(version=VERSION,calculated_at=iso(now),experimental=True,profitability_validated=False,coverage=coverage,items=items,events=len(state['events']),summary=summary(state['events']),methods=dict(signal='price not extended; m5/liquidity >=1%; relative volume >=1.2x; historical rule not validated',sampling='as-of history max5m old, distinct observations; latest sample max2m old; same-pool indexed reads',fresh_window_seconds=300,rearm='5m continuously quiet, at least15m between events; no rearm on missing data',entry='first same-pool sample 5-7m after trigger, capped at alert +5%',exit='+20% / observed -8% stop / 4h timeout',costs_pct=[.3,.5],returns='sampled endpoint and hypothetical fixed exit; no actual fills or source-time verification'))
+    report['records']=observation_records(state['events'])
     atomic(state_path,state)
     atomic(directory/'latest.json',report)
     return dict(at=iso(now),events=report['events'],coverage=coverage,observing=sum(i['classification']=='observing' for i in items))

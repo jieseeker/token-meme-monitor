@@ -64,6 +64,12 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
+.token-heading { display:flex; align-items:center; gap:8px; min-width:0; }
+.observation-mark { flex:none; font-size:11px; color:var(--muted); font-weight:400; }
+.observation-filter { align-self:flex-start; min-height:36px; }
+.observation-table { overflow-x:auto; margin-top:12px; }
+.observation-table:focus-visible,.observation-filter:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.observation-table .observation-evidence td { text-align:left; white-space:normal; color:var(--muted); padding-top:0; }
 .tag-high { background:rgba(15,118,110,.12); color:var(--accent); }
 .tag-mid { background:rgba(180,83,9,.12); color:var(--risk); }
 .tag-low { background:rgba(239,68,68,.10); color:var(--danger); }
@@ -231,6 +237,7 @@ svg.chart.price-chart { height:104px; }
       <input class="search-input" id="search" placeholder="按代币符号、名称、地址筛选">
       <button class="watchlist-toggle" id="watchlistToggle" type="button" aria-label="只看自选" aria-pressed="false" title="只看自选">☆</button>
     </div>
+    <button class="watch-button observation-filter" id="observationToggle" type="button" aria-pressed="false">仅看观察记录</button>
     <div class="list-scroll" id="tokenList" role="region" aria-label="监控代币列表" tabindex="0"><div class="empty-state">正在加载代币数据...</div></div>
   </div>
   <div class="detail-panel" id="detailPanel">
@@ -243,6 +250,7 @@ const REFRESH_MS = 15000;
 const OVERVIEW_CACHE_KEY = 'tmm-tokens-v1';
 const WATCHLIST_KEY = 'tmm-watchlist-v1';
 const WATCHLIST_ONLY_KEY = 'tmm-watchlist-only-v1';
+const OBSERVATION_ONLY_KEY = 'tmm-observations-only-v1';
 const EARLY_WARNING_NOTIFY_KEY = 'tmm-early-warning-notifications-v1';
 let allData = [];
 let tokenData = [];
@@ -251,6 +259,8 @@ let selectedToken = null;
 let renderedKey = '';
 let searchTerm = '';
 let watchlistOnly = ['1','true'].includes(localStorage.getItem(WATCHLIST_ONLY_KEY));
+let observationsOnly = localStorage.getItem(OBSERVATION_ONLY_KEY)==='1';
+if(observationsOnly)watchlistOnly=false;
 let watchlist = new Set(JSON.parse(localStorage.getItem(WATCHLIST_KEY) || '[]'));
 let signalV2Rows = new Map();
 let marketRegime = null;
@@ -267,6 +277,8 @@ let structureRows = new Map();
 let earlyWarningRows = new Map();
 let prelaunchRows = new Map();
 let prelaunchReportAt = null;
+let observationRecords = new Map();
+let observationLoaded = false;
 let structureRefreshPromise = null;
 const oiCache = new Map();
 const depthCache = new Map();
@@ -357,11 +369,40 @@ function livePrelaunch(token){
   const state=prelaunchState(token),age=Date.now()-Date.parse(token?.observed_at);
   return state?.status==='observing'&&age>=0&&age<=120000?state.item:null;
 }
+const prelaunchLabels={observing:'新的潜力观察，等待后续验证',expired:'本轮已过5分钟观察窗，等待新异动',setup_ended:'本轮量价条件已退出',stale_data:'数据待更新',risk_unknown:'风险数据待更新',risk_blocked:'风险未通过',already_started:'结构已启动，退出提前观察',market_blocked:'市场环境阻断',slippage_unknown:'滑点数据待更新',slippage_blocked:'滑点超过准入上限'};
+function observationOf(address){
+  const record=observationRecords.get(String(address||'').toLowerCase());
+  const events=(record?.events||[]).filter(e=>e&&Number.isFinite(e.triggered_at)&&e.triggered_at<=Date.now()/1000&&Date.now()/1000-e.triggered_at<=7*86400).sort((a,b)=>b.triggered_at-a.triggered_at);
+  return events.length?{...record,events,latest_triggered_at:events[0].triggered_at,first_triggered_at:events.at(-1).triggered_at,trigger_count:events.length}:null;
+}
+function observationTokens(){
+  const current=new Map(tokenData.map(t=>[t.token_address,t]));
+  return [...observationRecords.keys()].map(observationOf).filter(Boolean).sort((a,b)=>b.latest_triggered_at-a.latest_triggered_at||a.token_address.localeCompare(b.token_address)).map(r=>current.get(r.token_address)||{token_address:r.token_address,token_symbol:r.symbol,indicator_score:0,archive:true});
+}
+function observationStatus(token,record){
+  if(token.archive)return '历史档案，当前不在监控列表';
+  const event=record.events[0];
+  if(Date.now()/1000-event.triggered_at>300)return prelaunchLabels.expired;
+  return prelaunchLabels[prelaunchState(token)?.status]||'等待实时状态更新';
+}
+function observationHistoryHTML(token){
+  const record=observationOf(token.token_address);
+  if(!record)return '';
+  const date=at=>new Date(at*1000).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  const numeric=(value,suffix)=>Number.isFinite(value)?value.toFixed(2)+suffix:'--';
+  const rows=record.events.map(event=>{
+    const tracking=event.tracking||{},f=event.features||{};
+    const change=event.price>0&&Number.isFinite(tracking.last_price)?(tracking.last_price/event.price-1)*100:null;
+    return `<tr><td>${escapeAttr(date(event.triggered_at))}</td><td>${fmtPrice(event.price)}</td><td>${fmtPrice(tracking.last_price)}</td><td>${fmtChange(change)}</td><td>${fmtChange(tracking.max_gain_pct)}</td><td>${fmtChange(tracking.max_drawdown_pct)}</td></tr><tr class="observation-evidence"><td colspan="6">发现依据：近1小时 ${fmtChange(f.return60)} · 5分钟成交/流动性 ${numeric(f.turnover,'%')} · 相对量能 ${numeric(f.volume_ratio,'x')}<br>触发时：${escapeAttr(prelaunchLabels[event.classification]||'状态未知')} · 市场${escapeAttr(marketRegimeLabel(event.market))} · 风险${event.risk_status==='PASS'?'通过':event.risk_status==='WARN'?'警惕':event.risk_status==='FAIL'?'未通过':'未知'} · $100 / $1K滑点 ${numeric(event.slippage_100_pct,'%')} / ${numeric(event.slippage_1000_pct,'%')}<br>最后同池采样：${escapeAttr(tracking.last_price_at?new Date(tracking.last_price_at).toLocaleString('zh-CN',{hour12:false}):'等待采样')} · 池子 ${escapeAttr(event.pair||'--')}</td></tr>`;
+  }).join('');
+  return `<div class="detail-section"><div class="section-header"><span class="section-heading">启动前观察记录</span><span class="section-time">近7天 · ${record.trigger_count}次触发</span></div><div class="hint">${escapeAttr(observationStatus(token,record))}。发现价格与依据已固定；新触发追加记录。试验规则未通过盈利验证。</div><div class="observation-table" role="region" aria-label="观察触发与后续表现" tabindex="0"><table class="history-table"><thead><tr><th>发现时间</th><th>发现价格</th><th>最后同池价格</th><th>发现后涨跌</th><th>最高涨幅</th><th>最大回撤</th></tr></thead><tbody>${rows}</tbody></table></div><div class="hint">以上为触发池子的采样价格变化，未扣手续费和滑点；最大回撤指采样高点后的最大跌幅。采样中断时保留最后价格，历史记录不代表当前有效信号。</div></div>`;
+}
 function prelaunchHTML(token){
+  if(observationOf(token.token_address))return '';
   const state=prelaunchState(token);
   if(!state)return '';
   const {item,status}=state,f=item.features||{};
-  const labels={observing:'新的潜力观察，等待后续验证',expired:'本轮已过5分钟观察窗，等待新异动',setup_ended:'本轮量价条件已退出',stale_data:'数据待更新',risk_unknown:'风险数据待更新',risk_blocked:'风险未通过',already_started:'结构已启动，退出提前观察',market_blocked:'市场环境阻断',slippage_unknown:'滑点数据待更新',slippage_blocked:'滑点超过准入上限'};
+  const labels=prelaunchLabels;
   return `<div class="early-warning-strip${livePrelaunch(token)?' active':''}"><div class="early-warning-heading"><strong>启动前观察 · 待验证</strong><span class="early-warning-meta">本轮触发 ${escapeAttr(timeAgo(new Date(item.triggered_at*1000).toISOString()))}</span></div><div class="early-warning-facts"><span>近1小时 <b>${escapeAttr(fmtChange(f.return60))}</b></span><span>5分钟成交/流动性 <b>${f.turnover==null?'--':Number(f.turnover).toFixed(2)+'%'}</b></span><span>温和量能 <b>${f.volume_ratio==null?'--':Number(f.volume_ratio).toFixed(2)+'x'}</b></span></div><div class="early-warning-judgment"><b>${escapeAttr(labels[status]||'等待数据核查')}</b> · 独立事件，不沿用旧 A 时间；历史规则未通过盈利验证</div>${status==='slippage_blocked'?`<div class="hint">$100 / $1K 滑点 ${item.slippage_100_pct==null?'--':Number(item.slippage_100_pct).toFixed(2)+'%'} / ${item.slippage_1000_pct==null?'--':Number(item.slippage_1000_pct).toFixed(2)+'%'} · 上限 0.30% / 0.50%</div>`:''}</div>`;
 }
 function launchedStage(stage){return /^(first_start|first_wave|pullback|base|second_start)/.test(stage||'');}
@@ -593,31 +634,34 @@ function mergeTokens(rows) {
 }
 
 function renderTokenList() {
-  const filtered = tokenData.filter(t => {
+  const records=observationTokens();
+  const filtered = (observationsOnly?records:tokenData).filter(t => {
     if(!searchTerm)return true;
     const s=searchTerm.toLowerCase();
     return (t.token_symbol||'').toLowerCase().includes(s)||(t.token_name||'').toLowerCase().includes(s)||(t.token_address||'').toLowerCase().includes(s);
   });
   const visible = (watchlistOnly ? filtered.filter(t=>watchlist.has(String(t.token_address||'').toLowerCase())) : filtered)
-    .sort((a,b)=>candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
+    .sort((a,b)=>observationsOnly?observationOf(b.token_address).latest_triggered_at-observationOf(a.token_address).latest_triggered_at:candidatePriority(b,structureOf(b.token_address))-candidatePriority(a,structureOf(a.token_address))||b.indicator_score-a.indicator_score);
   const activeCount=tokenData.filter(t=>liveEarlyWarning(t)).length;
   const potentialCount=tokenData.filter(t=>livePrelaunch(t)).length;
-  document.getElementById('tokenCount').textContent = `${potentialCount?`潜力观察 ${potentialCount} · `:''}前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}`;
-  document.getElementById('listHint').hidden=potentialCount>0||activeCount>0||tokenData.length===0||watchlistOnly||!!searchTerm;
+  document.getElementById('tokenCount').textContent = `${potentialCount?`潜力观察 ${potentialCount} · `:''}前置异动 ${activeCount} · 监控 ${tokenData.length} · 自选 ${watchlist.size}${records.length?` · 观察记录 ${records.length}`:''}`;
+  document.getElementById('observationToggle').textContent=`仅看观察记录${observationLoaded?` · ${records.length}`:''}`;
+  document.getElementById('listHint').hidden=observationsOnly||potentialCount>0||activeCount>0||tokenData.length===0||watchlistOnly||!!searchTerm;
   const html=visible.map(t=>{
       const sel=t.token_address===selectedToken?' selected':'';
       const state=structureState(structureOf(t.token_address),Number(t.price_usd));
       const warning=liveEarlyWarning(t);
       const potential=livePrelaunch(t);
+      const record=observationOf(t.token_address);
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
       const snapshotAge=Date.now()-Date.parse(t.observed_at);
-      const listState=!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':potential?`启动前观察 · 触发${timeAgo(new Date(potential.triggered_at*1000).toISOString())} · 待验证`:warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
+      const listState=observationsOnly&&record?`${timeAgo(new Date(record.latest_triggered_at*1000).toISOString())}入选 · ${t.archive?'历史档案':Date.now()/1000-record.latest_triggered_at>300?'已过观察窗':livePrelaunch(t)?'新观察 · 待验证':'待核查或阻断'}`:!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':potential?`启动前观察 · 触发${timeAgo(new Date(potential.triggered_at*1000).toISOString())} · 待验证`:warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
       return `<button class="token-btn${sel}${warning||potential?' signal-active':''}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="sym">${escapeAttr(t.token_symbol)}</span><span class="token-age">${escapeAttr(listState)}</span></span>
+        <span class="token-main"><span class="token-heading"><span class="sym">${escapeAttr(t.token_symbol)}</span>${record?'<span class="observation-mark">曾入选</span>':''}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
     }).join('');
-  document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':watchlistOnly?'自选中暂无代币':'当前没有监控代币'}</div>`;
+  document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':observationsOnly?observationLoaded?'近7天暂无观察记录':'观察记录暂未加载，正在重试':watchlistOnly?'自选中暂无代币':'当前没有监控代币'}</div>`;
 }
 
 function selectToken(token){selectedToken=token;renderTokenList();loadSelectedDetail(token);}
@@ -656,12 +700,18 @@ function makeMarketChart(pool, markets) {
 }
 
 function renderDetail() {
+  const archive=observationsOnly&&observationOf(selectedToken);
+  if(archive&&!tokenData.some(t=>t.token_address===selectedToken)){
+    renderedKey='';
+    document.getElementById('detailPanel').innerHTML=`<div class="detail-section"><div class="section-header"><span class="section-heading">${escapeAttr(archive.symbol)}</span><span class="section-address">${escapeAttr(selectedToken)}</span></div><div class="hint">历史档案 · 当前不在监控列表</div></div>${observationHistoryHTML({token_address:selectedToken,archive:true})}`;
+    return;
+  }
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
   if(!t){renderedKey='';document.getElementById('detailPanel').innerHTML=`<div class="empty-state">${selectedToken?'正在加载代币详情...':'选择左侧代币查看详情'}</div>`;return;}
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t));
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t))+'|'+JSON.stringify(observationOf(t.token_address));
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -704,6 +754,7 @@ function renderDetail() {
     </div>
   </div>
 
+  ${observationHistoryHTML(t)}
   <div class="detail-section structure-section">
       <div class="section-header">
         <span class="section-heading">结构阶段</span>
@@ -991,14 +1042,30 @@ function syncWatchlistToggle(){
   watchlistToggle.setAttribute('aria-pressed',String(watchlistOnly));
 }
 syncWatchlistToggle();
-watchlistToggle.addEventListener('click',()=>{watchlistOnly=!watchlistOnly;syncWatchlistToggle();renderTokenList();});
+function setObservationOnly(value){
+  observationsOnly=value;
+  localStorage.setItem(OBSERVATION_ONLY_KEY,value?'1':'0');
+  if(value){watchlistOnly=false;localStorage.setItem(WATCHLIST_ONLY_KEY,'0');syncWatchlistToggle();}
+  const button=document.getElementById('observationToggle');
+  button.classList.toggle('active',value);
+  button.setAttribute('aria-pressed',String(value));
+  const choices=value?observationTokens():tokenData;
+  if(!choices.some(t=>t.token_address===selectedToken))selectedToken=choices[0]?.token_address||null;
+  renderTokenList();
+  if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
+}
+document.getElementById('observationToggle').classList.toggle('active',observationsOnly);
+document.getElementById('observationToggle').setAttribute('aria-pressed',String(observationsOnly));
+document.getElementById('observationToggle').addEventListener('click',()=>setObservationOnly(!observationsOnly));
+watchlistToggle.addEventListener('click',()=>{watchlistOnly=!watchlistOnly;if(watchlistOnly&&observationsOnly)setObservationOnly(false);syncWatchlistToggle();renderTokenList();});
 watchlistToggle.addEventListener('click',()=>localStorage.setItem(WATCHLIST_ONLY_KEY,watchlistOnly?'1':'0'));
 const tokenList=document.getElementById('tokenList');
 tokenList.addEventListener('click',e=>{const button=e.target.closest('.token-btn');if(button)selectToken(button.dataset.token);});
 
 function showOverview(rows, cachedAt){
   tokenData=rows.filter(t=>t.indicator_score>0);
-  if(!tokenData.some(t=>t.token_address===selectedToken))selectedToken=tokenData[0]?.token_address||null;
+  const choices=observationsOnly?observationTokens():tokenData;
+  if(!choices.some(t=>t.token_address===selectedToken))selectedToken=choices[0]?.token_address||null;
   renderTokenList();
   if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
   const times=tokenData.map(t=>Date.parse(t.observed_at)).filter(Number.isFinite);
@@ -1007,6 +1074,7 @@ function showOverview(rows, cachedAt){
 }
 
 async function loadSelectedDetail(address){
+  if(observationsOnly&&observationOf(address)&&!tokenData.some(t=>t.token_address===address)){selectedDetail=null;renderDetail();return;}
   ensureStructure(address);
   const cached=detailCache.get(address);
   if(cached?.rows){
@@ -1055,13 +1123,20 @@ function refreshStructure(){
 }
 
 function refreshEarlyWarning(){
-  return Promise.all([fetchJSON('/api/early-warning'),fetchJSON('/api/prelaunch').catch(()=>null)]).then(([result,potential])=>{
-    earlyWarningRows=new Map((result.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
+  return Promise.all([fetchJSON('/api/early-warning').catch(()=>null),fetchJSON('/api/prelaunch').catch(()=>null)]).then(([result,potential])=>{
+    earlyWarningRows=new Map((result?.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     prelaunchReportAt=potential?.calculated_at||null;
     prelaunchRows=new Map((potential?.available===true?potential.items||[]:[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
+    if(Array.isArray(potential?.records)){
+      observationRecords=new Map(potential.records.filter(r=>typeof r.token_address==='string'&&Array.isArray(r.events)).map(r=>[r.token_address.toLowerCase(),{...r,token_address:r.token_address.toLowerCase()}]));
+      observationLoaded=true;
+    }
     notifyEarlyWarnings();
     renderTokenList();
-    if(selectedToken)renderDetail();
+    if(observationsOnly&&!observationOf(selectedToken)){
+      selectedToken=observationTokens()[0]?.token_address||null;
+      if(selectedToken)loadSelectedDetail(selectedToken);else renderDetail();
+    }else if(selectedToken)renderDetail();
   }).catch(()=>{});
 }
 

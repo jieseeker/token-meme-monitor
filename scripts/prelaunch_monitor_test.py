@@ -2,6 +2,7 @@
 import sqlite3
 import json
 import tempfile
+from math import isclose
 from pathlib import Path
 from datetime import datetime, timezone
 import prelaunch_monitor as p
@@ -45,6 +46,21 @@ assert event['entry_price'] == 101, 'paper entry uses the delayed same-pool samp
 assert event['strategy_reason'] == 'stop' and event['strategy_gross_pct'] < -10, 'stop gap precedes the later rally'
 assert event['outcomes']['15m'] > 28, 'endpoint and strategy returns have separate meanings'
 assert event['outcome_state'] == 'resolved'
+p.track(conn,event,now+15001)
+assert event['price']==100 and event['triggered_at']==now, 'tracking must preserve the discovery anchor'
+assert event['tracking']['last_price']==115 and isclose(event['tracking']['max_gain_pct'],30)
+assert event['tracking']['max_drawdown_pct'] < -19, 'drawdown is measured from the preceding sampled peak'
+tracking=dict(event['tracking'])
+p.track(conn,event,now+15100)
+assert event['tracking']==tracking, 'the incremental cursor must not replay old extrema'
+conn.execute('INSERT INTO snapshots VALUES (?,?,?,?)',('t','other',p.iso(now+14900),9999))
+p.track(conn,event,now+15200)
+assert event['tracking']['last_price']==115, 'a different pool cannot change the observation return'
+older=dict(event,symbol='T',classification='market_blocked',features={'turnover':1.3},market='risk_off')
+newer=dict(older,triggered_at=now+2000,price=105)
+records=p.observation_records([older,newer])
+assert len(records)==1 and records[0]['trigger_count']==2 and records[0]['events'][0]['price']==105
+assert records[0]['events'][1]['price']==100, 'a new event appends rather than replaces the old trigger'
 with tempfile.TemporaryDirectory() as directory:
     root=Path(directory)
     db=root/'source.db'
@@ -67,10 +83,24 @@ with tempfile.TemporaryDirectory() as directory:
     report=json.loads((root/'latest.json').read_text())
     assert report['items'][0]['classification']=='stale_data'
     assert report['profitability_validated'] is False
+    assert len(report['records'])==1 and report['records'][0]['events'][0]['features']['turnover']==3
     source=sqlite3.connect(db)
     source.execute('UPDATE snapshots SET observed_at=? WHERE observed_at=?',(p.iso(now-30-1800-200),p.iso(now-30-1800)))
     source.commit()
     assert p.candidates(source,{'t':'T'},now)['t'][1] is not None, 'historical five-minute samples tolerate real provider cadence without using future observations'
+    for offset,price in ((200,120),(260,110)):
+        source.execute('INSERT INTO snapshots VALUES (?,?,?,?,?,?,?,?,?)',('t','pool',p.iso(now+offset),price,100,100000,15,10,'[]'))
+    source.commit()
     source.close()
+    p.scan(db,'unused',root,now+300)
+    responses['/api/tokens']=[]
+    p.scan(db,'unused',root,now+360)
+    archived=json.loads((root/'latest.json').read_text())
+    assert not archived['items'] and len(archived['records'])==1, 'leaving the main list does not erase observation history'
+    retained=archived['records'][0]['events'][0]
+    assert retained['price']==100 and retained['tracking']['peak_price']==120 and retained['tracking']['last_price']==110, 'restart preserves anchors and sampled peaks'
+    assert retained['tracking']['max_drawdown_pct'] < -8
+    p.scan(db,'unused',root,now+8*86400)
+    assert json.loads((root/'latest.json').read_text())['records']==[], 'seven-day retention applies to archives'
     p.fetch=original_fetch
 print('prelaunch monitor checks passed')

@@ -22,6 +22,7 @@ const row = {
 };
 let depthAt = new Date().toISOString();
 let structureGate = null;
+let prelaunchResponse = null;
 const calls=[];
 class TestNotification {
   static permission='granted';
@@ -37,6 +38,7 @@ const storage = new Map([
 const localStorage = {getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)};
 const fetch = async url => { calls.push(url);
   const at=Date.parse(row.observed_at);
+  if(url==='/api/prelaunch')return {ok:true,json:async()=>prelaunchResponse};
   if(url==='/api/tokens')return {ok:true,json:async()=>[
     {token_address:'0xtoken',token_symbol:row.token_symbol,token_name:'Test',indicator_score:65,indicator_reasons:row.signal_reasons,observed_at:row.observed_at},
     {token_address:'0xother',token_symbol:'OTHER',token_name:'Other',indicator_score:20,indicator_reasons:'[]',observed_at:new Date(Date.now()-180000).toISOString()},
@@ -90,6 +92,43 @@ setImmediate(async () => {
   vm.runInContext(`marketRegime='risk_on';prelaunchReportAt=new Date(Date.now()-121000).toISOString()`,context);
   assert.equal(vm.runInContext(`livePrelaunch({token_address:'0xprobe',observed_at:new Date().toISOString()})`,context),null,'stale report must fail closed');
   vm.runInContext(`prelaunchRows.clear()`,context);
+  vm.runInContext(`
+    const trigger=Math.floor(Date.now()/1000);
+    const discovery={pair:'0xpair',triggered_at:trigger-600,price:100,classification:'observing',market:'neutral',features:{return60:1.2,turnover:1.3,volume_ratio:1.4},tracking:{last_price:110,last_price_at:new Date().toISOString(),max_gain_pct:20,max_drawdown_pct:-5}};
+    observationRecords.set('0xtoken',{token_address:'0xtoken',symbol:'TEST',events:[discovery,{...discovery,triggered_at:trigger-3600,price:90}]});
+    observationRecords.set('0xarchive',{token_address:'0xarchive',symbol:'ARCHIVE',events:[{...discovery,triggered_at:trigger-60}]});
+    observationLoaded=true;renderTokenList();
+  `,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('曾入选'),'expired observations keep a lasting marker');
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('ARCHIVE'),'historical tokens never enter the normal main list');
+  vm.runInContext(`watchlistOnly=true;setObservationOnly(true)`,context);
+  assert.equal(vm.runInContext('watchlistOnly',context),false,'observation view does not silently intersect the favorites filter');
+  const observationList=document.getElementById('tokenList').innerHTML;
+  assert.equal((observationList.match(/class="token-btn/g)||[]).length,2,'repeat events are grouped into one row per token');
+  assert.ok(observationList.indexOf('ARCHIVE')<observationList.indexOf('TEST'),'observation view sorts by newest trigger');
+  vm.runInContext(`selectToken('0xarchive');showOverview(tokenData)`,context);
+  assert.equal(vm.runInContext('selectedToken',context),'0xarchive','refresh preserves the selected historical archive');
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('历史档案'),'offline archive remains inspectable');
+  assert.ok(!calls.includes('/api/token/0xarchive/summary'),'archives must not be treated as current monitored tokens');
+  const recordHTML=vm.runInContext(`observationHistoryHTML({token_address:'0xtoken'})`,context);
+  assert.ok(recordHTML.includes('$100.00')&&recordHTML.includes('$90.00'),'every original discovery price stays visible');
+  assert.ok(recordHTML.includes('1.30%')&&recordHTML.includes('1.40x'),'frozen discovery features are shown');
+  assert.ok(recordHTML.includes('+10.0%')&&recordHTML.includes('-5.0%'),'same-pool tracking and drawdown are shown');
+  assert.ok(!recordHTML.includes('<details>'),'observation history is flat, without expansion controls');
+  await vm.runInContext('refreshEarlyWarning()',context);
+  assert.equal(vm.runInContext(`observationOf('0xtoken').events.length`,context),2,'a missing live report must not erase archive records');
+  prelaunchResponse={available:false,records:JSON.parse(vm.runInContext(`JSON.stringify([...observationRecords.values()])`,context))};
+  await vm.runInContext('refreshEarlyWarning()',context);
+  assert.equal(vm.runInContext('prelaunchRows.size',context),0,'stale history never re-enables live eligibility');
+  assert.equal(vm.runInContext(`observationOf('0xtoken').events.length`,context),2,'stale API reports still supply the archive after reload');
+  prelaunchResponse=null;
+  vm.runInContext(`searchTerm='ARCHIVE';renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('ARCHIVE')&&!document.getElementById('tokenList').innerHTML.includes('TEST'),'search works within the observation archive');
+  vm.runInContext(`searchTerm=''`,context);
+  vm.runInContext(`observationRecords.get('0xarchive').events[0].triggered_at=Math.floor(Date.now()/1000)-8*86400;renderTokenList()`,context);
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('ARCHIVE'),'seven-day expiry also applies while the worker is unavailable');
+  vm.runInContext(`setObservationOnly(false);observationRecords.clear();selectToken('0xtoken')`,context);
+  await new Promise(setImmediate);
   assert.ok(vm.runInContext(`prelaunchHistoryHTML({events:1,summary:{'neutral/observing':{events:1,'15m':{n:1,mean_net_0_3_pct:.2}}}})`,context).includes('1 / +0.20%'),'research outcomes show their own denominator and cost');
   assert.ok(document.getElementById('marketBanner').textContent.includes('风险偏好 · 允许继续确认'),'market gate is visible on the first screen');
   assert.ok(document.getElementById('marketBanner').textContent.includes('61.5%上涨 · 中位 +0.4%'),'market banner explains the regime using live breadth and median');
@@ -300,7 +339,7 @@ assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1
   assert.ok(!html.includes('id="stageFilter"'), 'stage filter should be removed');
   assert.ok(html.includes('id="watchlistToggle"'), 'watchlist filter should remain');
   assert.ok(html.includes('aria-label="只看自选"'), 'icon-only watchlist filter needs an accessible name');
-  assert.equal(document.getElementById('watchlistToggle').textContent,'★','active watchlist filter should use the same filled star as detail');
+  assert.equal(document.getElementById('watchlistToggle').textContent,'☆','leaving observation mode does not re-enable the favorites filter');
   assert.ok(!detail.includes('0xlegacy'));
   const list = document.getElementById('tokenList').innerHTML;
   assert.equal((list.match(/class="token-btn/g) || []).length, 2);

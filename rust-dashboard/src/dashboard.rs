@@ -1666,7 +1666,7 @@ mod oi_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = root.join("data/monitor.db");
         let now = chrono::Utc::now().timestamp();
-        let report = serde_json::json!({"version":"prelaunch_activity_probe_v1","calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339(),"items":[{"classification":"observing"}]});
+        let report = serde_json::json!({"version":"prelaunch_activity_probe_v1","calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339(),"items":[{"classification":"observing"}],"records":[{"token_address":"historical"}]});
         std::fs::write(directory.join("latest.json"), report.to_string()).unwrap();
         assert_eq!(
             super::prelaunch_report(path.to_str().unwrap(), now)["available"],
@@ -1675,6 +1675,14 @@ mod oi_tests {
         assert_eq!(
             super::prelaunch_report(path.to_str().unwrap(), now + 121)["items"],
             serde_json::json!([])
+        );
+        assert_eq!(
+            super::prelaunch_report(path.to_str().unwrap(), now + 121)["records"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "history survives when live eligibility expires"
         );
         std::fs::remove_dir_all(root).unwrap();
     }
