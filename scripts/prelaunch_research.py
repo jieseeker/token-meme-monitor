@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Point-in-time prelaunch research; standard library only, never places orders."""
 import argparse
-import bisect
 import csv
 import gzip
+import hashlib
 import itertools
 import json
 import math
@@ -172,7 +172,7 @@ def stats(trades, cost=.3):
     by_token = defaultdict(float)
     changes, slots = defaultdict(float), defaultdict(int)
     for t in trades:
-        by_token[t['symbol']] += t['gross']-cost
+        by_token[t['token']] += t['gross']-cost
         slots[t['entry_at']] += 1
         slots[t['exit_at']] -= 1
         last = 0
@@ -192,13 +192,13 @@ def stats(trades, cost=.3):
         high = max(high, equity)
         dd = max(dd, (high-equity)/high*100)
     best = max(by_token, key=by_token.get) if by_token else None
-    rest = [t['gross']-cost for t in trades if t['symbol'] != best]
+    rest = [t['gross']-cost for t in trades if t['token'] != best]
     return dict(n=len(trades), tokens=len({t['token'] for t in trades}), cost_pct=cost,
                 mean=st.mean(returns) if returns else None, median=st.median(returns) if returns else None,
                 win_pct=sum(x > 0 for x in returns)/len(returns)*100 if returns else None,
                 profit_factor=gains/losses if losses else None, max_drawdown_pct=dd,
                 initial_capital_usd=capital, hit20=sum(t['hit20'] for t in trades), hit10=sum(t['hit10'] for t in trades),
-                best_token=best, mean_without_best_token=st.mean(rest) if rest else None,
+                best_token=best, best_token_symbol=next((t['symbol'] for t in trades if t['token'] == best), None), mean_without_best_token=st.mean(rest) if rest else None,
                 pnl_by_token=dict(sorted(by_token.items(), key=lambda x: -x[1])))
 
 
@@ -280,14 +280,23 @@ def research(input_path):
     ranking = lambda r: min(r['train']['mean'], r['validation']['mean'])
     chosen = max(qualified or adequate or scores, key=lambda r: ranking(r) if r['train']['mean'] is not None and r['validation']['mean'] is not None else -999)
     events = rally_events(series)
+    lookup = {(row['token'], row['at']): (row, f) for row, f, _, _ in records}
+    for event in events:
+        event['before_onset'] = {str(minutes): lookup.get((event['token'], event['onset_at']-minutes*60), (None, None))[1] for minutes in (5, 15, 30, 60)}
     test_lo = start+(end-start)*.8
-    test_events = [e for e in events if e['base_at'] >= test_lo and e['target_at'] <= end]
+    test_events = [e for e in events if e['base_at'] >= test_lo and e['onset_at'] <= end-HORIZON-STEP]
     chosen_trades, coverage = evaluate(records, candidates[chosen['rule']], 'test')
     baseline_trades, _ = evaluate(records, candidates['prelaunch_baseline'], 'test')
+    indices = {token: {r['at']: i for i, r in enumerate(rows)} for token, rows in series.items()}
+    secondary_records = [(row, f, trade(series[row['token']], indices[row['token']][row['at']], 10), split) for row, f, _, split in records if split == 'test']
+    secondary_trades, _ = evaluate(secondary_records, candidates[chosen['rule']], 'test')
     captured = []
     for e in test_events:
-        alerts = [t for t in chosen_trades if t['token'] == e['token'] and e['onset_at']-3600 <= t['alert_at'] < e['onset_at'] and t['entry_at'] <= e['onset_at']]
-        captured.append(dict(e, captured=bool(alerts), lead_minutes=(e['onset_at']-min(t['alert_at'] for t in alerts))/60 if alerts else None))
+        alerts = [t for t in chosen_trades if t['token'] == e['token'] and e['onset_at']-3600 <= t['alert_at'] < e['onset_at'] and t['entry_at'] < e['onset_at']]
+        prior = [lookup[(e['token'], at)] for at in range(e['onset_at']-3600, e['onset_at'], STEP) if (e['token'], at) in lookup]
+        eligible_prior = [f for row, f in prior if eligible(f, row)]
+        reason = None if alerts else 'history_gap' if not prior else 'prelaunch_or_market_gate' if not eligible_prior else 'pattern_absent' if not any(candidates[chosen['rule']](f) for f in eligible_prior) else 'position_or_entry_coverage'
+        captured.append(dict(e, captured=bool(alerts), miss_reason=reason, lead_minutes=(e['onset_at']-min(t['alert_at'] for t in alerts))/60 if alerts else None))
     training = []
     until = {}
     for row, f, outcome, split in records:
@@ -303,10 +312,10 @@ def research(input_path):
     train_test = chosen['rule']
     test_summary = stats(chosen_trades)
     eligible_for_shadow = bool(qualified) and test_summary['n'] >= 10 and test_summary['tokens'] >= 3 and (test_summary['mean'] or 0) > 0 and (test_summary['mean_without_best_token'] or 0) > 0
-    return dict(window=dict(start=iso(start), end=iso(end), tokens=len(series), rows=sum(map(len, series.values())), feature_rows=len(records)),
-                methods=dict(grid_seconds=STEP, entry='next bucket, no fill above alert +5%', exit='observed -8% stop / +20% take profit / 4h timeout', costs=[.3, .5], split='60/20/20 chronological, full 4h horizon purged at boundaries', sizing='$100 fixed, one open position per token, concurrent positions fully funded', slippage='historical actual slippage unavailable; assumed cost only', source_time_unverified=True, rally='first +20% from trailing 4h trough; onset is first +5%; non-overlapping episodes', capture='alert within 1h before onset, delayed entry no later than onset', search_rules=len(scores)),
+    return dict(window=dict(start=iso(start), end=iso(end), tokens=len(series), rows=sum(map(len, series.values())), feature_rows=len(records), export_sha256=hashlib.sha256(Path(input_path).read_bytes()).hexdigest(), script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),
+                methods=dict(grid_seconds=STEP, entry='next bucket, no fill above alert +5%', exit='observed -8% stop / +20% take profit / 4h timeout', costs=[.3, .5], split='60/20/20 chronological, full 4h horizon purged at boundaries', sizing='$100 fixed, one open position per token, concurrent positions fully funded', slippage='historical actual slippage unavailable; assumed cost only', source_time_unverified=True, rally='first +20% from trailing 4h trough; onset is first +5%; non-overlapping episodes', capture='alert within 1h before onset, delayed entry strictly before onset', search_rules=len(scores)),
                 selection=dict(rule=train_test, passed_train_validation=bool(qualified), qualified_rules=len(qualified), heldout_pass=eligible_for_shadow, action='shadow_research_only' if eligible_for_shadow else 'reject_production_promotion'),
-                selected=chosen, test=dict(cost_0_3=test_summary, cost_0_5=stats(chosen_trades, .5), coverage=coverage, baseline=stats(baseline_trades), rally_events=len(test_events), captured=sum(e['captured'] for e in captured), events=captured, trades=[{k:v for k,v in t.items() if k!='path'} for t in chosen_trades]),
+                selected=chosen, test=dict(cost_0_3=test_summary, cost_0_5=stats(chosen_trades, .5), secondary_10pct_exit=stats(secondary_trades), coverage=coverage, baseline=stats(baseline_trades), rally_events=len(test_events), captured=sum(e['captured'] for e in captured), events=captured, trades=[{k:v for k,v in t.items() if k!='path'} for t in chosen_trades]),
                 all_rallies=events, training_feature_associations=associations, train_validation_rules=sorted(scores, key=lambda r: ranking(r) if r['train']['mean'] is not None and r['validation']['mean'] is not None else -999, reverse=True))
 
 
