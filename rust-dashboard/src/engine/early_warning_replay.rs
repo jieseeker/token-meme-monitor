@@ -865,10 +865,17 @@ fn slippage_estimates(conn: &Connection, pair: &str) -> Result<Value> {
         return Ok(json!([]));
     };
     let depth: Value = serde_json::from_str(&raw)?;
+    let fresh = depth["available"] == true
+        && depth["stale"] != true
+        && depth["calculated_at"]
+            .as_str()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_some_and(|at| (0..=300).contains(&(Utc::now().timestamp() - at.timestamp())));
     let bands = depth["bands_pct"].as_array();
     let capacities = depth["pressure_usd"].as_array();
     let estimates = [100.0, 500.0, 1000.0]
         .into_iter()
+        .filter(|_| fresh)
         .filter_map(|order_usd| {
             let bands: Option<Vec<f64>> = bands?.iter().map(|value| value.as_f64()).collect();
             let capacities: Option<Vec<f64>> =
@@ -881,7 +888,7 @@ fn slippage_estimates(conn: &Connection, pair: &str) -> Result<Value> {
     Ok(json!({
         "estimates":estimates,
         "depth_calculated_at":depth["calculated_at"],
-        "stale":depth["stale"] == true,
+        "stale":!fresh,
         "source":"cached_pool_depth"
     }))
 }
@@ -982,7 +989,7 @@ mod tests {
         insert(&conn, now, 101.0, 300.0, 80, 20);
         let depth = json!({
             "available":true,
-            "stale":true,
+            "stale":false,
             "bands_pct":[1.0,2.0,5.0],
             "pressure_usd":[1000.0,3000.0,9000.0],
             "calculated_at":chrono::DateTime::from_timestamp(now,0).unwrap().to_rfc3339()
@@ -994,7 +1001,7 @@ mod tests {
         ).unwrap();
         let report = current(&path).unwrap();
         let item = &report["items"][0];
-        assert_eq!(item["slippage_estimates"]["stale"], true);
+        assert_eq!(item["slippage_estimates"]["stale"], false);
         assert_eq!(item["token_address"], "token");
         assert_eq!(item["status"], "strong_anomaly");
         assert!((item["volume_acceleration"].as_f64().unwrap() - 3.0).abs() < 1e-9);
@@ -1013,6 +1020,37 @@ mod tests {
             item["slippage_estimates"]["estimates"][2]["buy_slippage_pct"],
             1.0
         );
+        let timestamp = |offset| {
+            DateTime::from_timestamp(now + offset, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        for (calculated_at, stale, available) in [
+            (json!(timestamp(-600)), false, true),
+            (json!(timestamp(0)), true, true),
+            (Value::Null, false, true),
+            (json!("invalid"), false, true),
+            (json!(timestamp(600)), false, true),
+            (json!(timestamp(0)), false, false),
+        ] {
+            let mut invalid_depth: Value = serde_json::from_str(&depth).unwrap();
+            invalid_depth["calculated_at"] = calculated_at;
+            invalid_depth["stale"] = json!(stale);
+            invalid_depth["available"] = json!(available);
+            conn.execute(
+                "UPDATE detail_cache SET value_json=?1 WHERE kind='depth' AND cache_key='p'",
+                [invalid_depth.to_string()],
+            )
+            .unwrap();
+            let result = current(&path).unwrap();
+            let slippage = &result["items"][0]["slippage_estimates"];
+            assert_eq!(
+                slippage["estimates"],
+                json!([]),
+                "unusable depth must not supply executable slippage: {invalid_depth}"
+            );
+            assert_eq!(slippage["stale"], true);
+        }
         std::fs::remove_file(&path).unwrap();
     }
 
