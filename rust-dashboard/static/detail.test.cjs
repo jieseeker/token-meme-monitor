@@ -129,7 +129,7 @@ setImmediate(async () => {
   assert.ok(!recordHTML.includes('<table')&&!recordHTML.includes('<br>'),'observation history no longer compresses metrics and explanations into table rows');
   assert.equal((recordHTML.match(/class="observation-event"/g)||[]).length,2,'every trigger remains visible in a separated event section');
   assert.ok(recordHTML.indexOf('observation-result')<recordHTML.indexOf('observation-context'),'price comparison and change lead discovery evidence');
-  assert.ok(recordHTML.includes('发现时依据')&&recordHTML.includes('触发时准入')&&recordHTML.includes('当前状态'),'original context stays separate from live status');
+  assert.ok(recordHTML.includes('发现前1小时涨跌')&&recordHTML.includes('风险检查')&&recordHTML.includes('当前状态'),'compact records retain discovery evidence and risk context beside live status');
   assert.ok(recordHTML.includes('id="observationEvents"')&&recordHTML.includes('tabindex="0"'),'history is a keyboard-accessible scroll region');
   const historyNode=document.getElementById('observationEvents');
   const detailPanel=document.getElementById('detailPanel');
