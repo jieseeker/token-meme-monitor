@@ -159,6 +159,9 @@ setImmediate(async () => {
   const fixedExitHistory=vm.runInContext(`prelaunchHistoryHTML({events:16,summary:{'risk_on/observing':{events:16,'4h':{n:5,mean_net_0_3_pct:-.59},fixed_exit:{n:4,profit_factor:.316}}}})`,context);
   assert.ok(fixedExitHistory.includes('4 / 0.32')&&fixedExitHistory.includes('5 / -0.59%'),'fixed-exit PF must show its own denominator separately from endpoint samples and event count');
   assert.ok(fixedExitHistory.includes('已退出 / PF')&&fixedExitHistory.includes('并扣0.3%假设成本'),'fixed-exit column explains its denominator and cost basis');
+  assert.ok(fixedExitHistory.includes('class="history-table-scroll"')&&fixedExitHistory.includes('aria-label="启动前观察验证表" tabindex="0"'),'research table scrolls inside its own keyboard-focusable region');
+  const volumeHistory=vm.runInContext(`earlyHistoryHTML({reports:[{replay_until:new Date().toISOString(),volume_events:1}]})`,context);
+  assert.ok(volumeHistory.includes('class="history-table-scroll"')&&volumeHistory.includes('aria-label="历史量能回放表" tabindex="0"'),'volume replay shares the bounded table scrolling behavior');
   assert.ok(vm.runInContext(`prelaunchHistoryHTML({summary:{'neutral/observing':{events:1}}})`,context).includes('0 / --'),'legacy reports without fixed-exit samples must remain readable');
   assert.ok(document.getElementById('marketBanner').textContent.includes('风险偏好 · 允许继续确认'),'market gate is visible on the first screen');
   assert.ok(document.getElementById('marketBanner').textContent.includes('61.5%上涨 · 中位 +0.4%'),'market banner explains the regime using live breadth and median');

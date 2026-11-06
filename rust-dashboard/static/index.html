@@ -33,6 +33,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .notify-toggle.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
 .history-panel { position:fixed; z-index:80; right:20px; top:78px; width:min(760px,calc(100vw - 32px)); max-height:min(520px,calc(100vh - 100px)); overflow:auto; padding:16px 18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); box-shadow:0 18px 48px rgba(15,23,42,.22); }
 .history-panel[hidden] { display:none; }
+.history-table-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
+.history-table-scroll:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .history-table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
 .history-table th,.history-table td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
 .history-table th:first-child,.history-table td:first-child { text-align:left; }
@@ -1263,7 +1265,7 @@ function earlyHistoryHTML(result,shadow){
     <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
     <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
   </tr>`;
-  return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`实时影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table>`;
+  return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`实时影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><div class="history-table-scroll" role="region" aria-label="历史量能回放表" tabindex="0"><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table></div>`;
 }
 
 function prelaunchHistoryHTML(report){
@@ -1273,7 +1275,7 @@ function prelaunchHistoryHTML(report){
     const values=['15m','1h','4h'].map(h=>`<td>${Number(item[h]?.n||0)} / ${escapeAttr(fmtSignedPct(item[h]?.mean_net_0_3_pct))}</td>`).join('');
     return `<tr><td>${escapeAttr(marketRegimeLabel(market))}</td><td>${escapeAttr(labels[status]||'待核查')}</td><td>${Number(item.events||0)}</td>${values}<td>${Number(item.fixed_exit?.n||0)} / ${item.fixed_exit?.profit_factor==null?'--':Number(item.fixed_exit.profit_factor).toFixed(2)}</td></tr>`;
   }).join('');
-  return `<div class="section-header" style="margin-top:14px"><span class="section-heading">启动前观察 · 实时试验</span></div><div class="hint">独立事件 ${Number(report?.events||0)} 条。未通过历史盈利验证。5–7分钟延迟模拟入场，涨离提醒价5%则不成交。各周期显示已到期样本数 / 扣0.3%假设成本的持有收益。固定退出列显示已退出样本数 / PF，按+20% / -8% / 4h计算并扣0.3%假设成本，均不代表真实成交收益。</div>${rows?`<table class="history-table"><thead><tr><th>市场</th><th>触发状态</th><th>事件</th><th>15分钟</th><th>1小时</th><th>4小时</th><th>已退出 / PF</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="hint">等待独立事件积累和到期结算。</div>'}`;
+  return `<div class="section-header" style="margin-top:14px"><span class="section-heading">启动前观察 · 实时试验</span></div><div class="hint">独立事件 ${Number(report?.events||0)} 条。未通过历史盈利验证。5–7分钟延迟模拟入场，涨离提醒价5%则不成交。各周期显示已到期样本数 / 扣0.3%假设成本的持有收益。固定退出列显示已退出样本数 / PF，按+20% / -8% / 4h计算并扣0.3%假设成本，均不代表真实成交收益。</div>${rows?`<div class="history-table-scroll" role="region" aria-label="启动前观察验证表" tabindex="0"><table class="history-table"><thead><tr><th>市场</th><th>触发状态</th><th>事件</th><th>15分钟</th><th>1小时</th><th>4小时</th><th>已退出 / PF</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="hint">等待独立事件积累和到期结算。</div>'}`;
 }
 function marketStateHTML(state){
   if(!state)return '';
