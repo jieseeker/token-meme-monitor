@@ -83,7 +83,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .observation-current.new strong { color:var(--accent-strong); }
 .observation-current.blocked strong { color:var(--risk); }
 .observation-note { margin-top:6px; color:var(--muted); font-size:12px; line-height:1.6; }
-.observation-events { list-style:none; }
+.observation-events { list-style:none; max-height:min(360px,55vh); overflow-y:auto; overscroll-behavior-y:contain; scrollbar-gutter:stable; scrollbar-width:thin; scrollbar-color:var(--muted) transparent; padding-right:12px; }
+.observation-events:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
 .observation-event { padding:24px 0; border-bottom:1px solid var(--line); }
 .observation-event:last-child { border-bottom:0; padding-bottom:16px; }
 .observation-event-header { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; margin-bottom:16px; }
@@ -455,7 +456,7 @@ function observationHistoryHTML(token){
       <footer class="observation-source"><span>最后同池采样：${escapeAttr(tracking.last_price_at?new Date(tracking.last_price_at).toLocaleString('zh-CN',{hour12:false}):'等待采样')}</span><span>跟踪池子：${escapeAttr(event.pair||'--')}</span></footer>
     </li>`;
   }).join('');
-  return `<section class="detail-section observation-section" aria-label="启动前观察记录"><div class="section-header"><span class="section-heading">启动前观察记录</span><span class="section-time">近7天 · ${record.trigger_count}次触发</span></div><p class="observation-current ${current.tone}"><span>当前状态</span><strong>${escapeAttr(observationStatus(token,record))}</strong></p><p class="observation-note">发现价格和依据已固定；新触发追加记录。试验观察，尚未通过盈利验证。</p><ol class="observation-events">${rows}</ol><p class="observation-note">以上为原池子的采样价格变化，未扣手续费和滑点。最大回撤为采样高点后的最大跌幅；采样中断时保留最后价格，历史记录不代表当前有效信号。</p></section>`;
+  return `<section class="detail-section observation-section" aria-label="启动前观察记录"><div class="section-header"><span class="section-heading">启动前观察记录</span><span class="section-time">近7天 · ${record.trigger_count}次触发</span></div><p class="observation-current ${current.tone}"><span>当前状态</span><strong>${escapeAttr(observationStatus(token,record))}</strong></p><p class="observation-note">上下滚动查看全部记录。发现价格和依据已固定，新触发追加记录。试验观察，尚未通过盈利验证。</p><ol class="observation-events" id="observationEvents" data-token="${escapeAttr(token.token_address)}" tabindex="0" aria-label="近7天观察事件，可上下滚动">${rows}</ol><p class="observation-note">以上为原池子的采样价格变化，未扣手续费和滑点。最大回撤为采样高点后的最大跌幅；采样中断时保留最后价格，历史记录不代表当前有效信号。</p></section>`;
 }
 function prelaunchHTML(token){
   if(observationOf(token.token_address))return '';
@@ -762,10 +763,19 @@ function makeMarketChart(pool, markets) {
 }
 
 function renderDetail() {
+  const previousEvents=document.getElementById('observationEvents');
+  const sameObservation=previousEvents?.getAttribute('data-token')===selectedToken;
+  const historyScroll=sameObservation?previousEvents.scrollTop:0;
+  const historyFocused=sameObservation&&document.activeElement===previousEvents;
   const archive=observationsOnly&&observationOf(selectedToken);
   if(archive&&!tokenData.some(t=>t.token_address===selectedToken)){
     renderedKey='';
     document.getElementById('detailPanel').innerHTML=`<div class="detail-section"><div class="section-header"><span class="section-heading">${escapeAttr(archive.symbol)}</span><span class="section-address">${escapeAttr(selectedToken)}</span></div><div class="hint">历史档案 · 当前不在监控列表</div></div>${observationHistoryHTML({token_address:selectedToken,archive:true})}`;
+    const events=document.getElementById('observationEvents');
+    if(events){
+      events.scrollTop=historyScroll;
+      if(historyFocused)events.focus({preventScroll:true});
+    }
     return;
   }
   const t=selectedDetail?.token_address===selectedToken?selectedDetail:null;
@@ -869,6 +879,11 @@ function renderDetail() {
 
   `;
 
+  const events=document.getElementById('observationEvents');
+  if(events){
+    events.scrollTop=historyScroll;
+    if(historyFocused)events.focus({preventScroll:true});
+  }
   setSectionTime('structureTime',structureTime);
   renderedKey=key;
   const watchButton=document.getElementById('watchButton');

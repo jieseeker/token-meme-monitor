@@ -130,6 +130,23 @@ setImmediate(async () => {
   assert.equal((recordHTML.match(/class="observation-event"/g)||[]).length,2,'every trigger remains visible in a separated event section');
   assert.ok(recordHTML.indexOf('observation-result')<recordHTML.indexOf('observation-context'),'price comparison and change lead discovery evidence');
   assert.ok(recordHTML.includes('发现时依据')&&recordHTML.includes('触发时准入')&&recordHTML.includes('当前状态'),'original context stays separate from live status');
+  assert.ok(recordHTML.includes('id="observationEvents"')&&recordHTML.includes('tabindex="0"'),'history is a keyboard-accessible scroll region');
+  const historyNode=document.getElementById('observationEvents');
+  const detailPanel=document.getElementById('detailPanel');
+  let historyPanelHTML=detailPanel.innerHTML;
+  Object.defineProperty(detailPanel,'innerHTML',{configurable:true,get(){return historyPanelHTML;},set(value){historyPanelHTML=value;historyNode.scrollTop=0;document.activeElement=null;}});
+  historyNode.focus=()=>{document.activeElement=historyNode;};
+  historyNode.setAttribute('data-token','0xarchive');
+  historyNode.scrollTop=420;
+  document.activeElement=historyNode;
+  vm.runInContext('renderDetail()',context);
+  assert.equal(historyNode.scrollTop,420,'archive refresh preserves the history reading position');
+  assert.equal(document.activeElement,historyNode,'refresh preserves keyboard focus in history');
+  historyNode.setAttribute('data-token','0xtoken');
+  vm.runInContext('renderDetail()',context);
+  assert.equal(historyNode.scrollTop,0,'switching tokens starts history from the newest discovery');
+  Object.defineProperty(detailPanel,'innerHTML',{configurable:true,writable:true,value:historyPanelHTML});
+  document.activeElement=null;
   assert.ok(recordHTML.includes('class="observation-change rise"')&&recordHTML.includes('未扣手续费和滑点'),'price change is emphasized without presenting it as net profit');
   for(const [risk,label] of [['BLOCK','阻断'],['HOLD','暂缓'],['PASS','通过'],['WARN','警告'],['FAIL','未通过'],[null,'未知']]){
     vm.runInContext(`observationRecords.get('0xtoken').events[0].risk_status=${JSON.stringify(risk)}`,context);
