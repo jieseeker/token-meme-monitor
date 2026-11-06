@@ -131,6 +131,12 @@ setImmediate(async () => {
   assert.ok(recordHTML.indexOf('observation-result')<recordHTML.indexOf('observation-context'),'price comparison and change lead discovery evidence');
   assert.ok(recordHTML.includes('发现时依据')&&recordHTML.includes('触发时准入')&&recordHTML.includes('当前状态'),'original context stays separate from live status');
   assert.ok(recordHTML.includes('class="observation-change rise"')&&recordHTML.includes('未扣手续费和滑点'),'price change is emphasized without presenting it as net profit');
+  for(const [risk,label] of [['BLOCK','阻断'],['HOLD','暂缓'],['PASS','通过'],['WARN','警告'],['FAIL','未通过'],[null,'未知']]){
+    vm.runInContext(`observationRecords.get('0xtoken').events[0].risk_status=${JSON.stringify(risk)}`,context);
+    const riskHistory=vm.runInContext(`observationHistoryHTML({token_address:'0xtoken'})`,context);
+    assert.ok(riskHistory.includes(`<dt>风险检查</dt><dd>${label}</dd>`),`discovery risk ${risk} must use the supported Chinese label`);
+  }
+  vm.runInContext(`delete observationRecords.get('0xtoken').events[0].risk_status`,context);
   vm.runInContext(`observationRecords.get('0xtoken').events[0].tracking.last_price=80`,context);
   const fallingObservation=vm.runInContext(`observationHistoryHTML({token_address:'0xtoken'})`,context);
   assert.ok(fallingObservation.includes('class="observation-change fall"')&&fallingObservation.includes('-20.0%'),'negative change has its own text and color cue');
@@ -322,7 +328,7 @@ const offWarning=vm.runInContext(`signalV2Rows.get('0xconfirm').first_seen_at=Ma
 assert.ok(offWarning.includes('市场环境阻断 · 风险规避') && !offWarning.includes('执行成本'),'risk-off market keeps the card in observation mode');
 vm.runInContext(`marketRegime='risk_on'`,context);
 const riskyWarning=vm.runInContext(`signalV2Rows.get('0xconfirm').risk_status='WARN';earlyWarningHTML({token_address:'0xconfirm'})`,context);
-assert.ok(riskyWarning.includes('风险 WARN，需 PASS') && !riskyWarning.includes('执行成本'),'risk blocker is clear without irrelevant execution checks');
+assert.ok(riskyWarning.includes('风险警告，待风险通过') && !riskyWarning.includes('执行成本'),'risk blocker uses the shared Chinese labels without irrelevant execution checks');
 vm.runInContext(`signalV2Rows.get('0xconfirm').risk_status='PASS'`,context);
 const preSignal=vm.runInContext(`earlyWarningRows.set('0xprediction',{status:'volume_anomaly',is_active:true,observed_at:new Date().toISOString()});earlyWarningHTML({token_address:'0xprediction'})`,context);
 assert.ok(preSignal.includes('尚无 A 形态') && !preSignal.includes('执行成本') && !preSignal.includes('强确认条件'),'a pre-signal without A does not show execution checks');

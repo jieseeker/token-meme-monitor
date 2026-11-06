@@ -451,7 +451,7 @@ function observationHistoryHTML(token){
       <header class="observation-event-header"><h3>${index===0?'最新发现':'此前发现'}</h3><time datetime="${new Date(event.triggered_at*1000).toISOString()}">${escapeAttr(date(event.triggered_at))}</time></header>
       <div class="observation-result"><dl class="observation-prices">${fact('发现价格',fmtPrice(event.price))}${fact('最后同池价格',fmtPrice(tracking.last_price))}</dl><div class="observation-change ${tone(change)}"><span>发现后涨跌</span><strong>${fmtChange(change)}</strong></div></div>
       <dl class="observation-range"><div><dt>最高涨幅</dt><dd class="${tone(tracking.max_gain_pct)}">${fmtChange(tracking.max_gain_pct)}</dd></div><div><dt>最大回撤</dt><dd class="${tone(tracking.max_drawdown_pct)}">${fmtChange(tracking.max_drawdown_pct)}</dd></div></dl>
-      <div class="observation-context"><section><h4>发现时依据</h4><dl class="observation-facts">${fact('发现前1小时涨跌',fmtChange(f.return60))}${fact('5分钟成交 / 流动性',numeric(f.turnover,'%'))}${fact('相对量能',numeric(f.volume_ratio,'x'))}</dl></section><section><h4>触发时准入</h4><p class="observation-initial${event.classification?.includes('blocked')?' blocked':''}">${escapeAttr(prelaunchLabels[event.classification]||'状态未知')}</p><dl class="observation-facts">${fact('市场环境',marketRegimeLabel(event.market))}${fact('风险检查',event.risk_status==='PASS'?'通过':event.risk_status==='WARN'?'警惕':event.risk_status==='FAIL'?'未通过':'未知')}${fact('$100 买入滑点',numeric(event.slippage_100_pct,'%'))}${fact('$1K 买入滑点',numeric(event.slippage_1000_pct,'%'))}</dl></section></div>
+      <div class="observation-context"><section><h4>发现时依据</h4><dl class="observation-facts">${fact('发现前1小时涨跌',fmtChange(f.return60))}${fact('5分钟成交 / 流动性',numeric(f.turnover,'%'))}${fact('相对量能',numeric(f.volume_ratio,'x'))}</dl></section><section><h4>触发时准入</h4><p class="observation-initial${event.classification?.includes('blocked')?' blocked':''}">${escapeAttr(prelaunchLabels[event.classification]||'状态未知')}</p><dl class="observation-facts">${fact('市场环境',marketRegimeLabel(event.market))}${fact('风险检查',v2RiskLabels[event.risk_status]||(event.risk_status==='FAIL'?'未通过':'未知'))}${fact('$100 买入滑点',numeric(event.slippage_100_pct,'%'))}${fact('$1K 买入滑点',numeric(event.slippage_1000_pct,'%'))}</dl></section></div>
       <footer class="observation-source"><span>最后同池采样：${escapeAttr(tracking.last_price_at?new Date(tracking.last_price_at).toLocaleString('zh-CN',{hour12:false}):'等待采样')}</span><span>跟踪池子：${escapeAttr(event.pair||'--')}</span></footer>
     </li>`;
   }).join('');
@@ -594,7 +594,7 @@ function earlyWarningHTML(token){
   else if(confirmation.ageSeconds==null)status='A 时间缺失，暂不评估强确认';
   else if(confirmation.ageSeconds>900)status='A 已过期，等待新的 A 触发';
   else if(confirmation.ageSeconds>300)status=`A 新鲜度下降 · ${fmtDuration(confirmation.ageSeconds)}（强确认需≤5分钟）`;
-  else if(v2.risk_status!=='PASS')status=`风险 ${v2.risk_status||'未知'}，需 PASS`;
+  else if(v2.risk_status!=='PASS')status=`风险${v2RiskLabels[v2.risk_status]||'未知'}，待风险通过`;
   else if(!marketSuitable)status=`市场环境阻断 · ${marketRegimeLabel(marketRegime)}，需风险偏好或中性`;
   else status=confirmation.classification==='slippage_blocked'?'执行成本超限，暂不确认买点':confirmation.label;
   const costRows=[[100,confirmation.slippage100,.3],[1000,confirmation.slippage1000,.5]].map(([order,value,limit])=>{
