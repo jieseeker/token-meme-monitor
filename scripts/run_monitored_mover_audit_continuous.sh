@@ -12,6 +12,9 @@ while true; do
       --top 20 \
       --output "$OUT/monitored-movers-$stamp.json"
     find "$OUT" -maxdepth 1 -type f -name 'monitored-movers-*.json' -mmin +20160 -delete
+  else
+    sleep 30
+    continue
   fi
   now=$(date +%s)
   next_at=$(((now / 3600 + 1) * 3600))
