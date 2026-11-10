@@ -235,10 +235,24 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
             "methods":{"source":"live page confirmation shadow logger"}
         }));
     }
+    let mut column_query = connection
+        .prepare("PRAGMA table_info(confirmation_shadow_events)")
+        .map_err(|error| error.to_string())?;
+    let columns = column_query
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let validation_fields =
+        if columns.contains("observed_at") && columns.contains("validation_version") {
+            "observed_at,validation_version"
+        } else {
+            "NULL,NULL"
+        };
     let mut statement = connection
         .prepare(
-            "SELECT classification,outcome_state,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct,market_state
-             FROM confirmation_shadow_events",
+            &format!("SELECT classification,outcome_state,outcome_15m_pct,outcome_1h_pct,outcome_4h_pct,market_state,{validation_fields}
+             FROM confirmation_shadow_events"),
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -250,6 +264,8 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
                 row.get::<_, Option<f64>>(3)?,
                 row.get::<_, Option<f64>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
             ))
         })
         .map_err(|error| error.to_string())?
@@ -261,12 +277,27 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         BTreeMap::new();
     let mut crossed = BTreeMap::<(String, String), Vec<_>>::new();
     let mut events = 0;
-    for (classification, state, outcome_15m, outcome_1h, outcome_4h, market_state) in rows {
+    let now = chrono::Utc::now().timestamp();
+    for (
+        classification,
+        state,
+        outcome_15m,
+        outcome_1h,
+        outcome_4h,
+        market_state,
+        observed_at,
+        validation_version,
+    ) in rows
+    {
         let market_state = market_state.unwrap_or_else(|| "unknown".into());
-        crossed
-            .entry((market_state.clone(), classification.clone()))
-            .or_default()
-            .push((state.clone(), outcome_15m, outcome_1h, outcome_4h));
+        if validation_version == Some(1)
+            && observed_at.is_some_and(|at| (0..=604800).contains(&now.saturating_sub(at)))
+        {
+            crossed
+                .entry((market_state.clone(), classification.clone()))
+                .or_default()
+                .push((state.clone(), outcome_15m, outcome_1h, outcome_4h));
+        }
         events += 1;
         grouped.entry(classification).or_default().push((
             state.clone(),
@@ -339,6 +370,8 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         "by_classification":result,
         "by_market_state":market_result,
         "by_market_and_classification":cross_result,
+        "cohort_validation_version":1,
+        "cohort_window_seconds":604800,
         "cost_assumption_round_trip_pct":0.3,
         "methods":{"source":"live page confirmation shadow logger","outcome":"same-pool first sampled price in the configured forward window"}
     }))
@@ -1735,16 +1768,37 @@ mod oi_tests {
         );
         assert_eq!(summary["by_market_state"]["risk_on"]["events"], 2);
         assert_eq!(summary["by_market_state"]["risk_on"]["mean_15m_pct"], 0.0);
-        let strong = &summary["by_market_and_classification"]["risk_on"]["strong"];
-        assert_eq!(strong["events"], 2);
-        assert_eq!(strong["samples_4h"], 1);
-        assert_eq!(strong["mean_net_4h_pct"], 2.7);
-        assert_eq!(strong["samples_15m"], 2);
-        assert_eq!(strong["mean_net_15m_pct"], -0.3);
-        let aging = &summary["by_market_and_classification"]["risk_off"]["aging"];
-        assert_eq!(aging["samples_4h"], 0);
-        assert!(aging["mean_net_4h_pct"].is_null());
-        assert!(summary["by_market_and_classification"]["risk_off"]["strong"].is_null());
+        assert!(summary["by_market_and_classification"]
+            .as_object()
+            .unwrap()
+            .is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn confirmation_shadow_summary_limits_new_cohorts_to_verified_recent_events() {
+        let path = std::env::temp_dir().join(format!(
+            "tmm-shadow-window-{}.db",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE confirmation_shadow_events(classification TEXT,outcome_state TEXT,outcome_15m_pct REAL,outcome_1h_pct REAL,outcome_4h_pct REAL,market_state TEXT,observed_at INTEGER,validation_version INTEGER);").unwrap();
+        let now = chrono::Utc::now().timestamp();
+        for (at, version) in [
+            (now - 60, 1),
+            (now - 604801, 1),
+            (now + 300, 1),
+            (now - 60, 0),
+        ] {
+            connection.execute("INSERT INTO confirmation_shadow_events VALUES('strong','resolved',1,2,3,'risk_on',?1,?2)", rusqlite::params![at,version]).unwrap();
+        }
+        drop(connection);
+        let summary = super::confirmation_shadow_summary(path.to_str().unwrap()).unwrap();
+        assert_eq!(summary["by_classification"]["strong"]["events"], 4);
+        let cohort = &summary["by_market_and_classification"]["risk_on"]["strong"];
+        assert_eq!(cohort["events"], 1);
+        assert_eq!(cohort["samples_4h"], 1);
+        assert_eq!(cohort["mean_net_4h_pct"], 2.7);
         assert_eq!(summary["cost_assumption_round_trip_pct"], 0.3);
         std::fs::remove_file(path).unwrap();
     }

@@ -622,12 +622,13 @@ function decisionGuideHTML(token){
   }else if(launchedStage(v2.stage)){
     title='结构已启动，等待下一轮';reason='当前处于启动后结构观察阶段。';next='等待新的启动前量价条件，首次启动结构仅作观察。';
   }
-  let proof='等待同条件样本结算。';
+  let proof=probe?'等待同条件样本结算。':'当前缺少有效的启动前入场依据。';
   let method='';
   if(formal){
-    const group=fresh(confirmationSummaryAt,120000)?confirmationSummary?.by_market_and_classification?.[marketRegime]?.strong:null;
-    proof=group?`强确认影子样本 ${Number(group.events||0)}，4小时已结算 ${Number(group.samples_4h||0)}；扣0.3%假设成本的端点均值 ${Number.isFinite(group.mean_net_4h_pct)?group.mean_net_4h_pct.toFixed(3)+'%':'等待结算'}。`:'强确认影子统计待更新。';
-    method='同市场的实时强确认单独统计。端点采样扣假设成本，盈利能力仍需前瞻验证。';
+    const statsFresh=fresh(confirmationSummaryAt,120000)&&confirmationSummary?.cohort_validation_version===1;
+    const group=statsFresh?confirmationSummary.by_market_and_classification?.[marketRegime]?.strong:null;
+    proof=group?`强确认影子样本 ${Number(group.events||0)}，4小时已结算 ${Number(group.samples_4h||0)}；扣0.3%假设成本的端点均值 ${Number.isFinite(group.mean_net_4h_pct)?group.mean_net_4h_pct.toFixed(3)+'%':'等待结算'}。`:statsFresh?'近7天同市场的新口径强确认样本0，等待积累。':'强确认影子统计待更新。';
+    method='近7天同市场、通过新鲜度及原池校验的强确认单独统计。端点采样扣假设成本，盈利能力仍需前瞻验证。';
   }else if(probe&&event?.classification==='observing'&&event.triggered_at===state.item.triggered_at&&event.pair===state.item.pair_address&&fresh(Date.parse(prelaunchReportAt),120000)){
     const stats=prelaunchSummary?.[event.market+'/observing']?.fixed_exit;
     if(Number.isInteger(stats?.n)&&stats.n>0&&Number.isFinite(stats.mean_net_pct)&&Number.isFinite(stats.median_net_pct)){
@@ -1351,7 +1352,7 @@ function earlyHistoryHTML(result,shadow){
     <td>${escapeAttr(fmtSignedPct(item.baseline_gt_5pct))}</td>
     <td>${escapeAttr(fmtDuration(item.a_lead_median_seconds))}</td>
   </tr>`;
-  return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`实时影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><div class="history-table-scroll" role="region" aria-label="历史量能回放表" tabindex="0"><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table></div>`;
+  return `<div class="hint" style="margin-bottom:8px">历史量能事件 ${Number(item.volume_events||0)} · ${shadow?`全口径影子记录 ${Number(shadow.events||0)} · 强确认 ${Number(shadow.by_classification?.strong?.events||0)}（含旧校验口径）；两者口径不同。`:'实时强确认样本暂不可用。'} ${noProfit?'扣成本后未见正收益；命中率不能代替净收益。':'扣成本结果见下表；历史回放不代表未来收益。'}</div><div class="history-table-scroll" role="region" aria-label="历史量能回放表" tabindex="0"><table class="history-table"><thead><tr><th>回放截止</th><th>量能事件</th><th>净收益·0.3%</th><th>净收益·0.5%</th><th>4h&gt;5%</th><th>基线</th><th>A提前量</th></tr></thead><tbody>${row}</tbody></table></div>`;
 }
 
 function prelaunchHistoryHTML(report){

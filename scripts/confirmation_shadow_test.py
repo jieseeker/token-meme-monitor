@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -14,6 +15,15 @@ spec.loader.exec_module(confirmation_shadow)
 
 
 class ConfirmationShadowTest(unittest.TestCase):
+    def test_schema_upgrade_preserves_legacy_rows(self):
+        connection = sqlite3.connect(":memory:")
+        connection.execute("CREATE TABLE confirmation_shadow_events(id INTEGER PRIMARY KEY,classification TEXT,market_state TEXT)")
+        connection.execute("INSERT INTO confirmation_shadow_events VALUES(1,'strong','risk_on')")
+        confirmation_shadow.init_schema(connection)
+        confirmation_shadow.init_schema(connection)
+        self.assertEqual(connection.execute("SELECT classification,validation_version FROM confirmation_shadow_events").fetchall(), [("strong", 0)])
+        connection.close()
+
     def test_incomplete_structure_cannot_be_strong(self):
         now = int(time.time())
         signal = {"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 60, "data_status": "missing_h1"}
@@ -21,6 +31,9 @@ class ConfirmationShadowTest(unittest.TestCase):
             {"order_usd": 100, "buy_slippage_pct": .1},
             {"order_usd": 1000, "buy_slippage_pct": .2},
         ]}}
+        signal.update(pair_address="formal-pool", updated_at=now, last_evidence_at=now)
+        warning.update(pair_address="formal-pool", observed_at=datetime.fromtimestamp(now, timezone.utc).isoformat())
+        warning["slippage_estimates"]["depth_calculated_at"] = warning["observed_at"]
         self.assertIsNone(confirmation_shadow.classify(signal, warning, now, "risk_on"))
         signal.update(data_status="current", pair_address="formal-pool")
         warning["pair_address"] = "different-pool"
@@ -37,14 +50,19 @@ class ConfirmationShadowTest(unittest.TestCase):
                 ]
             },
         }
+        warning.update(pair_address="pair", observed_at=datetime.fromtimestamp(now, timezone.utc).isoformat())
+        warning["slippage_estimates"]["depth_calculated_at"] = warning["observed_at"]
         cases = [
             ({"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 240}, "strong"),
             ({"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 600}, "aging"),
             ({"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 240}, "slippage_blocked"),
         ]
         cases[-1] = (cases[-1][0], "slippage_blocked")
+        for signal, _ in cases:
+            signal.update(data_status="current", pair_address="pair", updated_at=now, last_evidence_at=now)
         high_slippage = dict(warning)
         high_slippage["slippage_estimates"] = {
+            "depth_calculated_at": warning["observed_at"],
             "estimates": [
                 {"order_usd": 100, "buy_slippage_pct": 0.1},
                 {"order_usd": 1000, "buy_slippage_pct": 0.6},
@@ -60,10 +78,18 @@ class ConfirmationShadowTest(unittest.TestCase):
     def test_strong_requires_known_slippage_and_non_risk_off_market(self):
         now = int(time.time())
         signal = {"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 120}
+        signal.update(data_status="current", pair_address="pair", updated_at=now, last_evidence_at=now)
         warning = {"is_active": True, "slippage_estimates": {"estimates": [
             {"order_usd": 100, "buy_slippage_pct": 0.2},
             {"order_usd": 1000, "buy_slippage_pct": 0.4},
         ]}}
+        warning.update(pair_address="pair", observed_at=datetime.fromtimestamp(now, timezone.utc).isoformat())
+        warning["slippage_estimates"]["depth_calculated_at"] = warning["observed_at"]
+        qualified = confirmation_shadow.classify(signal, warning, now, "risk_on")
+        self.assertIsNone(confirmation_shadow.classify(dict(signal, updated_at=now-240), warning, now, "risk_on"))
+        self.assertIsNone(confirmation_shadow.classify(signal, dict(warning, observed_at=datetime.fromtimestamp(now-240, timezone.utc).isoformat()), now, "risk_on"))
+        self.assertEqual(qualified.get("validation_version"), 1)
+        self.assertIsNone(confirmation_shadow.classify(signal, dict(warning, slippage_estimates=[]), now, "risk_on"))
         self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_on")["classification"], "strong")
         self.assertEqual(confirmation_shadow.classify(signal, warning, now, "risk_off")["classification"], "market_blocked")
         self.assertEqual(confirmation_shadow.classify(signal, warning, now, None)["classification"], "market_blocked")

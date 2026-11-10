@@ -15,6 +15,8 @@ HORIZONS = {"15m": (900, "outcome_15m_pct"), "1h": (3600, "outcome_1h_pct"), "4h
 
 
 def parse_time(value):
+    if not isinstance(value, str):
+        return None
     try:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
     except (TypeError, ValueError):
@@ -38,12 +40,20 @@ def slippage_values(warning):
 
 
 def classify(signal, warning, now, market_state):
-    if signal.get("stage") != "watch" or signal.get("risk_status") != "PASS" or signal.get("data_status") not in (None, "current") or warning.get("is_active") is not True:
+    if signal.get("stage") != "watch" or signal.get("risk_status") != "PASS" or warning.get("is_active") is not True:
         return None
-    if signal.get("pair_address") and warning.get("pair_address") and signal["pair_address"] != warning["pair_address"]:
+    evidence = (signal.get("updated_at"), signal.get("last_evidence_at"))
+    if signal.get("data_status") != "current" or any(not isinstance(at, (int, float)) or not math.isfinite(at) or not 0 <= now-at <= 180 for at in evidence):
+        return None
+    warning_at = parse_time(warning.get("observed_at"))
+    depth = warning.get("slippage_estimates") or {}
+    depth_at = parse_time(depth.get("depth_calculated_at"))
+    if warning_at is None or not 0 <= now-warning_at <= 120 or depth_at is None or not 0 <= now-depth_at <= 300 or depth.get("stale") is True:
+        return None
+    if not signal.get("pair_address") or signal.get("pair_address") != warning.get("pair_address"):
         return None
     first_seen = signal.get("first_seen_at")
-    if not isinstance(first_seen, (int, float)):
+    if not isinstance(first_seen, (int, float)) or not math.isfinite(first_seen) or first_seen > now:
         return None
     age = max(0, int(now - first_seen))
     slippage_100, slippage_1000 = slippage_values(warning)
@@ -60,6 +70,7 @@ def classify(signal, warning, now, market_state):
     else:
         classification = "strong"
     return {
+        "validation_version": 1,
         "age_seconds": age,
         "classification": classification,
         "volume_acceleration": warning.get("volume_acceleration"),
@@ -115,6 +126,8 @@ def init_schema(connection):
     columns = {row[1] for row in connection.execute("PRAGMA table_info(confirmation_shadow_events)")}
     if "market_state" not in columns:
         connection.execute("ALTER TABLE confirmation_shadow_events ADD COLUMN market_state TEXT")
+    if "validation_version" not in columns:
+        connection.execute("ALTER TABLE confirmation_shadow_events ADD COLUMN validation_version INTEGER NOT NULL DEFAULT 0")
     connection.commit()
 
 
@@ -124,12 +137,12 @@ def record_event(connection, event):
         INSERT OR IGNORE INTO confirmation_shadow_events
         (token_address,pair_address,first_seen_at,observed_at,classification,age_seconds,
          entry_price_usd,volume_acceleration,buy_pressure,volume_to_liquidity,
-         slippage_100_pct,slippage_1000_pct,market_state)
+         slippage_100_pct,slippage_1000_pct,market_state,validation_version)
         VALUES (:token_address,:pair_address,:first_seen_at,:observed_at,:classification,
                 :age_seconds,:entry_price_usd,:volume_acceleration,:buy_pressure,
-                :volume_to_liquidity,:slippage_100_pct,:slippage_1000_pct,:market_state)
+                :volume_to_liquidity,:slippage_100_pct,:slippage_1000_pct,:market_state,:validation_version)
         """,
-        {**event, "market_state": event.get("market_state")},
+        {**event, "market_state": event.get("market_state"), "validation_version": event.get("validation_version", 0)},
     )
     connection.commit()
 

@@ -4,7 +4,7 @@
 
 **Goal** Make current candidate eligibility, next evidence and expiry understandable beside honestly scoped historical evidence.
 
-**Architecture** Reuse existing frontend state and API responses. Replace the compact top summary, cache the prelaunch summary and formal shadow summary during the existing refresh, render evidence only for its own eligible cohort.
+**Architecture** Reuse existing frontend state and APIs. Extend the shadow summary with market/classification cohorts, versioned freshness-validated capture and a seven-day boundary. Replace the compact top summary, cache the prelaunch summary and formal shadow summary during the existing refresh, render evidence only for its own eligible cohort.
 
 **Tech Stack** Existing plain JavaScript/CSS, Node assert/vm, Rust include_str dashboard.
 

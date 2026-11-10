@@ -232,7 +232,7 @@ setImmediate(async () => {
   assert.ok(!document.getElementById('earlyHistoryBody').innerHTML.includes('-3.33%'),'history panel should show only the latest report');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('市场状态'),'history panel must show market state');
   assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('风险偏好'),'history panel must label risk-on state in Chinese');
-  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('实时影子记录 2 · 强确认 1') && document.getElementById('earlyHistoryBody').innerHTML.includes('历史量能事件 3772'),'history must separate live strong samples from replay events');
+  assert.ok(document.getElementById('earlyHistoryBody').innerHTML.includes('全口径影子记录 2 · 强确认 1（含旧校验口径）') && document.getElementById('earlyHistoryBody').innerHTML.includes('历史量能事件 3772'),'history separates legacy-inclusive shadow totals from the new candidate cohort');
   const losingReplay=vm.runInContext(`earlyHistoryHTML({reports:[{replay_until:'2026-10-31T00:00:00Z',volume_events:4905,volume_gt_5pct:12.38,baseline_gt_5pct:7.07,ladder_net_0_3pct:-.06,ladder_net_0_5pct:-.26}]})`,context);
   assert.ok(losingReplay.includes('扣成本后未见正收益') && losingReplay.indexOf('净收益·0.3%')<losingReplay.indexOf('4h&gt;5%'),'negative net results lead the replay instead of the hit rate');
   await vm.runInContext('toggleEarlyHistory(false)',context);
