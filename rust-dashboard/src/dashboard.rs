@@ -1804,11 +1804,15 @@ mod oi_tests {
             serde_json::json!({"token_address":"0xother","pair_address":"c","signal_score":0,"price_usd":3}),
         ];
         rows[0]["signal_at"] = serde_json::json!(now);
+        rows[0]["price_change_h1"] = serde_json::json!(-10.01);
+        rows[0]["price_change_h24"] = serde_json::json!(-56.47);
         let list = super::list_overview(rows.clone());
         assert_eq!(list.len(), 1);
         assert_eq!(list[0]["token_address"], "0xabc");
         assert_eq!(list[0]["indicator_reasons"], "[\"tag\"]");
         assert_eq!(list[0]["observed_at"], "2026-10-23T10:00:00Z");
+        assert_eq!(list[0]["price_change_h1"], -10.01);
+        assert_eq!(list[0]["price_change_h24"], -56.47);
         assert!(list[0].get("price_usd").is_none());
         let display = super::display_overview(rows);
         assert_eq!(display.len(), 2);
@@ -2961,6 +2965,8 @@ pub(crate) fn list_overview(rows: Vec<serde_json::Value>) -> Vec<serde_json::Val
                     "indicator_score":score,
                     "indicator_reasons":reasons,
                     "observed_at":row["observed_at"],
+                    "price_change_h1":row["price_change_h1"],
+                    "price_change_h24":row["price_change_h24"],
                     "short_signal_stale":row["short_signal_stale"],
                 }),
             ),

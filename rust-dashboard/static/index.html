@@ -72,8 +72,10 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-btn .sym { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .token-age { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
 .token-btn .sym small { font-weight:400; color:var(--muted); margin-left:6px; font-size:12px; }
-.token-heading { display:flex; align-items:center; gap:8px; min-width:0; }
+.token-heading { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; }
 .observation-mark { flex:none; font-size:11px; color:var(--muted); font-weight:400; }
+.decline-mark { flex:none; font-size:11px; color:var(--risk); font-weight:650; }
+.decline-warning { margin-top:10px; color:var(--risk); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
 .observation-filter { flex:none; min-height:32px; padding:4px 0; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
 .observation-filter:hover,.observation-filter.active { color:var(--accent-strong); text-decoration:underline; text-underline-offset:4px; }
 .observation-filter:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -654,6 +656,15 @@ function marketRisks(raw){
   try{const flags=typeof raw==='string'?JSON.parse(raw):raw;return Array.isArray(flags)?flags.filter(x=>!['missing_project_metadata','missing_price','fdv_missing'].includes(x)).filter(x=>x!=='low_liquidity'||!flags.includes('liquidity_near_zero')).map(x=>riskLabels[x]||String(x)):null;}
   catch{return null;}
 }
+function priceDeclineRisk(token){
+  const age=Date.now()-Date.parse(token?.observed_at);
+  if(!Number.isFinite(age)||age<0||age>300000)return null;
+  // ponytail: Return windows identify price risk. Continuous-trend confirmation needs historical path analysis.
+  const reasons=[];
+  if(Number.isFinite(token.price_change_h24)&&token.price_change_h24<=-20)reasons.push(`24小时 ${fmtChange(token.price_change_h24)}（阈值 ≤−20%）`);
+  if(Number.isFinite(token.price_change_h1)&&token.price_change_h1<=-10)reasons.push(`1小时 ${fmtChange(token.price_change_h1)}（阈值 ≤−10%）`);
+  return reasons.length?{reason:reasons.join(' · '),observed_at:token.observed_at}:null;
+}
 function escapeAttr(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 const v2StageLabels={inactive:'未启动',watch:'观察',first_wave:'第一波',pullback:'回调',base:'企稳',first_start:'首次启动',first_start_extended:'首次启动·超8%',second_start:'二次启动',second_start_extended:'二次启动·超8%'};
@@ -716,12 +727,13 @@ function renderTokenList() {
       const potential=livePrelaunch(t);
       const record=observationOf(t.token_address);
       const observation=observationCardState(t,record);
+      const decline=priceDeclineRisk(t);
       const acceleration=Number(warning?.volume_acceleration);
       const volume=Number(structureOf(t.token_address)?.factors?.relative_volume_30m?.value);
       const snapshotAge=Date.now()-Date.parse(t.observed_at);
       const listState=observation?`${observation.label} · ${timeAgo(new Date(record.latest_triggered_at*1000).toISOString())}入选`:!Number.isFinite(snapshotAge)||snapshotAge>120000||snapshotAge< -60000?'快照已过期，等待更新':potential?`启动前观察 · 触发${timeAgo(new Date(potential.triggered_at*1000).toISOString())} · 待验证`:warning?`${earlyWarningLabel(warning)} · ${Number.isFinite(acceleration)?acceleration.toFixed(1)+'x · ':''}更新${timeAgo(warning.observed_at)}`:`${state.note}${Number.isFinite(volume)&&volume>0?` · 量能 ${volume.toFixed(1)}x`:''}`;
       return `<button class="token-btn${sel}${warning||potential?' signal-active':''}${observation?` observation-${observation.tone}`:''}" data-token="${escapeAttr(t.token_address)}">
-        <span class="token-main"><span class="token-heading"><span class="sym">${escapeAttr(t.token_symbol)}</span>${record?'<span class="observation-mark">曾入选</span>':''}</span><span class="token-age">${escapeAttr(listState)}</span></span>
+        <span class="token-main"><span class="token-heading"><span class="sym">${escapeAttr(t.token_symbol)}</span>${decline?`<span class="decline-mark" title="${escapeAttr(decline.reason)}">下跌风险</span>`:''}${record?'<span class="observation-mark">曾入选</span>':''}</span><span class="token-age">${escapeAttr(listState)}</span></span>
       </button>`;
     }).join('');
   document.getElementById('tokenList').innerHTML=html||`<div class="empty-state">${searchTerm?'没有匹配结果':observationsOnly?observationLoaded?'近7天暂无观察记录':'观察记录暂未加载，正在重试':watchlistOnly?'自选中暂无代币':'当前没有监控代币'}</div>`;
@@ -783,7 +795,8 @@ function renderDetail() {
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t))+'|'+JSON.stringify(observationOf(t.token_address));
+  const decline=priceDeclineRisk(tokenData.find(row=>row.token_address===t.token_address)||t);
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t))+'|'+JSON.stringify(observationOf(t.token_address))+'|'+JSON.stringify(decline);
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
@@ -813,6 +826,7 @@ function renderDetail() {
       <span>1h 换手：<b>${fmtTurnover(turnover)}</b></span>
       <span>数据：<b>${escapeAttr(timeAgo(t.observed_at))}</b></span>
     </div>
+    ${decline?`<p class="decline-warning" role="note"><strong>下跌风险</strong> · ${escapeAttr(decline.reason)} · 采样${escapeAttr(timeAgo(decline.observed_at))}</p>`:''}
     <div class="overview-grid">
       <div class="overview-item"><span class="label">参考价格</span><strong class="value">${fmtPrice(t.price_usd)}</strong></div>
       <div class="overview-item"><span class="label">5m 涨跌</span><strong class="value">${fmtChange(t.price_change_m5)}</strong></div>
@@ -1322,6 +1336,10 @@ async function toggleEarlyHistory(force){
 }
 
 async function refresh(){
+  if(tokenData.length){
+    renderTokenList();
+    if(selectedToken)renderDetail();
+  }
   try{
     const [rows, signalV2, market] = await Promise.all([
       fetchJSON('/api/tokens'),

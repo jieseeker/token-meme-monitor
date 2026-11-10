@@ -657,4 +657,50 @@ assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2
   assert.equal(calls.filter(url=>url==='/api/structure?limit=100').length,structureCalls,'slow structure must not launch overlapping scans');
   releaseStructure();
   await slowStructureRefresh;
+
+  context.declineCase={...row,token_symbol:'ON',indicator_score:57,observed_at:new Date().toISOString(),price_change_m5:.36,price_change_h1:-10.01,price_change_h24:-56.47};
+  vm.runInContext(`tokenData=[declineCase]; observationsOnly=false; watchlistOnly=false; searchTerm=''; renderTokenList()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('下跌风险'),'a severe decline must be visible in the token list despite a five-minute rebound');
+  vm.runInContext(`selectedToken=declineCase.token_address; selectedDetail=mergeTokens([{...declineCase,price_change_h1:5,price_change_h24:5}])[0]; renderedKey=''; renderDetail()`,context);
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('下跌风险'),'detail must use the same decline evidence as its list entry');
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('-56.5%'),'detail must show the measured decline');
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('20%'),'detail must explain the threshold');
+
+  vm.runInContext(`declineCase.price_change_h1=2; renderTokenList(); renderDetail()`,context);
+  assert.ok(document.getElementById('tokenList').innerHTML.includes('下跌风险'),'an hourly rebound does not clear a deep daily drawdown');
+  vm.runInContext(`declineCase.price_change_h24=-19.99; renderTokenList(); renderDetail()`,context);
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('下跌风险'),'a recovered quote must clear the list marker');
+  assert.ok(!document.getElementById('detailPanel').innerHTML.includes('下跌风险'),'a recovered quote must invalidate detail rendering even without new pool rows');
+
+  const declineCases=[
+    [{price_change_h1:-10,price_change_h24:50},true],
+    [{price_change_h1:5,price_change_h24:-20},true],
+    [{price_change_h1:-9.99,price_change_h24:-19.99},false],
+    [{price_change_h1:null,price_change_h24:null},false],
+    [{price_change_h1:NaN,price_change_h24:Infinity},false],
+    [{price_change_h1:'-50',price_change_h24:'-50'},false],
+    [{price_change_h1:-12,observed_at:new Date(Date.now()-300001).toISOString()},false],
+    [{price_change_h1:-12,observed_at:new Date(Date.now()+60000).toISOString()},false],
+    [{price_change_h1:-12,observed_at:'invalid'},false],
+  ];
+  for(const [quote,expected] of declineCases){
+    context.declineProbe={observed_at:new Date().toISOString(),...quote};
+    assert.equal(Boolean(vm.runInContext('priceDeclineRisk(declineProbe)',context)),expected,'risk markers require a valid fresh return that reaches a threshold');
+  }
+
+  vm.runInContext(`declineCase.price_change_h24=-30; renderTokenList(); renderDetail()`,context);
+  assert.ok(document.getElementById('detailPanel').innerHTML.includes('下跌风险'));
+  const originalFetch=context.fetch;
+  const offlineRequests=[];
+  context.fetch=()=>new Promise((resolve,reject)=>offlineRequests.push(reject));
+  const expiredNow=Date.now()+300001;
+  context.Date=class extends Date {static now(){return expiredNow;}};
+  const offlineRefresh=vm.runInContext('refresh()',context);
+  assert.ok(!document.getElementById('tokenList').innerHTML.includes('下跌风险'),'expired list markers must clear while network requests are still pending');
+  assert.ok(!document.getElementById('detailPanel').innerHTML.includes('下跌风险'),'expired detail markers must clear while network requests are still pending');
+  for(const reject of offlineRequests)reject(new Error('offline'));
+  await offlineRefresh;
+  assert.ok(!document.getElementById('detailPanel').innerHTML.includes('下跌风险'),'failed refresh must not restore an expired marker');
+  context.fetch=originalFetch;
+  context.Date=Date;
 });
