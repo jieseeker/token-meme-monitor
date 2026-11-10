@@ -15,6 +15,9 @@ while true; do
     else
       rm -f "$tmp"
     fi
+  else
+    sleep 30
+    continue
   fi
   now=$(date +%s)
   next_at=$(( ((now / 10800) + 1) * 10800 ))
