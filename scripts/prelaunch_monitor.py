@@ -31,7 +31,7 @@ def stamp(value):
 def gate(signal, warning, pair, market, now):
     updated = signal.get('updated_at')
     evidence = signal.get('last_evidence_at')
-    if not isinstance(updated, (int, float)) or not isinstance(evidence, (int,float)) or not 0 <= now-updated <= 180 or not 0 <= now-evidence <= 180:
+    if not isinstance(updated, (int, float)) or not isinstance(evidence, (int,float)) or not 0 <= now-updated <= 180 or not 0 <= now-evidence <= 180 or signal.get('data_status') not in (None, 'current'):
         return 'risk_unknown'
     if str(signal.get('stage', '')).startswith(('first_start', 'second_start')) or signal.get('stage') in ('first_wave', 'pullback', 'base'):
         return 'already_started'

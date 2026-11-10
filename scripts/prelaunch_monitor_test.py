@@ -11,6 +11,7 @@ now = 1800000000
 signal = dict(stage='watch', risk_status='PASS', updated_at=now, last_evidence_at=now, first_seen_at=now-100000)
 warning = dict(pair_address='pool', slippage_estimates=dict(depth_calculated_at=datetime.fromtimestamp(now, timezone.utc).isoformat(), estimates=[dict(order_usd=100,buy_slippage_pct=.1),dict(order_usd=1000,buy_slippage_pct=.4)]))
 assert p.gate(signal, warning, 'pool', 'risk_on', now) == 'observing', 'old A does not block a new research event'
+assert p.gate(dict(signal,data_status='missing_h1'),warning,'pool','risk_on',now) == 'risk_unknown', 'incomplete structure input cannot qualify a research event'
 warning['slippage_estimates']['stale']=True
 assert p.gate(signal,warning,'pool','risk_on',now)=='slippage_unknown', 'failed cached quote cannot be reused as fresh'
 warning['slippage_estimates']['stale']=False

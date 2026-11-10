@@ -257,13 +257,10 @@ setImmediate(async () => {
   for(const [input,expected] of stateCases){
     assert.equal(vm.runInContext(`structureState(${JSON.stringify(input)}).label`,context),expected,`structure state should map ${input.stage} to ${expected}`);
   }
-  assert.equal(vm.runInContext('fmtTurnover(null)',context),'--');
-  assert.equal(vm.runInContext('fmtTurnover(0.1333)',context),'13.3%');
   assert.equal(vm.runInContext('fmtUsd(1500)',context),'$1.5K');
   assert.equal(vm.runInContext('fmtUsd(0.0185175)',context),'$0.01852');
   assert.equal(vm.runInContext('whaleFlowText({netUsd:0,buyCount:0,sellCount:0})',context),'$0 · 0笔','zero flow must disclose that no large trades were sampled');
   assert.equal(vm.runInContext('structureState({available:true,stage:"watch",b_crossed_at:1,b_at:null,b_breakout_line:1},1.1).label',context),'B 超出确认窗','a runaway unconfirmed breakout must not look ready for immediate confirmation');
-  assert.equal(vm.runInContext("structureGuidance({available:true,stage:'watch'}).trigger",context),'30m 突破 + 量能确认');
   const noviceCases=[
     [{token_symbol:'RISK',token_address:'0xrisk',price_usd:1.1,liquidity_usd:1000,signal_risk_flags:'["liquidity_withdrawal"]',observed_at:new Date().toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000),risk_status:'PASS'},'risk_block','不碰'],
     [{token_symbol:'STALE',token_address:'0xstale',price_usd:.99,liquidity_usd:1000,signal_risk_flags:'[]',observed_at:new Date(Date.now()-180000).toISOString()},{available:true,stage:'watch',b_crossed_at:1,b_at:null,b_breakout_line:1,updated_at:Math.floor(Date.now()/1000)},'data_stale','数据过期'],
@@ -373,10 +370,8 @@ assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1
   assert.ok(detail.indexOf('参考价格') < detail.indexOf('5m 涨跌'), 'price should lead its change metrics');
   assert.ok(detail.indexOf('5m 涨跌') < detail.indexOf('1h 涨跌'), '5m and 1h changes should sit beside price');
   assert.ok(detail.indexOf('5m 成交额') < detail.indexOf('1h 成交额'), 'volume metrics should be flat siblings');
-  assert.ok(detail.includes('class="trade-summary"'), 'the first card should lead with a trading summary');
-  assert.ok(detail.includes('观察：'), 'the summary should state the next observation');
-  assert.ok(detail.includes('触发：') && detail.includes('失效：'), 'the summary should expose structure trigger and invalidation');
-  assert.ok(detail.includes('1h 换手：'), 'the summary should expose turnover');
+  assert.ok(detail.includes('aria-label="候选判断摘要"'), 'the first card leads with an explained decision');
+  assert.ok(detail.includes('判断依据') && detail.includes('接下来等') && detail.includes('何时失效'), 'the decision explains its evidence, next step and expiry');
   assert.ok(!detail.includes('活跃度分'), 'detail should not repeat the list activity score');
   assert.ok(detail.indexOf('1h 大额净流入') > detail.indexOf('链上大额动向'), 'large-trade flow remains in chain data');
   assert.ok(detail.includes('池内资产估值'), 'pool assets must not be mistaken for near-price depth');
@@ -527,7 +522,7 @@ assert.ok(quietHighVolume.includes('0.38%') && quietHighVolume.includes('需≥1
   assert.ok(transfers.includes('更新于 ') && !transfers.includes('5 分钟更新'));
   const before=calls.length;
   await vm.runInContext('refresh()',context);
-assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=100','/api/market-state','/api/structure?limit=100','/api/early-warning','/api/prelaunch'].includes(url)),[],'unchanged overview must not reload detail APIs');
+assert.deepEqual(calls.slice(before).filter(url=>!['/api/tokens','/api/signal-v2?limit=100','/api/market-state','/api/structure?limit=100','/api/early-warning','/api/prelaunch','/api/confirmation-shadow/summary'].includes(url)),[],'unchanged overview must not reload detail APIs');
   assert.equal(document.getElementById('depthBody').innerHTML,depth);
   row.observed_at=new Date(Date.now()+1000).toISOString();
   vm.runInContext(`detailCache.get('0xtoken').at=0`,context);

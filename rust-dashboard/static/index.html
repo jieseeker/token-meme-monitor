@@ -75,7 +75,6 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .token-heading { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; min-width:0; }
 .observation-mark { flex:none; font-size:11px; color:var(--muted); font-weight:400; }
 .decline-mark { flex:none; font-size:11px; color:var(--risk); font-weight:650; }
-.decline-warning { margin-top:10px; color:var(--risk); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
 .observation-filter { flex:none; min-height:32px; padding:4px 0; border:0; border-radius:4px; background:transparent; color:var(--muted); font:inherit; font-size:12px; cursor:pointer; }
 .observation-filter:hover,.observation-filter.active { color:var(--accent-strong); text-decoration:underline; text-underline-offset:4px; }
 .observation-filter:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -138,10 +137,16 @@ body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','SF Pro','Sego
 .watch-button.active { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
 .transfer-header { margin-bottom:8px; }
 .overview-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px 16px; }
-.trade-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin:-2px 0 14px; padding:10px 12px; border:1px solid var(--line-strong); border-radius:12px; background:var(--accent-soft); font-size:12px; color:var(--text); }
-.trade-summary strong { font-weight:800; }
-.trade-summary span { color:var(--muted); }
-.trade-summary span b { color:var(--text); font-weight:700; }
+.decision-guide { margin:0 0 14px; padding:12px 0; border-block:1px solid var(--line); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+.decision-heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:4px 16px; margin-bottom:6px; }
+.decision-heading h3 { font-size:17px; font-weight:750; }
+.decision-guide.attention h3 { color:var(--risk); }
+.decision-guide.observing h3 { color:var(--accent-strong); }
+.decision-heading time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.decision-facts { display:grid; grid-template-columns:5em minmax(0,1fr); gap:3px 12px; }
+.decision-facts dt { color:var(--muted); }
+.decision-proof { margin-top:8px; padding-top:8px; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+.decision-method { margin-top:3px; color:var(--muted); font-size:12px; }
 .overview-item { min-width:0; }
 .overview-item .label { display:block; color:var(--muted); font-size:12px; font-weight:650; }
 .overview-item .value { display:block; margin-top:3px; font-size:18px; font-weight:750; line-height:1.25; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
@@ -319,6 +324,9 @@ let structureRows = new Map();
 let earlyWarningRows = new Map();
 let prelaunchRows = new Map();
 let prelaunchReportAt = null;
+let prelaunchSummary = null;
+let confirmationSummary = null;
+let confirmationSummaryAt = 0;
 let observationRecords = new Map();
 let observationLoaded = false;
 let structureRefreshPromise = null;
@@ -365,7 +373,6 @@ function fmtPrice(v) {
   return'$'+new Intl.NumberFormat('en-US',{useGrouping:false,maximumSignificantDigits:4,notation:'standard'}).format(v);
 }
 function fmtOiPct(v){if(v==null||isNaN(v))return'--';return`${v>0?'+':''}${v.toFixed(1)}%`;}
-function fmtTurnover(v){return v==null||isNaN(v)||!isFinite(v)?'--':`${(v*100).toFixed(1)}%`;}
 function whaleFlowText(flow){return !flow||flow.netUsd==null?'--':`${flow.netUsd>0?'+':''}${fmtMoney(flow.netUsd)}${(flow.buyCount||0)+(flow.sellCount||0)===0?' · 0笔':''}`;}
 function fmtUsd(v){
   if(v==null||isNaN(v)||!isFinite(v))return'--';
@@ -402,6 +409,7 @@ function prelaunchState(token){
   let status=item.classification;
   if(age>300)status='expired';
   else if(!Number.isFinite(age)||age<0||!Number.isFinite(reportAge)||reportAge<0||reportAge>120000||!Number.isFinite(sourceAge)||sourceAge<0||sourceAge>120000)status='stale_data';
+  else if(status==='observing'&&v2?.data_status!=null&&v2.data_status!=='current')status='stale_data';
   else if(status==='observing'&&launchedStage(v2?.stage))status='already_started';
   else if(status==='observing'&&v2?.risk_status!=='PASS')status='risk_blocked';
   else if(status==='observing'&&!['risk_on','neutral'].includes(marketRegime))status='market_blocked';
@@ -497,19 +505,6 @@ function structureState(structure, price=null){
   if(structure.b_crossed_at!=null)return {label:'B 候选',note:'等待结构确认'};
   return {label:structure.stage_label||'未知',note:'结构观察'};
 }
-function structureGuidance(structure, price=null){
-  if(!structure?.available)return {trigger:'等待结构数据',invalidation:'数据不足'};
-  const stage=String(structure.stage||'');
-  if(structureState(structure,price).label==='B 超出确认窗')return {trigger:'回踩后重新突破',invalidation:'跌破观察线或确认失败'};
-  if(stage==='inactive')return {trigger:'30m 突破候选',invalidation:'数据断档'};
-  if(stage==='watch')return {trigger:'30m 突破 + 量能确认',invalidation:'突破失败或量能不足'};
-  if(stage.startsWith('first_start'))return {trigger:'首次启动确认',invalidation:'回撤超过 8%'};
-  if(stage==='first_wave')return {trigger:'二次突破',invalidation:'跌破首波低点'};
-  if(stage==='pullback')return {trigger:'回调企稳',invalidation:'跌破支撑'};
-  if(stage==='base')return {trigger:'二次突破',invalidation:'跌破箱体下沿'};
-  if(stage.startsWith('second_start'))return {trigger:'二次启动确认',invalidation:'跌破启动点'};
-  return {trigger:'结构确认',invalidation:'数据不足'};
-}
 function buyPointDistance(token, structure){
   const stage=String(structure?.stage||'');
   const line=Number(stage.startsWith('second_start')?structure?.c_breakout_line:structure?.b_breakout_line);
@@ -560,9 +555,9 @@ function confirmationState(token){
   const valid100=slippage100!=null&&Number.isFinite(Number(slippage100))&&Number(slippage100)>=0;
   const valid1000=slippage1000!=null&&Number.isFinite(Number(slippage1000))&&Number(slippage1000)>=0;
   const highSlippage=(valid100&&Number(slippage100)>0.3)||(valid1000&&Number(slippage1000)>0.5);
-  const classification=!candidate?'none':v2?.risk_status!=='PASS'?'risk_blocked':warning?.is_active!==true?'volume_blocked':ageSeconds>900?'stale':ageSeconds>300?'aging':highSlippage?'slippage_blocked':!valid100||!valid1000?'slippage_unknown':marketRegime!=='risk_on'&&marketRegime!=='neutral'?'market_blocked':'strong';
+  const classification=!candidate?'none':v2?.data_status!=null&&v2.data_status!=='current'?'data_blocked':v2?.risk_status!=='PASS'?'risk_blocked':warning?.is_active!==true?'volume_blocked':ageSeconds>900?'stale':ageSeconds>300?'aging':highSlippage?'slippage_blocked':!valid100||!valid1000||v2?.pair_address&&warning?.pair_address&&v2.pair_address!==warning.pair_address?'slippage_unknown':marketRegime!=='risk_on'&&marketRegime!=='neutral'?'market_blocked':'strong';
   const active=classification==='strong';
-  const label=classification==='risk_blocked'?'风险阻断':classification==='volume_blocked'?'量能未确认':classification==='slippage_blocked'?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:classification==='slippage_unknown'?'滑点数据缺失':classification==='market_blocked'?`市场环境阻断 · ${marketRegimeLabel(marketRegime)}`:classification==='none'?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
+  const label=classification==='data_blocked'?'结构数据待更新':classification==='risk_blocked'?'风险阻断':classification==='volume_blocked'?'量能未确认':classification==='slippage_blocked'?`滑点过高 · ${Number(slippage1000)>0.5?`$1K ${Number(slippage1000).toFixed(2)}%`:`$100 ${Number(slippage100).toFixed(2)}%`}`:classification==='slippage_unknown'?'滑点数据缺失':classification==='market_blocked'?`市场环境阻断 · ${marketRegimeLabel(marketRegime)}`:classification==='none'?'未形成强确认':active?`A + PASS + 量能确认 · ${fmtDuration(ageSeconds)}`:ageSeconds<=900?`A 新鲜度下降 · ${fmtDuration(ageSeconds)}`:ageSeconds<=3600?`A 已过新鲜窗 · ${fmtDuration(ageSeconds)}`:'A 已过期';
   return {
     active,
     classification,
@@ -572,6 +567,76 @@ function confirmationState(token){
     slippage1000:valid1000?Number(slippage1000):null,
     reason:active?'A 触发仍在 5 分钟新鲜窗口内，风险 PASS，且前置量能异动活跃。':classification==='market_blocked'?`市场状态 ${marketRegimeLabel(marketRegime)}；须为风险偏好或中性。`:classification==='slippage_unknown'?'$100 / $1K 滑点缺失；阈值分别为 0.30% / 0.50%。':highSlippage?'$100 买入滑点超过 0.30% 或 $1K 超过 0.50%，优先规避执行成本。':'A 形态、风险、量能或 A 触发新鲜度未同时满足。'
   };
+}
+function decisionGuideHTML(token){
+  const address=String(token.token_address||'').toLowerCase();
+  const source=tokenData.find(row=>row.token_address===address)||token;
+  const v2=signalV2Rows.get(address);
+  const warning=earlyWarningOf(address);
+  const state=prelaunchState(source);
+  const event=observationOf(address)?.events[0];
+  const now=Date.now();
+  const fresh=(at,limit)=>Number.isFinite(at)&&now-at>=0&&now-at<=limit;
+  const sourceFresh=v2?.data_status==='current'&&fresh(Date.parse(source.observed_at),120000)&&fresh(v2.updated_at*1000,180000)&&fresh(v2.last_evidence_at*1000,180000);
+  const quote=warning?.slippage_estimates;
+  const quoteFresh=quote?.stale!==true&&fresh(Date.parse(quote?.depth_calculated_at),300000);
+  const formalQuote=quoteFresh&&typeof v2?.pair_address==='string'&&warning?.pair_address===v2.pair_address;
+  const probeQuote=quoteFresh&&typeof state?.item.pair_address==='string'&&warning?.pair_address===state.item.pair_address;
+  const confirmation=confirmationState(source);
+  const valuesReady=confirmation.slippage100!=null&&confirmation.slippage1000!=null;
+  const costOK=valuesReady&&confirmation.slippage100<=.3&&confirmation.slippage1000<=.5;
+  const initialBlocked=state&&event?.triggered_at===state.item.triggered_at&&event.classification?.includes('blocked');
+  const decline=priceDeclineRisk(source);
+  const risks=marketRisks(token.signal_risk_flags)||[];
+  const formal=confirmation.active&&sourceFresh&&formalQuote&&costOK&&!decline&&fresh(v2?.first_seen_at*1000,300000)&&fresh(Date.parse(warning?.observed_at),120000);
+  const activeProbe=livePrelaunch(source);
+  const probe=sourceFresh&&probeQuote&&costOK&&!decline&&activeProbe;
+  const quoteReady=valuesReady&&(activeProbe?probeQuote:formalQuote);
+  const inWindow=fresh(state?.item.triggered_at*1000,300000)||fresh(v2?.first_seen_at*1000,300000);
+  let title='继续等待新异动',reason='当前尚无新鲜、合格的启动前观察。',next='等待量价条件重新触发，再核对风险、滑点和市场环境。',tone='waiting';
+  let deadline=null;
+  if(!sourceFresh||state?.status==='stale_data'&&!formal){
+    title=decline?'下跌风险，数据待更新':'数据待更新';reason=`行情或结构证据已过期、缺失，当前判断暂缓。${decline?decline.reason:''}`;next='等待新鲜行情和结构证据恢复。';
+  }else if(decline){
+    title='暂缓跟进，下跌风险';reason=decline.reason;next='等待跌势风险解除，再由新一轮量价异动重新评估。';tone='attention';
+  }else if(v2.risk_status!=='PASS'){
+    title=`风险${v2RiskLabels[v2.risk_status]||'待核查'}，暂缓跟进`;reason=risks.length?risks.join('、'):`当前风险检查${v2RiskLabels[v2.risk_status]||'未知'}，准入需要全部通过。`;next='等待风险检查通过，并出现新一轮合格观察。';tone='attention';
+  }else if(!['risk_on','neutral'].includes(marketRegime)){
+    title=marketRegime==='risk_off'?'市场风险规避，继续等待':'市场数据待更新';reason=`当前市场${marketRegimeLabel(marketRegime)}，准入需要风险偏好或中性。`;next='等待市场环境恢复，再检查新鲜信号。';tone='attention';
+  }else if(initialBlocked&&!formal){
+    title='本轮触发时未通过准入';reason=`触发时${prelaunchLabels[event.classification]||'存在阻断'}，风险检查${v2RiskLabels[event.risk_status]||'未知'}；当前风险检查${v2RiskLabels[v2.risk_status]}。`;next='等待新一轮独立触发，保留这次阻断记录。';tone='attention';
+  }else if(inWindow&&!quoteReady&&!formal){
+    title='滑点数据待更新';reason='原池子的有效买入滑点尚未齐备。';next='等待同池、五分钟内的 $100 和 $1K 滑点估算。';
+  }else if(inWindow&&!costOK&&!formal){
+    title='滑点超限，暂缓跟进';reason=`$100 ${confirmation.slippage100.toFixed(2)}% / 上限 0.30%，$1K ${confirmation.slippage1000.toFixed(2)}% / 上限 0.50%。`;next='等待执行成本恢复合格，并重新检查有效观察窗。';tone='attention';
+  }else if(formal){
+    title='强确认条件成立';reason='结构处于观察阶段，风险通过、前置量能活跃，信号与滑点均在有效窗口。';next='可核对外部实时成交报价，强确认的盈利证据仍在积累。';deadline=v2.first_seen_at+300;tone='observing';
+  }else if(probe){
+    const frozen=event?.triggered_at===state.item.triggered_at;
+    const f=(frozen?event.features:state.item.features)||{};
+    title='观察中，等待确认';reason=`${frozen?'发现时':'当前'}相对量能 ${Number.isFinite(f.volume_ratio)?f.volume_ratio.toFixed(2)+'x':'待更新'}，5分钟成交 / 流动性 ${Number.isFinite(f.turnover)?f.turnover.toFixed(2)+'%':'待更新'}。`;next='观察窗内等待结构与量能进一步确认，超时后等新一轮异动。';deadline=state.item.triggered_at+300;tone='observing';
+  }else if(state?.status==='expired'||event&&now/1000-event.triggered_at>300){
+    title='本轮已过观察窗';reason='这轮发现已超过五分钟，记录继续跟踪原池价格。';next='等待新一轮独立异动，重新核对全部准入条件。';
+  }else if(state){
+    reason=prelaunchLabels[state.status]||'本轮条件尚未齐备。';
+  }else if(launchedStage(v2.stage)){
+    title='结构已启动，等待下一轮';reason='当前处于启动后结构观察阶段。';next='等待新的启动前量价条件，首次启动结构仅作观察。';
+  }
+  let proof='等待同条件样本结算。';
+  let method='';
+  if(formal){
+    const group=fresh(confirmationSummaryAt,120000)?confirmationSummary?.by_market_and_classification?.[marketRegime]?.strong:null;
+    proof=group?`强确认影子样本 ${Number(group.events||0)}，4小时已结算 ${Number(group.samples_4h||0)}；扣0.3%假设成本的端点均值 ${Number.isFinite(group.mean_net_4h_pct)?group.mean_net_4h_pct.toFixed(3)+'%':'等待结算'}。`:'强确认影子统计待更新。';
+    method='同市场的实时强确认单独统计。端点采样扣假设成本，盈利能力仍需前瞻验证。';
+  }else if(probe&&event?.classification==='observing'&&event.triggered_at===state.item.triggered_at&&event.pair===state.item.pair_address&&fresh(Date.parse(prelaunchReportAt),120000)){
+    const stats=prelaunchSummary?.[event.market+'/observing']?.fixed_exit;
+    if(Number.isInteger(stats?.n)&&stats.n>0&&Number.isFinite(stats.mean_net_pct)&&Number.isFinite(stats.median_net_pct)){
+      proof=`触发时同市场的合格观察试验（${marketRegimeLabel(event.market)}），${stats.n} 个已退出样本；扣成本平均 ${fmtSignedPct(stats.mean_net_pct)}，中位数 ${fmtSignedPct(stats.median_net_pct)}。`;
+      method=`5–7分钟延迟模拟入场，涨离提醒价5%跳过；+20% / -8% / 4小时退出，假设往返成本0.3%。同币可重复入样，试验规则仍待前瞻验证。统计更新${timeAgo(prelaunchReportAt)}。`;
+    }
+  }
+  const until=deadline?new Date(deadline*1000):null;
+  return `<section class="decision-guide ${tone}" aria-label="候选判断摘要"><div class="decision-heading"><h3>${escapeAttr(title)}</h3>${until?`<time datetime="${until.toISOString()}">本轮截止 ${until.toLocaleTimeString('zh-CN',{hour12:false})}</time>`:''}</div><dl class="decision-facts"><dt>判断依据</dt><dd>${escapeAttr(reason)}</dd><dt>接下来等</dt><dd>${escapeAttr(next)}</dd><dt>何时失效</dt><dd>超过五分钟、量价退出或风险与成本条件失守，即退出本轮观察。</dd></dl><p class="decision-proof">${escapeAttr(proof)}</p><p class="decision-method">${escapeAttr(method)}</p></section>`;
 }
 const earlyWarningLabels={strong_anomaly:'强前置异动',volume_anomaly:'前置量能异动',buy_pressure_anomaly:'买压异动',quiet:'前置静默',warming_up:'前置预热'};
 function earlyWarningLabel(state){return earlyWarningLabels[state?.status]||'前置预测';}
@@ -795,17 +860,14 @@ function renderDetail() {
   const structure=structureOf(t.token_address);
   const warning=earlyWarningOf(t.token_address);
   const v2=signalV2Rows.get(String(t.token_address||'').toLowerCase());
-  const decline=priceDeclineRisk(tokenData.find(row=>row.token_address===t.token_address)||t);
-  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t))+'|'+JSON.stringify(observationOf(t.token_address))+'|'+JSON.stringify(decline);
+  const guide=decisionGuideHTML(t);
+  const key=t.token_address+'|'+t.pools.map(p=>`${p.pair_address}:${p.observed_at}`).join('|')+'|'+t.signal_risk_flags+'|'+t.indicator_score+'|'+!!t.short_signal_stale+'|'+(structure?`${structure.stage}:${structure.structure_status}:${structure.updated_at}`:'')+'|'+(v2?`${v2.stage}:${v2.risk_status}:${v2.data_status}:${v2.first_seen_at}`:'')+'|'+(warning?`${warning.status}:${warning.observed_at}`:'')+'|'+marketRegime+'|'+JSON.stringify(prelaunchState(t))+'|'+JSON.stringify(observationOf(t.token_address))+'|'+guide;
   if(key===renderedKey)return;
   const sameToken=renderedKey.startsWith(t.token_address+'|');
   const previous=sameToken?['depthBody','oiBody','trendBody','whaleBody','transferBody'].map(id=>document.getElementById(id)?.innerHTML):[];
   const previousTimes=sameToken?['oiTime','trendTime','depthTime','whaleTime','transferTime'].map(id=>document.getElementById(id)?.textContent):[];
   const risks=marketRisks(t.signal_risk_flags);
   const structureTime=structure?.updated_at?new Date(structure.updated_at*1000).toISOString():null;
-  const state=structureState(structure,Number(t.price_usd));
-  const guidance=structureGuidance(structure,Number(t.price_usd));
-  const turnover=t.liquidity_usd>0?t.volume_h1/t.liquidity_usd:null;
   const whaleFlow=whaleFlowCache.get(String(t.token_address||'').toLowerCase());
   document.getElementById('detailPanel').innerHTML=`
   <div class="detail-section">
@@ -818,15 +880,7 @@ function renderDetail() {
         <span class="section-time">${updatedAt(t.observed_at)}</span>
       </div>
     </div>
-    <div class="trade-summary">
-      <strong>${escapeAttr(state.label)}</strong>
-      <span>观察：<b>${escapeAttr(state.note)}</b></span>
-      <span>触发：<b>${escapeAttr(guidance.trigger)}</b></span>
-      <span>失效：<b>${escapeAttr(guidance.invalidation)}</b></span>
-      <span>1h 换手：<b>${fmtTurnover(turnover)}</b></span>
-      <span>数据：<b>${escapeAttr(timeAgo(t.observed_at))}</b></span>
-    </div>
-    ${decline?`<p class="decline-warning" role="note"><strong>下跌风险</strong> · ${escapeAttr(decline.reason)} · 采样${escapeAttr(timeAgo(decline.observed_at))}</p>`:''}
+    ${guide}
     <div class="overview-grid">
       <div class="overview-item"><span class="label">参考价格</span><strong class="value">${fmtPrice(t.price_usd)}</strong></div>
       <div class="overview-item"><span class="label">5m 涨跌</span><strong class="value">${fmtChange(t.price_change_m5)}</strong></div>
@@ -1214,9 +1268,12 @@ function refreshStructure(){
 }
 
 function refreshEarlyWarning(){
-  return Promise.all([fetchJSON('/api/early-warning').catch(()=>null),fetchJSON('/api/prelaunch').catch(()=>null)]).then(([result,potential])=>{
+  return Promise.all([fetchJSON('/api/early-warning').catch(()=>null),fetchJSON('/api/prelaunch').catch(()=>null),fetchJSON('/api/confirmation-shadow/summary').catch(()=>null)]).then(([result,potential,shadow])=>{
     earlyWarningRows=new Map((result?.items||[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     prelaunchReportAt=potential?.calculated_at||null;
+    prelaunchSummary=potential?.available===true?potential.summary:null;
+    confirmationSummary=shadow;
+    confirmationSummaryAt=shadow?Date.now():0;
     prelaunchRows=new Map((potential?.available===true?potential.items||[]:[]).map(item=>[String(item.token_address||'').toLowerCase(),item]));
     if(Array.isArray(potential?.records)){
       observationRecords=new Map(potential.records.filter(r=>typeof r.token_address==='string'&&Array.isArray(r.events)).map(r=>[r.token_address.toLowerCase(),{...r,token_address:r.token_address.toLowerCase()}]));

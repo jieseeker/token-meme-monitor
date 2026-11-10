@@ -230,6 +230,8 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         return Ok(serde_json::json!({
             "events":0,
             "by_classification":{},
+            "by_market_and_classification":{},
+            "cost_assumption_round_trip_pct":0.3,
             "methods":{"source":"live page confirmation shadow logger"}
         }));
     }
@@ -257,8 +259,14 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
         BTreeMap::new();
     let mut market_grouped: BTreeMap<String, Vec<(String, Option<f64>, Option<f64>, Option<f64>)>> =
         BTreeMap::new();
+    let mut crossed = BTreeMap::<(String, String), Vec<_>>::new();
     let mut events = 0;
     for (classification, state, outcome_15m, outcome_1h, outcome_4h, market_state) in rows {
+        let market_state = market_state.unwrap_or_else(|| "unknown".into());
+        crossed
+            .entry((market_state.clone(), classification.clone()))
+            .or_default()
+            .push((state.clone(), outcome_15m, outcome_1h, outcome_4h));
         events += 1;
         grouped.entry(classification).or_default().push((
             state.clone(),
@@ -266,81 +274,72 @@ fn confirmation_shadow_summary(path: &str) -> Result<serde_json::Value, String> 
             outcome_1h,
             outcome_4h,
         ));
-        market_grouped
-            .entry(market_state.unwrap_or_else(|| "unknown".into()))
+        market_grouped.entry(market_state).or_default().push((
+            state.clone(),
+            outcome_15m,
+            outcome_1h,
+            outcome_4h,
+        ));
+    }
+    let summarize = |rows: &[(String, Option<f64>, Option<f64>, Option<f64>)]| {
+        let mut item = serde_json::json!({
+            "events":rows.len(),
+            "resolved":rows.iter().filter(|row| row.0 == "resolved").count(),
+        });
+        for (label, index) in [("15m", 1usize), ("1h", 2), ("4h", 3)] {
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|row| match index {
+                    1 => row.1,
+                    2 => row.2,
+                    _ => row.3,
+                })
+                .collect();
+            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            item[&format!("samples_{label}")] = serde_json::json!(values.len());
+            item[&format!("mean_net_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(mean - 0.3)
+            };
+            item[&format!("mean_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(mean)
+            };
+            item[&format!("positive_{label}_pct")] = if values.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(
+                    values.iter().filter(|value| **value > 0.0).count() as f64
+                        / values.len() as f64
+                        * 100.0
+                )
+            };
+        }
+        item
+    };
+    let result: BTreeMap<_, _> = grouped
+        .iter()
+        .map(|(key, rows)| (key, summarize(rows)))
+        .collect();
+    let market_result: BTreeMap<_, _> = market_grouped
+        .iter()
+        .map(|(key, rows)| (key, summarize(rows)))
+        .collect();
+    let mut cross_result = BTreeMap::<String, BTreeMap<String, serde_json::Value>>::new();
+    for ((market, classification), rows) in crossed {
+        cross_result
+            .entry(market)
             .or_default()
-            .push((state.clone(), outcome_15m, outcome_1h, outcome_4h));
-    }
-    let mut result = BTreeMap::new();
-    for (classification, rows) in grouped {
-        let mut item = serde_json::json!({
-            "events":rows.len(),
-            "resolved":rows.iter().filter(|row| row.0 == "resolved").count(),
-        });
-        for (label, index) in [("15m", 1usize), ("1h", 2), ("4h", 3)] {
-            let values: Vec<f64> = rows
-                .iter()
-                .filter_map(|row| match index {
-                    1 => row.1,
-                    2 => row.2,
-                    _ => row.3,
-                })
-                .collect();
-            let mean = values.iter().sum::<f64>() / values.len() as f64;
-            item[&format!("mean_{label}_pct")] = if values.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(mean)
-            };
-            item[&format!("positive_{label}_pct")] = if values.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(
-                    values.iter().filter(|value| **value > 0.0).count() as f64
-                        / values.len() as f64
-                        * 100.0
-                )
-            };
-        }
-        result.insert(classification, item);
-    }
-    let mut market_result = BTreeMap::new();
-    for (market_state, rows) in market_grouped {
-        let mut item = serde_json::json!({
-            "events":rows.len(),
-            "resolved":rows.iter().filter(|row| row.0 == "resolved").count(),
-        });
-        for (label, index) in [("15m", 1usize), ("1h", 2), ("4h", 3)] {
-            let values: Vec<f64> = rows
-                .iter()
-                .filter_map(|row| match index {
-                    1 => row.1,
-                    2 => row.2,
-                    _ => row.3,
-                })
-                .collect();
-            let mean = values.iter().sum::<f64>() / values.len() as f64;
-            item[&format!("mean_{label}_pct")] = if values.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(mean)
-            };
-            item[&format!("positive_{label}_pct")] = if values.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(
-                    values.iter().filter(|value| **value > 0.0).count() as f64
-                        / values.len() as f64
-                        * 100.0
-                )
-            };
-        }
-        market_result.insert(market_state, item);
+            .insert(classification, summarize(&rows));
     }
     Ok(serde_json::json!({
         "events":events,
         "by_classification":result,
         "by_market_state":market_result,
+        "by_market_and_classification":cross_result,
+        "cost_assumption_round_trip_pct":0.3,
         "methods":{"source":"live page confirmation shadow logger","outcome":"same-pool first sampled price in the configured forward window"}
     }))
 }
@@ -1736,6 +1735,17 @@ mod oi_tests {
         );
         assert_eq!(summary["by_market_state"]["risk_on"]["events"], 2);
         assert_eq!(summary["by_market_state"]["risk_on"]["mean_15m_pct"], 0.0);
+        let strong = &summary["by_market_and_classification"]["risk_on"]["strong"];
+        assert_eq!(strong["events"], 2);
+        assert_eq!(strong["samples_4h"], 1);
+        assert_eq!(strong["mean_net_4h_pct"], 2.7);
+        assert_eq!(strong["samples_15m"], 2);
+        assert_eq!(strong["mean_net_15m_pct"], -0.3);
+        let aging = &summary["by_market_and_classification"]["risk_off"]["aging"];
+        assert_eq!(aging["samples_4h"], 0);
+        assert!(aging["mean_net_4h_pct"].is_null());
+        assert!(summary["by_market_and_classification"]["risk_off"]["strong"].is_null());
+        assert_eq!(summary["cost_assumption_round_trip_pct"], 0.3);
         std::fs::remove_file(path).unwrap();
     }
 

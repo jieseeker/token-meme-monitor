@@ -14,6 +14,18 @@ spec.loader.exec_module(confirmation_shadow)
 
 
 class ConfirmationShadowTest(unittest.TestCase):
+    def test_incomplete_structure_cannot_be_strong(self):
+        now = int(time.time())
+        signal = {"stage": "watch", "risk_status": "PASS", "first_seen_at": now - 60, "data_status": "missing_h1"}
+        warning = {"is_active": True, "slippage_estimates": {"estimates": [
+            {"order_usd": 100, "buy_slippage_pct": .1},
+            {"order_usd": 1000, "buy_slippage_pct": .2},
+        ]}}
+        self.assertIsNone(confirmation_shadow.classify(signal, warning, now, "risk_on"))
+        signal.update(data_status="current", pair_address="formal-pool")
+        warning["pair_address"] = "different-pool"
+        self.assertIsNone(confirmation_shadow.classify(signal, warning, now, "risk_on"))
+
     def test_classifies_strong_aging_and_slippage_blocked(self):
         now = int(time.time())
         warning = {

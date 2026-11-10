@@ -38,7 +38,9 @@ def slippage_values(warning):
 
 
 def classify(signal, warning, now, market_state):
-    if signal.get("stage") != "watch" or signal.get("risk_status") != "PASS" or warning.get("is_active") is not True:
+    if signal.get("stage") != "watch" or signal.get("risk_status") != "PASS" or signal.get("data_status") not in (None, "current") or warning.get("is_active") is not True:
+        return None
+    if signal.get("pair_address") and warning.get("pair_address") and signal["pair_address"] != warning["pair_address"]:
         return None
     first_seen = signal.get("first_seen_at")
     if not isinstance(first_seen, (int, float)):
